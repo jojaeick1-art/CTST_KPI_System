@@ -7,7 +7,6 @@ import {
   BarChart3,
   CheckCircle2,
   ExternalLink,
-  LayoutDashboard,
   Loader2,
   LogOut,
   Paperclip,
@@ -17,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { createBrowserSupabase } from "@/src/lib/supabase";
+import { ChangePasswordButton } from "../change-password-modal";
 import type { PendingPerformanceListRow } from "@/src/lib/kpi-queries";
 import {
   useDashboardProfile,
@@ -35,9 +35,12 @@ import {
 import { AppToast, type ToastState } from "@/src/components/ui/toast";
 
 function displayNameFromSession(
+  profileFullName: string | null | undefined,
   username: string,
   userMetadata: Record<string, unknown> | undefined
 ): string {
+  const profileName = typeof profileFullName === "string" ? profileFullName.trim() : "";
+  if (profileName) return profileName;
   const full =
     typeof userMetadata?.full_name === "string"
       ? userMetadata.full_name
@@ -265,7 +268,8 @@ export function ApprovalsClient() {
     try {
       setActingId(row.id);
       await workflowMut.mutateAsync({
-        performanceId: row.id,
+        performanceId: row.targetRowId,
+        ...(row.month != null ? { month: row.month } : {}),
         action: "approve_primary",
       });
       notify("success", "1차 승인 처리되었습니다.");
@@ -280,7 +284,8 @@ export function ApprovalsClient() {
     try {
       setActingId(row.id);
       await workflowMut.mutateAsync({
-        performanceId: row.id,
+        performanceId: row.targetRowId,
+        ...(row.month != null ? { month: row.month } : {}),
         action: "approve_final",
       });
       notify("success", "최종 승인 처리되었습니다.");
@@ -300,8 +305,13 @@ export function ApprovalsClient() {
     }
     try {
       setActingId(rejectForId);
+      const rejectRow =
+        [...(primaryQuery.data ?? []), ...(finalQuery.data ?? [])].find(
+          (r) => r.id === rejectForId
+        ) ?? null;
       await workflowMut.mutateAsync({
-        performanceId: rejectForId,
+        performanceId: rejectRow?.targetRowId ?? rejectForId,
+        ...(rejectRow?.month != null ? { month: rejectRow.month } : {}),
         action: "reject",
         rejectionReason: reason,
       });
@@ -337,6 +347,7 @@ export function ApprovalsClient() {
   const role = ctx.profile.role;
 
   const displayName = displayNameFromSession(
+    ctx.profile.full_name,
     ctx.profile.username,
     ctx.session.user.user_metadata as Record<string, unknown> | undefined
   );
@@ -359,13 +370,17 @@ export function ApprovalsClient() {
         onClose={() => setToast((prev) => ({ ...prev, open: false }))}
       />
       <aside className="flex w-full flex-shrink-0 flex-col border-b border-sky-100 bg-white md:w-60 md:border-b-0 md:border-r md:border-sky-100">
-        <div className="flex items-center gap-2 border-b border-sky-100 px-4 py-4">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-sky-100 text-sky-700">
-            <LayoutDashboard className="h-5 w-5" aria-hidden />
+        <div className="flex h-[95px] items-center gap-2 border-b border-sky-100 px-4">
+          <div className="flex h-[114px] w-[120px] items-center justify-center overflow-hidden rounded-xl">
+            <img
+              src="/logo_ctst.png"
+              alt="CTST 로고"
+              className="h-full w-full object-contain"
+            />
           </div>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-sky-700/90">
-              CTST KPI
+            <p className="whitespace-nowrap text-xs font-semibold uppercase tracking-wide text-sky-700/90">
+              KPI 관리 시스템
             </p>
             <p className="text-[11px] text-slate-500">내부 성과 관리</p>
           </div>
@@ -410,8 +425,9 @@ export function ApprovalsClient() {
                 실적 승인 관리
               </h1>
               <p className="mt-0.5 text-sm text-slate-500">
-                제출 → 1차 승인 대기(그룹장) → 최종 승인 대기(팀장) → 승인 완료(대시보드
-                반영). 반려 시 제출 전(draft)으로 돌아갑니다.
+                일반 제출 → 1차 승인 대기(그룹장) → 최종 승인 대기(팀장) → 승인 완료(대시보드
+                반영). 그룹장이 제출한 실적은 최종 승인 대기로 바로 이동합니다. 반려 시
+                제출 전(draft)으로 돌아갑니다.
               </p>
             </div>
             <div className="flex items-center gap-3 rounded-xl border border-sky-100 bg-white px-4 py-2.5 shadow-sm shadow-sky-100/50">
@@ -473,7 +489,7 @@ export function ApprovalsClient() {
               {isTeamLeader ? (
                 <PendingTable
                   title="최종 승인 대기"
-                  subtitle="그룹장 1차 승인을 통과한 실적만 표시됩니다. 승인 시 대시보드 진척률에 반영됩니다."
+                  subtitle="팀장 최종 승인이 필요한 실적이 표시됩니다. 승인 시 대시보드 달성률에 반영됩니다."
                   rows={finalQuery.data ?? []}
                   busyId={actingId}
                   workflowPending={workflowMut.isPending}

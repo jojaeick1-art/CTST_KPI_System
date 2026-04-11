@@ -10,7 +10,6 @@ import {
   Shield,
   User,
   LogOut,
-  LayoutDashboard,
   Loader2,
   TrendingUp,
   Building2,
@@ -38,6 +37,7 @@ import {
   useDepartmentKpiSummary,
 } from "@/src/hooks/useKpiQueries";
 import { CURRENT_KPI_YEAR } from "@/src/lib/kpi-queries";
+import { ChangePasswordButton } from "./change-password-modal";
 
 const DEPT_ICONS: LucideIcon[] = [Building2, Cpu, Factory, ClipboardCheck];
 
@@ -46,9 +46,12 @@ function deptIcon(index: number): LucideIcon {
 }
 
 function displayNameFromSession(
+  profileFullName: string | null | undefined,
   username: string,
   userMetadata: Record<string, unknown> | undefined
 ): string {
+  const profileName = typeof profileFullName === "string" ? profileFullName.trim() : "";
+  if (profileName) return profileName;
   const full =
     typeof userMetadata?.full_name === "string"
       ? userMetadata.full_name
@@ -250,6 +253,7 @@ export function DashboardClient() {
   const role = ctx.profile.role;
 
   const displayName = displayNameFromSession(
+    ctx.profile.full_name,
     ctx.profile.username,
     ctx.session.user.user_metadata as Record<string, unknown> | undefined
   );
@@ -262,13 +266,17 @@ export function DashboardClient() {
   return (
     <div className="flex min-h-screen flex-col bg-gradient-to-b from-sky-50/90 via-white to-white md:flex-row">
       <aside className="flex w-full flex-shrink-0 flex-col border-b border-sky-100 bg-white md:w-60 md:border-b-0 md:border-r md:border-sky-100">
-        <div className="flex items-center gap-2 border-b border-sky-100 px-4 py-4">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-sky-100 text-sky-700">
-            <LayoutDashboard className="h-5 w-5" aria-hidden />
+        <div className="flex h-[95px] items-center gap-2 border-b border-sky-100 px-4">
+          <div className="flex h-[114px] w-[130px] items-center justify-center overflow-hidden rounded-xl">
+            <img
+              src="/logo_ctst.png"
+              alt="CTST 로고"
+              className="h-full w-full object-contain"
+            />
           </div>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-sky-700/90">
-              CTST KPI
+            <p className="whitespace-nowrap text-xs font-semibold uppercase tracking-wide text-sky-700/90">
+              KPI 관리 시스템
             </p>
             <p className="text-[11px] text-slate-500">내부 성과 관리</p>
           </div>
@@ -309,16 +317,14 @@ export function DashboardClient() {
       </aside>
 
       <main className="min-w-0 flex-1">
-        <header className="border-b border-sky-100 bg-white/80 px-4 py-4 backdrop-blur-sm sm:px-8">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div>
+        <header className="h-[95px] border-b border-sky-100 bg-white/80 px-4 backdrop-blur-sm sm:px-8">
+          <div className="flex h-full items-center justify-between gap-3">
+            <div className="min-w-0">
               <h1 className="text-xl font-bold tracking-tight text-slate-800 sm:text-2xl">
                 KPI 대시보드
               </h1>
-              <p className="mt-0.5 text-sm text-slate-500">
-                부서별 진행 현황을 한눈에 확인하세요
-              </p>
-              <div className="mt-2 flex items-center gap-2">
+              <div className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-slate-500">
+                <p>부서별 진행 현황을 한눈에 확인하세요</p>
                 <span className="rounded-full bg-sky-50 px-2.5 py-0.5 text-[11px] font-semibold text-sky-700 ring-1 ring-sky-100">
                   기준 연도: {CURRENT_KPI_YEAR}
                 </span>
@@ -327,6 +333,8 @@ export function DashboardClient() {
                 </span>
               </div>
             </div>
+            <div className="flex items-center gap-3">
+              <ChangePasswordButton profileUsername={ctx.profile.username} />
             <div className="flex items-center gap-3 rounded-xl border border-sky-100 bg-white px-4 py-2.5 shadow-sm shadow-sky-100/50">
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-100 text-sky-700">
                 <User className="h-5 w-5" aria-hidden />
@@ -347,6 +355,7 @@ export function DashboardClient() {
                   </span>
                 </div>
               </div>
+            </div>
             </div>
           </div>
         </header>

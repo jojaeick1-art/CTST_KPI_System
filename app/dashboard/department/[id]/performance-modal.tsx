@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Bar,
   CartesianGrid,
+  Cell,
+  ComposedChart,
   Legend,
   Line,
-  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -13,22 +15,29 @@ import {
 } from "recharts";
 import { Download, Eye, FilePenLine, ImageIcon, Loader2, Upload, X } from "lucide-react";
 import {
-  KPI_QUARTERS,
   PERF_LEGACY_PENDING,
   PERF_STATUS_APPROVED,
   PERF_STATUS_PENDING_FINAL,
   PERF_STATUS_PENDING_PRIMARY,
   isWriterPerformanceLockedByStep,
-  quarterLabelToHalfTypeCanonical,
   evidenceFileNameFromStoredValue,
   evidencePathFromStoredValue,
   resolveEvidencePublicUrl,
-  normalizeHalfTypeKey,
+  getKpiTargetsHasPerformanceMonthlyColumn,
   type ItemPerformanceRow,
-  type QuarterLabel,
-  updateKpiTargetEvidenceUrl,
+  updatePerformanceMonthlyEvidenceUrl,
   uploadEvidenceFile,
 } from "@/src/lib/kpi-queries";
+import {
+  KPI_AXIS_START,
+  KPI_MONTHS,
+  activeMonthsForSchedule,
+  formatAxisLabel,
+  halfTypeLabelToMonth,
+  monthTargetPercent,
+  scheduleMonthsFromItemDates,
+  type MonthKey,
+} from "@/src/lib/kpi-month";
 import { createBrowserSupabase } from "@/src/lib/supabase";
 import {
   canGroupLeaderApprove,
@@ -58,12 +67,14 @@ type KpiModalItem = {
 };
 import {
   useKpiPerformances,
-  useUpsertQuarterPerformance,
+  useUpsertMonthPerformance,
   useWorkflowReviewMutation,
 } from "@/src/hooks/useKpiQueries";
 
 type ChartDatum = {
-  quarter: QuarterLabel | "KPI Start";
+  periodLabel: string;
+  /** KPI 시작점은 null */
+  month: MonthKey | null;
   target: number;
   actual: number;
   description: string | null;
@@ -90,155 +101,16 @@ function toNumber(v: string): number | null {
   return Number.isNaN(n) ? null : Math.min(100, Math.max(0, n));
 }
 
-function quarterByDateText(v: string | null): number | null {
-  if (!v) return null;
-  const m = v.match(/(\d{1,2})\s*[\/.\-월]/);
-  if (!m?.[1]) return null;
-  const month = Number(m[1]);
-  if (!Number.isFinite(month) || month < 1 || month > 12) return null;
-  if (month <= 3) return 1;
-  if (month <= 6) return 2;
-  if (month <= 9) return 3;
-  return 4;
-}
-
-function isApprovedStep(step: string | null | undefined): boolean {
-  return (step?.trim().toLowerCase() ?? "") === PERF_STATUS_APPROVED;
-}
-
 function isChartVisibleStep(step: string | null | undefined): boolean {
   const s = (step?.trim().toLowerCase() ?? "");
   return s === PERF_STATUS_PENDING_FINAL || s === PERF_STATUS_APPROVED;
 }
 
-/** 목표(Target): 엑셀·목표 전용 필드 우선 (firstHalfTarget). firstHalfRate는 상세 API에서 목표와 동일 소스로 맞춤 */
-function quarterTarget(item: KpiModalItem, quarter: QuarterLabel): number {
-  const qNum = Number(quarter[4]);
-  const h1q = quarterByDateText(item.h1TargetDate);
-  const h2q = quarterByDateText(item.h2TargetDate);
-  const h1v = item.firstHalfTarget ?? item.firstHalfRate ?? 100;
-  const h2v =
-    item.secondHalfTarget ??
-    item.secondHalfRate ??
-    item.challengeTarget ??
-    h1v;
-
-  const lerp = (
-    x: number,
-    x0: number,
-    y0: number,
-    x1: number,
-    y1: number
-  ): number => {
-    if (x1 === x0) return y1;
-    const t = (x - x0) / (x1 - x0);
-    return y0 + (y1 - y0) * t;
-  };
-
-  if (h1q !== null || h2q !== null) {
-    // KPI Start(0)에서 각 목표 시점까지 분기 기준 선형 보간
-    if (h1q !== null && h2q !== null) {
-      if (h2q <= h1q) {
-        if (qNum <= h1q) return Number(lerp(qNum, 0, 0, h1q, h1v).toFixed(1));
-        return h2v;
-      }
-      if (qNum <= h1q) return Number(lerp(qNum, 0, 0, h1q, h1v).toFixed(1));
-      if (qNum <= h2q) return Number(lerp(qNum, h1q, h1v, h2q, h2v).toFixed(1));
-      return h2v;
-    }
-    if (h1q !== null) {
-      if (qNum <= h1q) return Number(lerp(qNum, 0, 0, h1q, h1v).toFixed(1));
-      return h1v;
-    }
-    if (h2q !== null) {
-      if (qNum <= h2q) return Number(lerp(qNum, 0, 0, h2q, h2v).toFixed(1));
-      return h2v;
-    }
-  }
-  if (qNum <= 2 && item.firstHalfTarget !== null) return item.firstHalfTarget;
-  if (qNum >= 3 && item.secondHalfTarget !== null) return item.secondHalfTarget;
-  if (item.challengeTarget !== null) return item.challengeTarget;
-  return 0;
-}
-
-function parseQuarter(label: string): number {
-  const idx = KPI_QUARTERS.findIndex((q) => q === label);
-  return idx >= 0 ? idx : -1;
-}
-
-function quarterLabelFromHalfType(raw: string | null | undefined): QuarterLabel | null {
-  const s = (raw ?? "").trim().toUpperCase();
-  if (!s) return null;
-  const m = s.match(/(25|26)\s*Y?\s*([1-4])\s*Q/);
-  if (m?.[1] && m?.[2]) {
-    const q = `${m[1]}Y ${m[2]}Q`;
-    return KPI_QUARTERS.includes(q as QuarterLabel) ? (q as QuarterLabel) : null;
-  }
-  const qOnly = s.match(/([1-4])\s*Q/);
-  if (qOnly?.[1]) {
-    const q = `${KPI_QUARTERS[0]!.slice(0, 3)} ${qOnly[1]}Q`;
-    return KPI_QUARTERS.includes(q as QuarterLabel) ? (q as QuarterLabel) : null;
-  }
-  return null;
-}
-
-function findRowByQuarter(rows: ItemPerformanceRow[], q: QuarterLabel): ItemPerformanceRow | null {
-  const exact = rows.find((r) => quarterLabelFromHalfType(r.half_type) === q);
-  if (exact) return exact;
-  const hc = quarterLabelToHalfTypeCanonical(q);
-  const fallback = rows.find((r) => normalizeHalfTypeKey(r.half_type) === hc);
-  return fallback ?? null;
-}
-
-function activeQuarterSet(scheduleRaw: string | null): Set<QuarterLabel> {
-  const full = new Set<QuarterLabel>(KPI_QUARTERS);
-  if (!scheduleRaw || !scheduleRaw.trim()) return full;
-  const text = scheduleRaw.trim();
-
-  const direct = KPI_QUARTERS.filter((q) => text.includes(q));
-  if (direct.length >= 2) {
-    const s = parseQuarter(direct[0]);
-    const e = parseQuarter(direct[direct.length - 1]);
-    if (s >= 0 && e >= s) return new Set(KPI_QUARTERS.slice(s, e + 1));
-  }
-
-  const matches = Array.from(text.matchAll(/(25|26)\D*([1-4])Q/gi)).map((m) => {
-    const y = m[1];
-    const q = m[2];
-    return `${y}Y ${q}Q`;
-  });
-  if (matches.length >= 2) {
-    const s = parseQuarter(matches[0]!);
-    const e = parseQuarter(matches[matches.length - 1]!);
-    if (s >= 0 && e >= s) return new Set(KPI_QUARTERS.slice(s, e + 1));
-  }
-
-  return full;
-}
-
-function quarterSetFromTargetDates(
-  h1TargetDate: string | null | undefined,
-  h2TargetDate: string | null | undefined
-): Set<QuarterLabel> {
-  const out = new Set<QuarterLabel>();
-  const h1q = quarterByDateText(h1TargetDate ?? null);
-  const h2q = quarterByDateText(h2TargetDate ?? null);
-  if (h1q !== null) {
-    const end = Math.min(2, Math.max(1, h1q));
-    for (let qn = 1; qn <= end; qn += 1) {
-      const q = `26Y ${qn}Q` as QuarterLabel;
-      if (KPI_QUARTERS.includes(q)) out.add(q);
-    }
-  }
-  if (h2q !== null) {
-    const end = Math.min(4, Math.max(3, h2q));
-    const start = h1q === null ? 1 : 3;
-    for (let qn = start; qn <= end; qn += 1) {
-      const q = `26Y ${qn}Q` as QuarterLabel;
-      if (KPI_QUARTERS.includes(q)) out.add(q);
-    }
-  }
-  return out;
+function findRowByMonth(
+  rows: ItemPerformanceRow[],
+  m: MonthKey
+): ItemPerformanceRow | null {
+  return rows.find((r) => halfTypeLabelToMonth(r.half_type) === m) ?? null;
 }
 
 function performanceStatusLabelKo(status: string | null | undefined): string {
@@ -266,7 +138,7 @@ function previewComment(text: string | null, max = 52): string | null {
 }
 
 /** 비관리자: draft(또는 비어 있음)만 편집 가능. 관리자는 항상 편집 가능. */
-function quarterLockedForEditor(
+function monthLockedForEditor(
   step: string | null | undefined,
   canOverrideLock: boolean
 ): boolean {
@@ -279,13 +151,15 @@ function KpiChartTooltip({
   payload,
 }: {
   active?: boolean;
-  payload?: { payload: ChartDatum }[];
+  payload?: { payload?: ChartDatum }[];
 }) {
-  if (!active || !payload?.[0]) return null;
-  const d = payload[0].payload;
+  if (!active || !payload?.length) return null;
+  const d =
+    payload.find((p) => p.payload)?.payload ?? (payload[0]!.payload as ChartDatum | undefined);
+  if (!d) return null;
   return (
     <div className="rounded-xl border border-sky-200 bg-white/95 px-3 py-2 text-xs shadow-lg backdrop-blur-sm">
-      <p className="font-semibold text-slate-800">{d.quarter}</p>
+      <p className="font-semibold text-slate-800">{d.periodLabel}</p>
       <p className="text-slate-600">목표 {d.target}%</p>
       <p className="text-sky-700">실적 {d.actual}%</p>
       {d.hasComment && d.description ? (
@@ -310,11 +184,11 @@ export function PerformanceModal({
   onDeleteKpiItem,
 }: Props) {
   const perfQuery = useKpiPerformances(isOpen && kpiItem ? kpiItem.id : null);
-  const saveMutation = useUpsertQuarterPerformance();
+  const saveMutation = useUpsertMonthPerformance();
   const workflowMut = useWorkflowReviewMutation();
   const [mode, setMode] = useState<"viewer" | "editor">("viewer");
-  const [selectedQuarter, setSelectedQuarter] = useState<QuarterLabel>(KPI_QUARTERS[0]!);
-  const [editorQuarter, setEditorQuarter] = useState<QuarterLabel>(KPI_QUARTERS[0]!);
+  const [selectedMonth, setSelectedMonth] = useState<MonthKey>(1);
+  const [editorMonth, setEditorMonth] = useState<MonthKey>(1);
   const [editorRate, setEditorRate] = useState("");
   const [editorDescription, setEditorDescription] = useState("");
   const [editorFile, setEditorFile] = useState<File | null>(null);
@@ -336,34 +210,25 @@ export function PerformanceModal({
     normalizedRole === "group_leader" ||
     normalizedRole === "team_leader";
 
-  const activeSet = useMemo(() => {
-    const byMonth = quarterSetFromTargetDates(
-      kpiItem?.h1TargetDate ?? null,
-      kpiItem?.h2TargetDate ?? null
+  const activeMonthList = useMemo(() => {
+    if (!kpiItem) return [] as MonthKey[];
+    const sched = scheduleMonthsFromItemDates(
+      kpiItem.h1TargetDate,
+      kpiItem.h2TargetDate
     );
-    if (byMonth.size > 0) return byMonth;
-    return activeQuarterSet(kpiItem?.scheduleRaw ?? null);
-  }, [kpiItem?.h1TargetDate, kpiItem?.h2TargetDate, kpiItem?.scheduleRaw]);
+    return activeMonthsForSchedule(sched);
+  }, [kpiItem?.h1TargetDate, kpiItem?.h2TargetDate]);
 
-  const rowByUiQuarter = useMemo(() => {
-    const m = new Map<QuarterLabel, ItemPerformanceRow>();
-    const exactRows = new Map<QuarterLabel, ItemPerformanceRow>();
-    const fallbackRows = liveRows.filter((r) => quarterLabelFromHalfType(r.half_type) === null);
+  const activeSet = useMemo(
+    () => new Set<MonthKey>(activeMonthList),
+    [activeMonthList]
+  );
+
+  const rowByMonth = useMemo(() => {
+    const m = new Map<MonthKey, ItemPerformanceRow>();
     for (const r of liveRows) {
-      const q = quarterLabelFromHalfType(r.half_type);
-      if (q && !exactRows.has(q)) exactRows.set(q, r);
-    }
-    for (const q of KPI_QUARTERS) {
-      const exact = exactRows.get(q);
-      if (exact) {
-        m.set(q, exact);
-        continue;
-      }
-      const hc = quarterLabelToHalfTypeCanonical(q);
-      const fallback = fallbackRows.find(
-        (r) => normalizeHalfTypeKey(r.half_type) === hc
-      );
-      if (fallback) m.set(q, fallback);
+      const mk = halfTypeLabelToMonth(r.half_type);
+      if (mk !== null && !m.has(mk)) m.set(mk, r);
     }
     return m;
   }, [liveRows]);
@@ -373,16 +238,25 @@ export function PerformanceModal({
     const effectiveMode =
       canEditPerformance ? startMode : "viewer";
     setMode(effectiveMode);
-    const firstActive = KPI_QUARTERS.find((q) => activeSet.has(q)) ?? KPI_QUARTERS[0]!;
-    setSelectedQuarter(firstActive);
-    setEditorQuarter(firstActive);
-  }, [isOpen, kpiItem, startMode, canEditPerformance, activeSet]);
+    const firstActive = activeMonthList[0] ?? KPI_MONTHS[0]!;
+    setSelectedMonth(firstActive);
+    setEditorMonth(firstActive);
+  }, [isOpen, kpiItem, startMode, canEditPerformance, activeMonthList]);
 
   useEffect(() => {
     if (!isOpen || !kpiItem) return;
     const rows = perfQuery.data ?? [];
     setLiveRows(rows);
   }, [isOpen, kpiItem, perfQuery.data]);
+
+  useEffect(() => {
+    if (!isOpen || !kpiItem || activeMonthList.length === 0) return;
+    if (!activeSet.has(selectedMonth)) {
+      const first = activeMonthList[0]!;
+      setSelectedMonth(first);
+      setEditorMonth(first);
+    }
+  }, [isOpen, kpiItem, activeMonthList, activeSet, selectedMonth]);
 
   useEffect(() => {
     if (isOpen) return;
@@ -392,8 +266,18 @@ export function PerformanceModal({
 
   const chartData: ChartDatum[] = useMemo(() => {
     if (!kpiItem) return [];
-    const series = KPI_QUARTERS.map((q) => {
-      const row = rowByUiQuarter.get(q);
+    const sched = scheduleMonthsFromItemDates(
+      kpiItem.h1TargetDate,
+      kpiItem.h2TargetDate
+    );
+    const h1v = kpiItem.firstHalfTarget ?? kpiItem.firstHalfRate ?? 0;
+    const h2v =
+      kpiItem.secondHalfTarget ??
+      kpiItem.secondHalfRate ??
+      kpiItem.challengeTarget ??
+      h1v;
+    const series: ChartDatum[] = activeMonthList.map((m) => {
+      const row = rowByMonth.get(m);
       const visibleOnChart = isChartVisibleStep(row?.approval_step ?? null);
       const rawSubmitted =
         row?.achievement_rate !== null &&
@@ -403,9 +287,18 @@ export function PerformanceModal({
           : null;
       const actual = visibleOnChart && rawSubmitted !== null ? rawSubmitted : 0;
       const description = row?.description ?? null;
+      const tgtRaw = monthTargetPercent({
+        month: m,
+        h1Month: sched.h1Month,
+        h2Month: sched.h2Month,
+        h1Value: h1v,
+        h2Value: h2v,
+      });
+      const target = tgtRaw !== null ? Number(tgtRaw.toFixed(1)) : 0;
       return {
-        quarter: q,
-        target: quarterTarget(kpiItem, q),
+        periodLabel: formatAxisLabel(m),
+        month: m,
+        target,
         actual,
         description,
         evidence_url: row?.evidence_url ?? null,
@@ -414,7 +307,8 @@ export function PerformanceModal({
     });
     return [
       {
-        quarter: "KPI Start",
+        periodLabel: formatAxisLabel(KPI_AXIS_START),
+        month: null,
         target: 0,
         actual: 0,
         description: null,
@@ -423,16 +317,16 @@ export function PerformanceModal({
       },
       ...series,
     ];
-  }, [kpiItem, rowByUiQuarter]);
+  }, [kpiItem, rowByMonth, activeMonthList]);
 
-  const selectedRow = rowByUiQuarter.get(selectedQuarter) ?? null;
+  const selectedRow = rowByMonth.get(selectedMonth) ?? null;
   const selectedSubmittedPercent =
     selectedRow?.achievement_rate !== null &&
     selectedRow?.achievement_rate !== undefined
       ? selectedRow.achievement_rate
       : null;
   const chartActualSelected =
-    chartData.find((d) => d.quarter === selectedQuarter)?.actual ?? 0;
+    chartData.find((d) => d.month === selectedMonth)?.actual ?? 0;
   const selectedDescription = selectedRow?.description ?? null;
   const selectedEvidenceStored =
     selectedRow?.evidence_path ??
@@ -448,12 +342,12 @@ export function PerformanceModal({
   );
   const selectedStatus = selectedRow?.approval_step ?? null;
   const selectedRejectionReason = selectedRow?.rejection_reason ?? null;
-  const selectedQuarterWritableByWriter = !quarterLockedForEditor(
+  const selectedMonthWritableByWriter = !monthLockedForEditor(
     selectedStatus,
     isPrivilegedEditor
   );
-  const canOpenRegister = canEditPerformance || isPrivilegedEditor;
-  const canOpenModify = isPrivilegedEditor;
+  const canOpenRegister = canEditPerformance;
+  const canOpenModify = isPrivilegedEditor && canEditPerformance;
   const writerLockedNow =
     !isPrivilegedEditor && isWriterPerformanceLockedByStep(selectedStatus);
 
@@ -471,7 +365,7 @@ export function PerformanceModal({
 
   async function handleDownloadEvidence() {
     if (!selectedEvidenceStored) {
-      notify("info", "증빙 자료가 없습니다.");
+      notify("info", "보고서가 없습니다.");
       return;
     }
     try {
@@ -505,15 +399,20 @@ export function PerformanceModal({
     );
   }, [profileRole, selectedRow?.id, selectedStatus]);
 
-  const editorRow = findRowByQuarter(liveRows, editorQuarter);
-  const editorQuarterLocked = quarterLockedForEditor(
+  const editorRow = findRowByMonth(liveRows, editorMonth);
+  const editorMonthLocked = monthLockedForEditor(
     editorRow?.approval_step,
     isPrivilegedEditor
   );
+  const editorHasStoredEvidence = Boolean(
+    (editorRow?.evidence_path?.trim() ?? "") ||
+      (editorRow?.evidence_url?.trim() ?? "")
+  );
+  const editorHasEvidenceForSave = Boolean(editorFile) || editorHasStoredEvidence;
 
-  const syncEditorFromQuarter = useCallback(
-    (q: QuarterLabel) => {
-      const row = findRowByQuarter(liveRows, q);
+  const syncEditorFromMonth = useCallback(
+    (mo: MonthKey) => {
+      const row = findRowByMonth(liveRows, mo);
       setEditorRate(
         row?.achievement_rate !== null && row?.achievement_rate !== undefined
           ? String(row.achievement_rate)
@@ -527,21 +426,21 @@ export function PerformanceModal({
 
   useEffect(() => {
     if (mode !== "editor") return;
-    syncEditorFromQuarter(editorQuarter);
-  }, [mode, editorQuarter, liveRows, syncEditorFromQuarter]);
+    syncEditorFromMonth(editorMonth);
+  }, [mode, editorMonth, liveRows, syncEditorFromMonth]);
 
   if (!isOpen || !kpiItem) return null;
   const item = kpiItem;
 
-  async function handleSaveQuarter() {
-    if (!activeSet.has(editorQuarter)) {
-      notify("error", "해당 분기는 프로젝트 기간에 포함되지 않습니다.");
+  async function handleSaveMonth() {
+    if (!activeSet.has(editorMonth)) {
+      notify("error", "해당 월은 프로젝트 기간에 포함되지 않습니다.");
       return;
     }
-    if (editorQuarterLocked) {
+    if (editorMonthLocked) {
       notify(
         "error",
-        "승인 대기 중이거나 승인 완료된 분기는 그룹장·팀장·관리자만 수정할 수 있습니다."
+        "승인 대기 중이거나 승인 완료된 월은 그룹장·팀장·관리자만 수정할 수 있습니다."
       );
       return;
     }
@@ -554,18 +453,20 @@ export function PerformanceModal({
       notify("error", "달성률(%)을 입력해 주세요.");
       return;
     }
+    if (!editorHasEvidenceForSave) {
+      notify("error", "증빙 파일을 첨부해야 실적을 등록할 수 있습니다.");
+      return;
+    }
     try {
-      // 1) 실적 행(kpi_targets)을 먼저 확보/저장하고 targetId를 받는다.
       const saveResult = await saveMutation.mutateAsync({
         kpiId: item.id,
-        quarter: editorQuarter,
+        month: editorMonth,
         achievement_rate: rateNum,
         description: editorDescription,
         ...(isAdmin ? { adminBypassApprovalLock: true } : {}),
         actorRole: profileRole ?? null,
       });
 
-      // 2) target_id 확보 후 파일 업로드 + evidence_url 업데이트
       if (editorFile) {
         const targetId =
           saveResult && typeof saveResult.targetId === "string"
@@ -574,7 +475,7 @@ export function PerformanceModal({
         if (!targetId) {
           console.error("[KPI upload] upsert 후 targetId 누락", {
             kpiId: item.id,
-            quarter: editorQuarter,
+            month: editorMonth,
           });
           throw new Error(
             "실적 정보 생성 중입니다. 잠시 대기 후 다시 시도해 주세요."
@@ -584,10 +485,11 @@ export function PerformanceModal({
         const uploaded = await uploadEvidenceFile(
           targetId,
           editorFile,
-          editorQuarter
+          `m${editorMonth}`
         );
-        await updateKpiTargetEvidenceUrl({
+        await updatePerformanceMonthlyEvidenceUrl({
           targetId,
+          month: editorMonth,
           evidenceUrl: uploaded.fullPath,
         });
       }
@@ -595,9 +497,12 @@ export function PerformanceModal({
       const refreshed = await perfQuery.refetch();
       if (refreshed.data) setLiveRows(refreshed.data);
       setEditorFile(null);
+      const submittedFinal = normalizeRole(profileRole) === "group_leader";
       notify(
         "success",
-        `${editorQuarter} 실적이 저장되었습니다. (상태: 1차 승인 대기 — 그룹장 검토)`
+        submittedFinal
+          ? `${editorMonth}월 실적이 저장되었습니다. (상태: 최종 승인 대기 — 팀장 검토)`
+          : `${editorMonth}월 실적이 저장되었습니다. (상태: 1차 승인 대기 — 그룹장 검토)`
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : "저장 실패";
@@ -608,12 +513,14 @@ export function PerformanceModal({
   }
 
   async function handleModalApprovePrimary() {
-    const rid = rowByUiQuarter.get(selectedQuarter)?.id;
+    const rid = selectedRow?.id;
     if (!rid) return;
+    const hasMonthly = await getKpiTargetsHasPerformanceMonthlyColumn();
     try {
       await workflowMut.mutateAsync({
         performanceId: rid,
         action: "approve_primary",
+        ...(hasMonthly ? { month: selectedMonth } : {}),
       });
       const refreshed = await perfQuery.refetch();
       if (refreshed.data) setLiveRows(refreshed.data);
@@ -624,12 +531,14 @@ export function PerformanceModal({
   }
 
   async function handleModalApproveFinal() {
-    const rid = rowByUiQuarter.get(selectedQuarter)?.id;
+    const rid = selectedRow?.id;
     if (!rid) return;
+    const hasMonthly = await getKpiTargetsHasPerformanceMonthlyColumn();
     try {
       await workflowMut.mutateAsync({
         performanceId: rid,
         action: "approve_final",
+        ...(hasMonthly ? { month: selectedMonth } : {}),
       });
       const refreshed = await perfQuery.refetch();
       if (refreshed.data) setLiveRows(refreshed.data);
@@ -640,11 +549,11 @@ export function PerformanceModal({
   }
 
   function openRejectModal() {
-    const rid = rowByUiQuarter.get(selectedQuarter)?.id;
+    const rid = selectedRow?.id;
     if (!rid) {
       notify(
         "error",
-        "선택한 분기에 연결된 실적 행이 없습니다. 실적을 먼저 저장해 주세요."
+        "선택한 월에 연결된 실적 행이 없습니다. 실적을 먼저 저장해 주세요."
       );
       return;
     }
@@ -653,18 +562,20 @@ export function PerformanceModal({
   }
 
   async function submitRejectFromModal() {
-    const rid = rowByUiQuarter.get(selectedQuarter)?.id;
+    const rid = selectedRow?.id;
     if (!rid) return;
     const reason = rejectReasonDraft.trim();
     if (!reason) {
       notify("error", "반려 사유를 입력해 주세요.");
       return;
     }
+    const hasMonthly = await getKpiTargetsHasPerformanceMonthlyColumn();
     try {
       await workflowMut.mutateAsync({
         performanceId: rid,
         action: "reject",
         rejectionReason: reason,
+        ...(hasMonthly ? { month: selectedMonth } : {}),
       });
       const refreshed = await perfQuery.refetch();
       if (refreshed.data) setLiveRows(refreshed.data);
@@ -714,10 +625,10 @@ export function PerformanceModal({
                 <button
                   type="button"
                   onClick={() => {
-                    setEditorQuarter(selectedQuarter);
+                    setEditorMonth(selectedMonth);
                     setMode("editor");
                   }}
-                  disabled={writerLockedNow || (!isPrivilegedEditor && !selectedQuarterWritableByWriter)}
+                  disabled={writerLockedNow || (!isPrivilegedEditor && !selectedMonthWritableByWriter)}
                   className="inline-flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-xs font-semibold text-sky-800 shadow-sm hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <FilePenLine className="h-3.5 w-3.5" />
@@ -728,7 +639,7 @@ export function PerformanceModal({
                 <button
                   type="button"
                   onClick={() => {
-                    setEditorQuarter(selectedQuarter);
+                    setEditorMonth(selectedMonth);
                     setMode("editor");
                   }}
                   className="inline-flex items-center gap-1 rounded-lg border border-white/60 bg-sky-700/80 px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-sky-700"
@@ -784,86 +695,90 @@ export function PerformanceModal({
 
           <div className="h-[320px] rounded-xl border border-sky-100 bg-white p-2 sm:h-[360px]">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart
+              <ComposedChart
                 data={chartData}
                 margin={{ top: 12, right: 16, left: 4, bottom: 4 }}
                 onClick={(state) => {
-                  const q = state?.activeLabel as QuarterLabel | undefined;
-                  if (q && KPI_QUARTERS.includes(q)) setSelectedQuarter(q);
+                  const label = state?.activeLabel;
+                  if (typeof label !== "string") return;
+                  const hit = chartData.find((d) => d.periodLabel === label);
+                  if (hit?.month !== null && hit?.month !== undefined) {
+                    setSelectedMonth(hit.month);
+                  }
                 }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="#dbeafe" />
-                <XAxis dataKey="quarter" tick={{ fill: "#334155", fontSize: 11 }} />
+                <XAxis dataKey="periodLabel" tick={{ fill: "#334155", fontSize: 11 }} />
                 <YAxis domain={[0, 100]} tickFormatter={(v) => `${v}%`} tick={{ fontSize: 11 }} />
                 <Tooltip content={<KpiChartTooltip />} />
                 <Legend />
+                <Bar
+                  dataKey="actual"
+                  name="실적"
+                  maxBarSize={44}
+                  radius={[6, 6, 0, 0]}
+                  onClick={(data: unknown) => {
+                    const row = data as ChartDatum | undefined;
+                    if (row?.month !== null && row?.month !== undefined) {
+                      setSelectedMonth(row.month);
+                    }
+                  }}
+                >
+                  {chartData.map((entry) => {
+                    const isSel =
+                      entry.month !== null && entry.month === selectedMonth;
+                    const isStart = entry.month === null;
+                    return (
+                      <Cell
+                        key={entry.periodLabel}
+                        fill={
+                          isStart
+                            ? "#cbd5e1"
+                            : isSel
+                              ? "#0369a1"
+                              : "#0284c7"
+                        }
+                        className={
+                          isStart ? "pointer-events-none" : "cursor-pointer outline-none"
+                        }
+                      />
+                    );
+                  })}
+                </Bar>
                 <Line
                   type="linear"
                   dataKey="target"
                   name="목표"
-                  stroke="#64748b"
+                  stroke="#dc2626"
                   strokeWidth={2}
                   strokeDasharray="6 5"
-                  dot={{ r: 3 }}
-                  activeDot={{ r: 5 }}
+                  dot={{ r: 3, fill: "#dc2626", strokeWidth: 0 }}
+                  activeDot={{ r: 5, fill: "#dc2626" }}
                 />
-                <Line
-                  type="monotone"
-                  dataKey="actual"
-                  name="실적"
-                  stroke="#0284c7"
-                  strokeWidth={3}
-                  dot={(dotProps: {
-                    cx?: number;
-                    cy?: number;
-                    payload?: ChartDatum;
-                  }) => {
-                    const { cx, cy, payload } = dotProps;
-                    if (cx == null || cy == null || !payload) return null;
-                    const isSel = payload.quarter === selectedQuarter;
-                    return (
-                      <circle
-                        cx={cx}
-                        cy={cy}
-                        r={isSel ? 8 : 5}
-                        fill="#0284c7"
-                        stroke="#fff"
-                        strokeWidth={2}
-                        className="cursor-pointer"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (KPI_QUARTERS.includes(payload.quarter as QuarterLabel)) {
-                            setSelectedQuarter(payload.quarter as QuarterLabel);
-                          }
-                        }}
-                      />
-                    );
-                  }}
-                  activeDot={{ r: 10, stroke: "#0369a1", strokeWidth: 2 }}
-                />
-              </LineChart>
+              </ComposedChart>
             </ResponsiveContainer>
             <p className="mt-2 px-1 text-[11px] leading-snug text-slate-500">
-              실적(파란 선)은 <span className="font-medium text-slate-600">1차 승인 이후(최종 승인 대기·승인 완료)</span>
-              수치만 반영합니다. 미승인(draft·1차 승인 대기) 구간은 0% 또는 직전{" "}
-              <span className="font-medium text-slate-600">승인</span> 시점 값으로 유지됩니다.
+              막대는 <span className="font-medium text-slate-600">그 월에 제출된 값</span>이{" "}
+              <span className="font-medium text-slate-600">1차 승인 이후</span>일 때만 표시됩니다. 그 외는
+              0%입니다. 월별 저장이 되면 달마다 따로 보이고, 예전 형식 컬럼만 쓰면 같은 구간 실적이{" "}
+              <span className="font-medium text-slate-600">1·4·7·10월</span> 막대에만 붙습니다.
             </p>
           </div>
 
           <div className="mt-4">
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              분기 선택
+              월 선택
             </p>
             <div className="flex flex-wrap gap-2">
-              {KPI_QUARTERS.map((q) => {
-                const on = q === selectedQuarter;
-                const inSchedule = activeSet.has(q);
+              {KPI_MONTHS.map((mo) => {
+                const on = mo === selectedMonth;
+                const inSchedule = activeSet.has(mo);
                 return (
                   <button
-                    key={q}
+                    key={mo}
                     type="button"
                     disabled={!inSchedule}
-                    onClick={() => setSelectedQuarter(q)}
+                    onClick={() => setSelectedMonth(mo)}
                     className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
                       on
                         ? "bg-sky-600 text-white shadow-md shadow-sky-300/40"
@@ -872,7 +787,7 @@ export function PerformanceModal({
                           : "cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400"
                     }`}
                   >
-                    {q}
+                    {mo}월
                   </button>
                 );
               })}
@@ -881,7 +796,7 @@ export function PerformanceModal({
 
           <div className="mt-5 rounded-xl border border-sky-100 bg-sky-50/30 p-4">
             <h4 className="mb-2 text-sm font-semibold text-slate-800">
-              {selectedQuarter} 상세
+              {selectedMonth}월 상세
             </h4>
             <dl className="grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
               <div>
@@ -893,7 +808,7 @@ export function PerformanceModal({
                 </dd>
               </div>
               <div>
-                <dt className="text-xs text-slate-500">차트 실적선 (승인 반영)</dt>
+                <dt className="text-xs text-slate-500">차트 실적 막대 (승인 반영)</dt>
                 <dd className="font-semibold text-slate-800">{chartActualSelected}%</dd>
               </div>
               <div>
@@ -951,7 +866,7 @@ export function PerformanceModal({
 
             <div className="mt-3 rounded-xl border border-sky-100 bg-white p-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                첨부 파일
+                보고서
               </p>
               {selectedEvidencePath ? (
                 <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -969,7 +884,7 @@ export function PerformanceModal({
                   </button>
                 </div>
               ) : (
-                <p className="mt-2 text-sm text-slate-500">증빙 자료가 없습니다</p>
+                <p className="mt-2 text-sm text-slate-500">보고서가 없습니다</p>
               )}
             </div>
 
@@ -1035,34 +950,34 @@ export function PerformanceModal({
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
               <div>
                 <label className="mb-1 block text-xs font-medium text-slate-600">
-                  분기 선택
+                  월 선택
                 </label>
                 <select
-                  value={editorQuarter}
-                  onChange={(e) => setEditorQuarter(e.target.value as QuarterLabel)}
+                  value={editorMonth}
+                  onChange={(e) => setEditorMonth(Number(e.target.value) as MonthKey)}
                   className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-[#1a1a1a] outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200"
                 >
-                  {KPI_QUARTERS.map((q) => {
-                    const row = findRowByQuarter(liveRows, q);
-                    const locked = quarterLockedForEditor(
+                  {KPI_MONTHS.map((mo) => {
+                    const row = findRowByMonth(liveRows, mo);
+                    const locked = monthLockedForEditor(
                       row?.approval_step,
                       isPrivilegedEditor
                     );
                     return (
                       <option
-                        key={q}
-                        value={q}
-                        disabled={!activeSet.has(q) || locked}
+                        key={mo}
+                        value={mo}
+                        disabled={!activeSet.has(mo) || locked}
                       >
-                        {q}
-                        {!activeSet.has(q) ? " (대상 아님)" : locked ? " (승인대기/완료·잠금)" : ""}
+                        {mo}월
+                        {!activeSet.has(mo) ? " (대상 아님)" : locked ? " (승인대기/완료·잠금)" : ""}
                       </option>
                     );
                   })}
                 </select>
-                {editorQuarterLocked ? (
+                {editorMonthLocked ? (
                   <p className="mt-1 text-[11px] text-amber-700">
-                    승인 대기 중이거나 승인 완료된 분기는 그룹장·팀장·관리자만 수정할 수 있습니다.
+                    승인 대기 중이거나 승인 완료된 월은 그룹장·팀장·관리자만 수정할 수 있습니다.
                   </p>
                 ) : null}
               </div>
@@ -1078,7 +993,7 @@ export function PerformanceModal({
                   step={0.1}
                   value={editorRate}
                   onChange={(e) => setEditorRate(e.target.value)}
-                  disabled={!activeSet.has(editorQuarter) || editorQuarterLocked}
+                  disabled={!activeSet.has(editorMonth) || editorMonthLocked}
                   className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-[#1a1a1a] outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200 disabled:bg-slate-100"
                   placeholder="0–100"
                 />
@@ -1091,29 +1006,32 @@ export function PerformanceModal({
                 <textarea
                   value={editorDescription}
                   onChange={(e) => setEditorDescription(e.target.value)}
-                  disabled={!activeSet.has(editorQuarter) || editorQuarterLocked}
+                  disabled={!activeSet.has(editorMonth) || editorMonthLocked}
                   rows={3}
                   className="w-full resize-none rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-[#1a1a1a] outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200 disabled:bg-slate-100"
-                  placeholder="해당 분기 코멘트"
+                  placeholder="해당 월 코멘트"
                 />
               </div>
 
               <div>
                 <label className="mb-1 block text-xs font-medium text-slate-600">
-                  이 분기 전용 증빙 파일
+                  이 월 전용 보고서 파일 <span className="text-red-600">(필수)</span>
                 </label>
                 <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-sky-200 bg-sky-50/60 px-3 py-2 text-sm text-slate-700 hover:bg-sky-50">
                   <Upload className="h-4 w-4 text-sky-600" />
-                  <span>{editorFile ? editorFile.name : "파일 선택"}</span>
+                  <span>
+                    {editorFile ? editorFile.name : "파일 선택(최대50MB)"}
+                  </span>
                   <input
                     type="file"
                     className="hidden"
-                    disabled={!activeSet.has(editorQuarter) || editorQuarterLocked}
+                    disabled={!activeSet.has(editorMonth) || editorMonthLocked}
                     onChange={(e) => setEditorFile(e.target.files?.[0] ?? null)}
                   />
                 </label>
                 <p className="mt-1 text-[11px] text-slate-500">
-                  업로드 시 해당 분기 행의 evidence_url에만 저장됩니다. 생략 시 기존 경로를 유지합니다.
+                  최초 등록 시 파일 첨부가 필요합니다. 이미 첨부된 증빙이 있는 월은 달성률·코멘트만
+                  바꿀 수 있으며, 파일을 다시 선택하면 교체됩니다.
                 </p>
               </div>
             </div>
@@ -1128,19 +1046,22 @@ export function PerformanceModal({
               </button>
               <button
                 type="button"
-                onClick={() => void handleSaveQuarter()}
+                onClick={() => void handleSaveMonth()}
                 disabled={
                   saveMutation.isPending ||
                   uploading ||
-                  !activeSet.has(editorQuarter) ||
-                  editorQuarterLocked
+                  !activeSet.has(editorMonth) ||
+                  editorMonthLocked ||
+                  !editorHasEvidenceForSave
                 }
                 className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
               >
                 {saveMutation.isPending || uploading ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : null}
-                저장 (1차 승인 대기로 제출)
+                {normalizeRole(profileRole) === "group_leader"
+                  ? "저장 (최종 승인 대기로 제출)"
+                  : "저장 (1차 승인 대기로 제출)"}
               </button>
             </div>
           </div>

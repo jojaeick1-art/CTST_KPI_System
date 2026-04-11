@@ -35,7 +35,11 @@ const KO_ROLE: Record<string, ProfileRole> = {
  * - 한글 직급 라벨 → 영문 ProfileRole
  * - 영문은 대소문자 무시(admin, ADMIN)
  */
-/** DB·UI 한글 `관리자` 포함 — 정규화 후 admin 여부 */
+/**
+ * DB·UI 한글 `관리자` 포함 — 정규화 후 admin 여부.
+ * 관리자는 부서 소속·직무 구분 없이 KPI/실적 편집·승인·시스템 설정 등 앱에서 허용되는
+ * 모든 작업을 할 수 있도록 호출부에서 우선 처리한다. (DB RLS는 별도 마이그레이션)
+ */
 export function isAdminRole(role: string | null | undefined): boolean {
   return normalizeRole(role) === "admin";
 }
@@ -79,10 +83,10 @@ export function roleLabelKo(role: string | null | undefined): string {
   }
 }
 
-/** 대시보드에 모든 부서 카드 표시 (대표·관리자) */
+/** 대시보드에 모든 부서 카드 표시 (전 계정 공통) */
 export function canViewAllDepartmentCards(role: string | null | undefined): boolean {
-  const n = normalizeRole(role);
-  return n === "admin" || n === "ceo";
+  void role;
+  return true;
 }
 
 /**
@@ -105,8 +109,8 @@ export function canBulkUploadKpiExcel(role: string | null | undefined): boolean 
   return n === "admin" || n === "group_leader";
 }
 
-/** 분기 실적 제출(저장) — 그룹장·수석~프로·관리자 (팀장·대표 제외) */
-export function canSubmitQuarterPerformance(role: string | null | undefined): boolean {
+/** 월별 실적 제출(저장) — 그룹장·수석~프로·관리자 (팀장·대표 제외) */
+export function canSubmitMonthlyPerformance(role: string | null | undefined): boolean {
   const n = normalizeRole(role);
   return (
     n === "admin" ||
@@ -116,6 +120,11 @@ export function canSubmitQuarterPerformance(role: string | null | undefined): bo
     n === "senior" ||
     n === "pro"
   );
+}
+
+/** @deprecated 월별 용어로 교체: canSubmitMonthlyPerformance */
+export function canSubmitQuarterPerformance(role: string | null | undefined): boolean {
+  return canSubmitMonthlyPerformance(role);
 }
 
 /** 1차 승인/반려 (그룹장·관리자) */
@@ -150,16 +159,9 @@ export const DASHBOARD_MAIN_QUERY_VALUE = "1";
 export function mayAutoRedirectDashboardToAssignedDepartment(
   role: string | null | undefined
 ): boolean {
-  const n = normalizeRole(role);
-  if (n === "admin" || n === "ceo") return false;
-  return (
-    n === "principal" ||
-    n === "manager" ||
-    n === "senior" ||
-    n === "pro" ||
-    n === "group_leader" ||
-    n === "team_leader"
-  );
+  void role;
+  // 모든 계정이 대시보드에서 전 부서를 볼 수 있도록 자동 이동 비활성화
+  return false;
 }
 
 /**

@@ -11,7 +11,7 @@ import {
   createDepartment,
   fetchDepartmentsForManagement,
   fetchKpiPerformancesByItem,
-  fetchQuarterDeadlines,
+  fetchMonthDeadlines,
   fetchDepartmentKpiDetail,
   fetchDepartmentKpiSummary,
   fetchDashboardSummaryStats,
@@ -21,11 +21,13 @@ import {
   removeDepartment,
   renameDepartment,
   reviewPerformanceWorkflow,
-  saveQuarterDeadline,
+  saveMonthDeadline,
+  upsertMonthPerformance,
   upsertQuarterPerformance,
   importKpisFromExcelRows,
   type ApprovalWorkflowStage,
   type KpiExcelImportRow,
+  type MonthKey,
   type QuarterLabel,
 } from "@/src/lib/kpi-queries";
 
@@ -55,7 +57,7 @@ export async function fetchDashboardProfile(): Promise<DashboardProfileData | nu
 
   const { data: row, error } = await supabase
     .from("profiles")
-    .select("id, username, role, dept_id")
+    .select("id, username, full_name, role, dept_id")
     .eq("id", session.user.id)
     .maybeSingle();
 
@@ -79,6 +81,7 @@ export async function fetchDashboardProfile(): Promise<DashboardProfileData | nu
   const profile: ProfileRow = {
     id: row.id,
     username: typeof row.username === "string" ? row.username : "",
+    full_name: typeof row.full_name === "string" ? row.full_name : null,
     role: normalizedRole,
     dept_id: row.dept_id,
   };
@@ -161,6 +164,7 @@ export function useKpiPerformances(kpiId: string | null) {
   });
 }
 
+/** @deprecated 월별 저장 우선: useUpsertMonthPerformance 사용 */
 export function useUpsertQuarterPerformance() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -177,6 +181,50 @@ export function useUpsertQuarterPerformance() {
         {
           kpiId: args.kpiId,
           quarter: args.quarter,
+          achievement_rate: args.achievement_rate,
+          description: args.description,
+          evidenceUrl: args.evidenceUrl,
+        },
+        {
+          ...(args.adminBypassApprovalLock
+            ? { adminBypassApprovalLock: true }
+            : {}),
+          ...(args.actorRole !== undefined ? { actorRole: args.actorRole } : {}),
+        }
+      ),
+    onSuccess: (_, vars) => {
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "kpi-performances", vars.kpiId],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "department-kpi-detail"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "department-kpi-summary"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "pending-performances"],
+      });
+    },
+  });
+}
+
+export function useUpsertMonthPerformance() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: {
+      kpiId: string;
+      month: MonthKey;
+      achievement_rate: number;
+      description: string;
+      evidenceUrl?: string | null;
+      adminBypassApprovalLock?: boolean;
+      actorRole?: string | null;
+    }) =>
+      upsertMonthPerformance(
+        {
+          kpiId: args.kpiId,
+          month: args.month,
           achievement_rate: args.achievement_rate,
           description: args.description,
           evidenceUrl: args.evidenceUrl,
@@ -236,16 +284,27 @@ export function useWorkflowReviewMutation() {
       performanceId: string;
       action: "approve_primary" | "approve_final" | "reject";
       rejectionReason?: string;
+      month?: MonthKey | null;
     }) => {
+      const opt =
+        args.month !== undefined && args.month !== null
+          ? { month: args.month }
+          : undefined;
       if (args.action === "reject") {
-        return reviewPerformanceWorkflow(args.performanceId, {
-          action: "reject",
-          rejectionReason: args.rejectionReason ?? "",
-        });
+        return reviewPerformanceWorkflow(
+          args.performanceId,
+          {
+            action: "reject",
+            rejectionReason: args.rejectionReason ?? "",
+          },
+          opt
+        );
       }
-      return reviewPerformanceWorkflow(args.performanceId, {
-        action: args.action,
-      });
+      return reviewPerformanceWorkflow(
+        args.performanceId,
+        { action: args.action },
+        opt
+      );
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({
@@ -362,22 +421,22 @@ export function useClearAllKpiDataMutation() {
   });
 }
 
-export function useQuarterDeadlines(enabled: boolean) {
+export function useMonthDeadlines(enabled: boolean) {
   return useQuery({
-    queryKey: ["supabase", "quarter-deadlines"],
-    queryFn: fetchQuarterDeadlines,
+    queryKey: ["supabase", "month-deadlines"],
+    queryFn: fetchMonthDeadlines,
     enabled,
   });
 }
 
-export function useSaveQuarterDeadlineMutation() {
+export function useSaveMonthDeadlineMutation() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (args: { quarter: QuarterLabel; input_deadline: string | null }) =>
-      saveQuarterDeadline(args),
+    mutationFn: (args: { month: MonthKey; input_deadline: string | null }) =>
+      saveMonthDeadline(args),
     onSuccess: () => {
       void queryClient.invalidateQueries({
-        queryKey: ["supabase", "quarter-deadlines"],
+        queryKey: ["supabase", "month-deadlines"],
       });
     },
   });

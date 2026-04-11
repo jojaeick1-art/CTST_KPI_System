@@ -1,9 +1,8 @@
 import type { Metadata } from "next";
-import { Cpu } from "lucide-react";
 import { LoginForm } from "./login-form";
 
 export const metadata: Metadata = {
-  title: "로그인 | CTST KPI",
+  title: "로그인",
   description: "CTST KPI 관리 시스템 로그인",
 };
 
@@ -21,12 +20,16 @@ export default function LoginPage() {
 
       <div className="relative z-10 flex w-full flex-col items-center gap-8">
         <div className="flex flex-col items-center gap-3 text-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white shadow-md shadow-sky-200/50 ring-1 ring-sky-100">
-            <Cpu className="h-8 w-8 text-sky-600" strokeWidth={1.5} />
+          <div className="flex h-24 w-56 items-center justify-center rounded-2xl bg-white/0">
+            <img
+              src="/logo_ctst.png"
+              alt="CTST 로고"
+              className="h-full w-full object-contain"
+            />
           </div>
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-600/90">
-              CTST
+              
             </p>
             <h2 className="mt-1 text-2xl font-bold tracking-tight text-slate-800">
               KPI 관리 시스템

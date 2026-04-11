@@ -37,7 +37,7 @@ export type DepartmentRow = {
 export type DepartmentKpiSummary = {
   id: string;
   name: string;
-  /** 실적에서 계산된 평균 달성률(%). 실적 없음이면 null */
+  /** KPI 항목별 대표 달성률(승인 실적 중 최고값)의 부서 평균(%). 없으면 null */
   averageAchievement: number | null;
   kpiItemCount: number;
 };

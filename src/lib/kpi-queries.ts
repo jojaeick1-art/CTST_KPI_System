@@ -5,6 +5,30 @@ import type {
   KpiItemWithPerformances,
   KpiPerformanceRow,
 } from "@/src/types/kpi";
+import {
+  KPI_MONTHS,
+  type MonthKey,
+  activeMonthsForSchedule,
+  monthToHalfTypeLabel,
+  monthToLegacyQuarter,
+  scheduleMonthsFromItemDates,
+} from "@/src/lib/kpi-month";
+
+export {
+  KPI_MONTHS,
+  KPI_AXIS_START,
+  type MonthKey,
+  type KpiAxisLabel,
+  monthToHalfTypeLabel,
+  halfTypeLabelToMonth,
+  formatMonthKo,
+  formatAxisLabel,
+  parseMonthFromScheduleText,
+  scheduleMonthsFromItemDates,
+  activeMonthsForSchedule,
+  monthTargetPercent,
+  monthToLegacyQuarter,
+} from "@/src/lib/kpi-month";
 
 export const KPI_QUARTERS = [
   "26Y 1Q",
@@ -25,6 +49,15 @@ export const PERF_STATUS_APPROVED = "approved";
 /** 레거시(구버전 단일 pending) */
 export const PERF_LEGACY_PENDING = "pending";
 
+/** 실적 제출 직후 승인 단계. 그룹장 제출은 1차를 생략하고 팀장 최종 승인으로 보냄. */
+function approvalStepAfterPerformanceSubmit(
+  actorRole: string | null | undefined
+): string {
+  const actor = normalizeRole(actorRole);
+  if (actor === "group_leader") return PERF_STATUS_PENDING_FINAL;
+  return PERF_STATUS_PENDING_PRIMARY;
+}
+
 /** DB·앱 공통 반기 코드 (kpi_targets.half_type) */
 export const HALF_TYPE_H1 = "H1";
 export const HALF_TYPE_H2 = "H2";
@@ -38,14 +71,14 @@ export async function getKpiTargetsHasColumn(
   columnName: string
 ): Promise<boolean> {
   const hit = kpiTargetsColumnExistsCache.get(columnName);
-  if (hit !== undefined) return hit;
+  if (hit === true) return true;
   const supabase = createBrowserSupabase();
   const { error } = await supabase
     .from("kpi_targets")
     .select(columnName)
     .limit(1);
   const ok = !error;
-  kpiTargetsColumnExistsCache.set(columnName, ok);
+  if (ok) kpiTargetsColumnExistsCache.set(columnName, true);
   return ok;
 }
 
@@ -79,6 +112,11 @@ export async function getKpiTargetsHasHalfTypeColumn(): Promise<boolean> {
     .limit(1);
   kpiTargetsHalfTypeColumnCache = !error;
   return kpiTargetsHalfTypeColumnCache;
+}
+
+/** 월별 실적 JSON (`performance_monthly`) 컬럼 존재 여부 */
+export async function getKpiTargetsHasPerformanceMonthlyColumn(): Promise<boolean> {
+  return getKpiTargetsHasColumn("performance_monthly");
 }
 
 /** UI 분기 라벨 → DB half_type (1·2Q → H1, 3·4Q → H2) */
@@ -158,6 +196,10 @@ function clampPercent100(n: number): number {
   return Math.min(100, Math.max(0, n));
 }
 
+function pctRoughlyEqual(a: number, b: number): boolean {
+  return Math.abs(a - b) < 0.0001;
+}
+
 /** 상반기·하반기 달성률 표시: *_result 우선, 없으면 *_rate (DB에 achievement_rate 없음) */
 function halfYearAchievementPercentFromTarget(
   t: Record<string, unknown>,
@@ -188,6 +230,45 @@ function halfYearAchievementPercentFromTarget(
   return pr;
 }
 
+type PerformanceMonthlyCell = {
+  achievement_rate?: number | string | null;
+  approval_step?: string | null;
+  remarks?: string | null;
+  evidence_url?: string | null;
+  rejection_reason?: string | null;
+};
+
+function performanceMonthlyIsNonEmpty(raw: unknown): boolean {
+  return (
+    raw !== null &&
+    typeof raw === "object" &&
+    !Array.isArray(raw) &&
+    Object.keys(raw as object).length > 0
+  );
+}
+
+/** `performance_monthly` 안 월별 승인(approved) 달성률만 집계 */
+function pushApprovedMonthlyAchievements(
+  t: Record<string, unknown>,
+  list: number[]
+): void {
+  const raw = t.performance_monthly;
+  if (!performanceMonthlyIsNonEmpty(raw)) return;
+  const o = raw as Record<string, unknown>;
+  for (let mi = 1; mi <= 12; mi += 1) {
+    const cell = o[String(mi)];
+    if (!cell || typeof cell !== "object" || Array.isArray(cell)) continue;
+    const rec = cell as PerformanceMonthlyCell;
+    const step =
+      typeof rec.approval_step === "string"
+        ? rec.approval_step.trim().toLowerCase()
+        : "";
+    if (step !== PERF_STATUS_APPROVED) continue;
+    const rate = toNum(rec.achievement_rate as number | string | null | undefined);
+    if (rate !== null) list.push(clampPercent100(rate));
+  }
+}
+
 function pushApprovedHalfAchievements(
   t: Record<string, unknown>,
   list: number[],
@@ -197,7 +278,40 @@ function pushApprovedHalfAchievements(
   if (hasTargetHalf && !normalizeHalfTypeKey(String(t.half_type ?? ""))) {
     return;
   }
-  const q = deriveQuarterFromTargetRecord(t);
+
+  /**
+   * half_type 컬럼이 없을 때: 한 행에 1Q~4Q 컬럼이 함께 있는 레거시 — 분기마다 실적 수집.
+   */
+  if (!hasTargetHalf) {
+    for (const q of KPI_QUARTERS) {
+      const aq = quarterAchievementPercentFromTarget(t, q);
+      if (aq !== null) list.push(aq);
+    }
+    return;
+  }
+
+  /**
+   * 실적 저장(upsertQuarterPerformance)은 반기당 1행(half_type = H1 | H2)만 씀.
+   * H1 행: 1Q→h1_result, 2Q→h1_rate / H2 행: 3Q→h2_result, 4Q→h2_rate.
+   * deriveQuarter만 쓰면 일정 텍스트 파싱이 3Q로 고정될 때 4Q(h2_rate)가 집계에서 빠짐.
+   */
+  const rawHalf = String(t.half_type ?? "").trim().toUpperCase();
+  if (rawHalf === HALF_TYPE_H1) {
+    for (const q of ["26Y 1Q", "26Y 2Q"] as const) {
+      const aq = quarterAchievementPercentFromTarget(t, q);
+      if (aq !== null) list.push(aq);
+    }
+    return;
+  }
+  if (rawHalf === HALF_TYPE_H2) {
+    for (const q of ["26Y 3Q", "26Y 4Q"] as const) {
+      const aq = quarterAchievementPercentFromTarget(t, q);
+      if (aq !== null) list.push(aq);
+    }
+    return;
+  }
+
+  const q = deriveLegacyQuarterFromTargetRecord(t);
   if (q) {
     const aq = quarterAchievementPercentFromTarget(t, q);
     if (aq !== null) list.push(aq);
@@ -209,11 +323,42 @@ function pushApprovedHalfAchievements(
   if (a2 !== null) list.push(a2);
 }
 
+/** 한 KPI 항목의 `kpi_targets` 행들에서 승인된 분기·반기 실적 달성률(0~100)만 수집 */
+function collectApprovedAchievementRatesForItemTargets(
+  targets: Record<string, unknown>[],
+  hasTargetHalf: boolean
+): number[] {
+  const rates: number[] = [];
+  const primaryMonthly = targets.find((t) =>
+    performanceMonthlyIsNonEmpty(t.performance_monthly)
+  );
+  if (primaryMonthly) {
+    pushApprovedMonthlyAchievements(primaryMonthly, rates);
+    return rates;
+  }
+  for (const t of targets) {
+    pushApprovedHalfAchievements(t, rates, hasTargetHalf);
+  }
+  return rates;
+}
+
+/**
+ * 목록·집계에서 KPI 항목 1건의 대표 달성률.
+ * 1Q~4Q 등 승인 실적이 여러 개면 산술 평균이 아니라 **최고값**을 사용해
+ * 연말 최종 달성(예: 4Q 100%)이 목록에 반영되도록 함.
+ */
+function representativeAchievementPercentForRates(
+  rates: number[]
+): number | null {
+  if (!rates.length) return null;
+  return Math.max(...rates);
+}
+
 /** 승인 목록 등 단일 숫자가 필요할 때 (행의 half_type·h1/h2 실적 기준) */
 function targetAchievementPercentFromRecord(
   t: Record<string, unknown>
 ): number | null {
-  const range = quarterRangeFromTargetRecord(t);
+  const range = legacyQuarterRangeFromTargetRecord(t);
   if (range.length) {
     for (let i = range.length - 1; i >= 0; i -= 1) {
       const v = quarterAchievementPercentFromTarget(t, range[i]!);
@@ -298,9 +443,14 @@ export async function fetchDepartmentKpiSummary(): Promise<
       );
     });
     const list = ratesByDept.get(deptId)!;
-    for (const t of targets) {
-      pushApprovedHalfAchievements(t, list, hasTargetHalf);
-    }
+    const itemRates = collectApprovedAchievementRatesForItemTargets(
+      targets,
+      hasTargetHalf
+    );
+    const rep = representativeAchievementPercentForRates(itemRates);
+    // 부서 카드 통합 달성률은 "부서 KPI 전체 항목"을 분모로 계산한다.
+    // 승인 실적이 없는 항목은 0%로 간주해 평균에 포함한다.
+    list.push(rep ?? 0);
   }
 
   return (departments ?? []).map((d) => {
@@ -335,6 +485,7 @@ export type DepartmentKpiDetailItem = {
   h1TargetDate: string | null;
   h2TargetDate: string | null;
   scheduleRaw: string | null;
+  /** 분기별 승인 실적 중 최고 달성률(목록 표시용). 없으면 null */
   averageAchievement: number | null;
   targetCount: number;
   /** 반려 사유가 남아 있으면 true — 목록에서 강조 표시 */
@@ -565,13 +716,15 @@ export async function fetchDepartmentKpiDetail(
         CURRENT_KPI_YEAR
       );
     });
-    const rates: number[] = [];
-    for (const t of targets) {
-      pushApprovedHalfAchievements(t, rates, hasTargetHalf);
-    }
+    const rates = collectApprovedAchievementRatesForItemTargets(
+      targets,
+      hasTargetHalf
+    );
     const averageAchievement =
-      rates.length > 0 ? rates.reduce((a, b) => a + b, 0) / rates.length : null;
-    if (averageAchievement !== null) departmentRates.push(averageAchievement);
+      representativeAchievementPercentForRates(rates);
+    // 부서 상단 "전체 평균 달성률"은 대시보드 부서 카드와 동일하게
+    // 등록된 KPI 항목 수를 분모로 하고, 승인 실적 없음은 0%로 포함한다.
+    departmentRates.push(averageAchievement ?? 0);
 
     const firstHalf = targets
       .map((t) => pickText(t, ["h1_target"]))
@@ -610,20 +763,22 @@ export async function fetchDepartmentKpiDetail(
     const h1TargetDate = h1TargetDateRaw === "-" ? null : h1TargetDateRaw;
     const h2TargetDate = h2TargetDateRaw === "-" ? null : h2TargetDateRaw;
     const target0 = targets[0] ?? {};
-    /** 목표(Target) 점선 전용 — h1_rate/h2_rate 는 실적 저장 시 덮어쓸 수 있어 목표선에 사용하지 않음 */
+    /** 목표(Target) 점선 전용 — 실적은 h1_result/h1_rate(2Q) 등과 분리 */
     const firstHalfTarget =
-      pickNumber(target0, ["h1_target_value"]) ??
+      pickNumber(target0, ["h1_target_value", "h1_target_pct"]) ??
       parsePercentLike(target0.h1_target) ??
       parsePercentLike(target0.h1_effect) ??
+      pickNumber(target0, ["h1_rate"]) ??
       pickNumber(item, [
         "first_half_target",
         "h1_target",
         "target_h1",
       ]);
     const secondHalfTarget =
-      pickNumber(target0, ["h2_target_value"]) ??
+      pickNumber(target0, ["h2_target_value", "h2_target_pct"]) ??
       parsePercentLike(target0.h2_target) ??
       parsePercentLike(target0.h2_effect) ??
+      pickNumber(target0, ["h2_rate"]) ??
       pickNumber(item, [
         "second_half_target",
         "h2_target",
@@ -689,7 +844,6 @@ export async function fetchDashboardSummaryStats(
 ): Promise<DashboardSummaryStats> {
   const supabase = createBrowserSupabase();
   const hasYear = await getKpiTargetsHasYearColumn();
-  const hasTargetHalf = await getKpiTargetsHasHalfTypeColumn();
 
   let q = supabase.from("kpi_targets").select("*, kpi_items(dept_id)");
   if (hasYear) q = q.eq("year", CURRENT_KPI_YEAR);
@@ -710,28 +864,59 @@ export async function fetchDashboardSummaryStats(
   const uniqueKpi = new Set<string>();
   let pendingPrimaryCount = 0;
   let pendingFinalCount = 0;
-  const approvedRates: number[] = [];
+  const targetsByKpiId = new Map<string, Record<string, unknown>[]>();
 
   for (const row of scoped) {
     const rec = asRecord(row as unknown as Record<string, unknown>);
     if (typeof rec.kpi_id === "string" && rec.kpi_id.trim()) {
       uniqueKpi.add(rec.kpi_id);
+      const kid = rec.kpi_id.trim();
+      if (!targetsByKpiId.has(kid)) targetsByKpiId.set(kid, []);
+      targetsByKpiId.get(kid)!.push(rec);
     }
-    const step =
-      typeof rec.approval_step === "string"
-        ? rec.approval_step.trim().toLowerCase()
-        : "";
-    if (step === PERF_STATUS_PENDING_PRIMARY || step === PERF_LEGACY_PENDING) {
-      pendingPrimaryCount += 1;
-    } else if (step === PERF_STATUS_PENDING_FINAL) {
-      pendingFinalCount += 1;
+    const pmRaw = rec.performance_monthly;
+    if (performanceMonthlyIsNonEmpty(pmRaw)) {
+      const o = pmRaw as Record<string, unknown>;
+      for (let mi = 1; mi <= 12; mi += 1) {
+        const cell = o[String(mi)];
+        if (!cell || typeof cell !== "object" || Array.isArray(cell)) continue;
+        const c = cell as PerformanceMonthlyCell;
+        const st =
+          typeof c.approval_step === "string"
+            ? c.approval_step.trim().toLowerCase()
+            : "";
+        if (st === PERF_STATUS_PENDING_PRIMARY || st === PERF_LEGACY_PENDING) {
+          pendingPrimaryCount += 1;
+        } else if (st === PERF_STATUS_PENDING_FINAL) {
+          pendingFinalCount += 1;
+        }
+      }
+    } else {
+      const step =
+        typeof rec.approval_step === "string"
+          ? rec.approval_step.trim().toLowerCase()
+          : "";
+      if (step === PERF_STATUS_PENDING_PRIMARY || step === PERF_LEGACY_PENDING) {
+        pendingPrimaryCount += 1;
+      } else if (step === PERF_STATUS_PENDING_FINAL) {
+        pendingFinalCount += 1;
+      }
     }
-    pushApprovedHalfAchievements(rec, approvedRates, hasTargetHalf);
   }
 
+  // 상단 "전체 평균 달성률"은 KPI 항목 단위가 아니라
+  // "부서별 통합 달성률(카드 값)"들의 평균으로 계산한다.
+  const deptSummaries = await fetchDepartmentKpiSummary();
+  const scopedDeptSummaries = (filterDeptId
+    ? deptSummaries.filter((d) => d.id === filterDeptId)
+    : deptSummaries
+  ).filter((d) => d.kpiItemCount > 0);
   const averageAchievement =
-    approvedRates.length > 0
-      ? approvedRates.reduce((a, b) => a + b, 0) / approvedRates.length
+    scopedDeptSummaries.length > 0
+      ? scopedDeptSummaries.reduce(
+          (acc, d) => acc + (d.averageAchievement ?? 0),
+          0
+        ) / scopedDeptSummaries.length
       : 0;
 
   return {
@@ -763,33 +948,33 @@ function monthFromTargetText(v: unknown): number | null {
   return month;
 }
 
-function quarterLabelFromMonth(month: number): QuarterLabel {
+function legacyQuarterLabelFromMonth(month: number): QuarterLabel {
   if (month <= 3) return "26Y 1Q";
   if (month <= 6) return "26Y 2Q";
   if (month <= 9) return "26Y 3Q";
   return "26Y 4Q";
 }
 
-function deriveQuarterFromTargetRecord(
+function deriveLegacyQuarterFromTargetRecord(
   t: Record<string, unknown>
 ): QuarterLabel | null {
   const half = normalizeHalfTypeKey(String(t.half_type ?? ""));
   const h1Month = monthFromTargetText(t.h1_target);
   const h2Month = monthFromTargetText(t.h2_target);
   if (half === HALF_TYPE_H1) {
-    if (h1Month !== null) return quarterLabelFromMonth(h1Month);
+    if (h1Month !== null) return legacyQuarterLabelFromMonth(h1Month);
     return "26Y 1Q";
   }
   if (half === HALF_TYPE_H2) {
-    if (h2Month !== null) return quarterLabelFromMonth(h2Month);
+    if (h2Month !== null) return legacyQuarterLabelFromMonth(h2Month);
     return "26Y 3Q";
   }
-  if (h1Month !== null) return quarterLabelFromMonth(h1Month);
-  if (h2Month !== null) return quarterLabelFromMonth(h2Month);
+  if (h1Month !== null) return legacyQuarterLabelFromMonth(h1Month);
+  if (h2Month !== null) return legacyQuarterLabelFromMonth(h2Month);
   return null;
 }
 
-function quarterRangeFromTargetRecord(
+function legacyQuarterRangeFromTargetRecord(
   t: Record<string, unknown>
 ): QuarterLabel[] {
   const half = normalizeHalfTypeKey(String(t.half_type ?? ""));
@@ -815,17 +1000,34 @@ function quarterRangeFromTargetRecord(
     return out;
   }
 
-  const q = deriveQuarterFromTargetRecord(t);
+  const q = deriveLegacyQuarterFromTargetRecord(t);
   return q ? [q] : [];
 }
 
-function quarterRangeLabelFromTargetRecord(
+function legacyQuarterRangeLabelFromTargetRecord(
   t: Record<string, unknown>
 ): string | null {
-  const qs = quarterRangeFromTargetRecord(t);
+  const qs = legacyQuarterRangeFromTargetRecord(t);
   if (!qs.length) return null;
   if (qs.length === 1) return qs[0]!;
   return `${qs[0]} ~ ${qs[qs.length - 1]}`;
+}
+
+/** 승인 대기 목록: `h1_target`/`h2_target` 일정 → `3월~10월` (분기 라벨 대신) */
+function formatKpiTargetActiveMonthRangeLabel(
+  t: Record<string, unknown>
+): string | null {
+  const h1Raw = pickText(t, ["h1_target"]);
+  const h2Raw = pickText(t, ["h2_target"]);
+  const h1 = h1Raw !== "-" ? h1Raw : null;
+  const h2 = h2Raw !== "-" ? h2Raw : null;
+  const sched = scheduleMonthsFromItemDates(h1, h2);
+  const months = activeMonthsForSchedule(sched);
+  if (months.length === 0) return null;
+  const first = months[0]!;
+  const last = months[months.length - 1]!;
+  if (first === last) return `${first}월`;
+  return `${first}월~${last}월`;
 }
 
 function quarterAchievementPercentFromTarget(
@@ -846,19 +1048,43 @@ function quarterAchievementPercentFromTarget(
   }
   if (quarter === "26Y 2Q") {
     const v = toNum(t.h1_rate as number | string | null | undefined);
-    return v === null ? null : clampPercent100(v);
+    if (v === null) return null;
+    const targetPct = toNum(
+      t.h1_target_pct as number | string | null | undefined
+    );
+    const q1 = toNum(t.h1_result as number | string | null | undefined);
+    if (
+      targetPct !== null &&
+      q1 === null &&
+      pctRoughlyEqual(v, targetPct)
+    ) {
+      return null;
+    }
+    return clampPercent100(v);
   }
   if (quarter === "26Y 3Q") {
     const v = toNum(t.h2_result as number | string | null | undefined);
     return v === null ? null : clampPercent100(v);
   }
   const v = toNum(t.h2_rate as number | string | null | undefined);
-  return v === null ? null : clampPercent100(v);
+  if (v === null) return null;
+  const targetPct = toNum(
+    t.h2_target_pct as number | string | null | undefined
+  );
+  const q3 = toNum(t.h2_result as number | string | null | undefined);
+  if (
+    targetPct !== null &&
+    q3 === null &&
+    pctRoughlyEqual(v, targetPct)
+  ) {
+    return null;
+  }
+  return clampPercent100(v);
 }
 
 function mapTargetRecordToQuarterRows(t: Record<string, unknown>): ItemPerformanceRow[] {
   const base = mapTargetRecordToItemPerformanceRow(t);
-  const quarters = quarterRangeFromTargetRecord(t);
+  const quarters = legacyQuarterRangeFromTargetRecord(t);
   const rr = typeof t.rejection_reason === "string" && t.rejection_reason.trim()
     ? t.rejection_reason.trim()
     : null;
@@ -918,35 +1144,134 @@ function mapTargetRecordToItemPerformanceRow(
   };
 }
 
+/**
+ * 레거시 DB(분기 컬럼만 있음)를 월 축에 올릴 때, 1Q 값이 1·2·3월에 똑같이 복제되지 않도록
+ * 분기당 대표 월(1·4·7·10)에만 달성률을 붙인다. (`performance_monthly` 사용 시에는 월마다 별도.)
+ */
+function isLegacyQuarterAnchorMonth(m: MonthKey): boolean {
+  return ((m - 1) % 3) === 0;
+}
+
+async function buildItemPerformanceRowsFromKpiTargets(
+  targetRows: Record<string, unknown>[],
+  hasTargetHalf: boolean,
+  supabase: ReturnType<typeof createBrowserSupabase>
+): Promise<ItemPerformanceRow[]> {
+  if (!targetRows.length) return [];
+
+  if (!hasTargetHalf) {
+    const t0 = targetRows[0]!;
+    return KPI_MONTHS.map((m) => {
+      const q = monthToLegacyQuarter(m) as QuarterLabel;
+      return {
+        ...mapTargetRecordToItemPerformanceRow(t0),
+        half_type: monthToHalfTypeLabel(m),
+        achievement_rate: isLegacyQuarterAnchorMonth(m)
+          ? quarterAchievementPercentFromTarget(t0, q)
+          : null,
+      };
+    });
+  }
+
+  const h1Row =
+    targetRows.find(
+      (r) => String(r.half_type ?? "").trim().toUpperCase() === HALF_TYPE_H1
+    ) ?? targetRows[0]!;
+  const h2Row =
+    targetRows.find(
+      (r) => String(r.half_type ?? "").trim().toUpperCase() === HALF_TYPE_H2
+    ) ?? null;
+
+  const hasMonthlyCol = await getKpiTargetsHasPerformanceMonthlyColumn();
+  const pmRaw = h1Row.performance_monthly;
+  /** 컬럼만 있으면 월별 JSON으로 읽음(빈 {} 도 레거시 분기로 떨어지면 1·2·3월이 h1_result 하나를 공유해 덮어씀) */
+  const useJson = hasMonthlyCol;
+
+  if (useJson) {
+    const id = typeof h1Row.id === "string" ? h1Row.id : String(h1Row.id ?? "");
+    const o =
+      pmRaw !== null &&
+      pmRaw !== undefined &&
+      typeof pmRaw === "object" &&
+      !Array.isArray(pmRaw)
+        ? (pmRaw as Record<string, unknown>)
+        : {};
+    return KPI_MONTHS.map((m) => {
+      const cell = o[String(m)] as PerformanceMonthlyCell | undefined;
+      const st = cell?.approval_step ?? PERF_STATUS_DRAFT;
+      const rateRaw = cell?.achievement_rate;
+      const rate =
+        rateRaw !== null && rateRaw !== undefined
+          ? toNum(rateRaw as number | string)
+          : null;
+      const ev = cell?.evidence_url;
+      return {
+        id,
+        half_type: monthToHalfTypeLabel(m),
+        achievement_rate: rate,
+        approval_step: typeof st === "string" ? st : null,
+        evidence_path:
+          typeof ev === "string" && ev.trim() ? ev.trim() : null,
+        evidence_url: toEvidencePublicUrl(supabase, ev),
+        description:
+          typeof cell?.remarks === "string" ? cell.remarks : null,
+        rejection_reason:
+          typeof cell?.rejection_reason === "string" &&
+          cell.rejection_reason.trim()
+            ? cell.rejection_reason.trim()
+            : null,
+      };
+    });
+  }
+
+  const h1s = h1Row;
+  const h2s = h2Row ?? {};
+  return KPI_MONTHS.map((m) => {
+    const src = m <= 6 ? h1s : h2s;
+    const q = monthToLegacyQuarter(m) as QuarterLabel;
+    const rowId =
+      m <= 6
+        ? typeof h1Row.id === "string"
+          ? h1Row.id
+          : String(h1Row.id ?? "")
+        : h2Row && typeof h2Row.id === "string"
+          ? h2Row.id
+          : typeof h1Row.id === "string"
+            ? h1Row.id
+            : String(h1Row.id ?? "");
+    const rr = src.rejection_reason;
+    return {
+      id: rowId,
+      half_type: monthToHalfTypeLabel(m),
+      achievement_rate: isLegacyQuarterAnchorMonth(m)
+        ? quarterAchievementPercentFromTarget(src, q)
+        : null,
+      approval_step:
+        typeof src.approval_step === "string" ? src.approval_step : null,
+      evidence_path:
+        typeof src.evidence_url === "string" && src.evidence_url.trim()
+          ? src.evidence_url.trim()
+          : null,
+      evidence_url: toEvidencePublicUrl(supabase, src.evidence_url),
+      description:
+        typeof src.remarks === "string" ? src.remarks : null,
+      rejection_reason:
+        typeof rr === "string" && rr.trim() ? rr.trim() : null,
+    };
+  });
+}
+
 export async function fetchKpiPerformancesByItem(
   kpiId: string
 ): Promise<ItemPerformanceRow[]> {
   const supabase = createBrowserSupabase();
   const hasTargetHalf = await getKpiTargetsHasHalfTypeColumn();
   const targetRows = await fetchKpiTargetsApprovalRowsForItem(supabase, kpiId);
-
-  if (!targetRows.length) return [];
-
-  if (!hasTargetHalf) {
-    const t0 = targetRows[0]!;
-    return [
-      ...(["26Y 1Q", "26Y 2Q", "26Y 3Q", "26Y 4Q"] as QuarterLabel[]).map(
-        (q) => ({
-          ...mapTargetRecordToItemPerformanceRow(t0),
-          half_type: q,
-          achievement_rate: quarterAchievementPercentFromTarget(t0, q),
-        })
-      ),
-    ];
-  }
-
-  const mapped = targetRows.flatMap((t) => mapTargetRecordToQuarterRows(t));
-  mapped.sort(
-    (a, b) =>
-      KPI_QUARTERS.indexOf(a.half_type as QuarterLabel) -
-      KPI_QUARTERS.indexOf(b.half_type as QuarterLabel)
+  return buildItemPerformanceRowsFromKpiTargets(
+    targetRows,
+    hasTargetHalf,
+    supabase
   );
-  return mapped;
 }
 
 /** 엑셀 등으로 만든 연도별 목표 행 1건 (kpi_id + year) */
@@ -1158,7 +1483,7 @@ export async function upsertQuarterPerformance(
 
   const r = clampPercent100(input.achievement_rate);
   const updatePayload: Record<string, unknown> = {
-    approval_step: PERF_STATUS_PENDING_PRIMARY,
+    approval_step: approvalStepAfterPerformanceSubmit(options?.actorRole),
     rejection_reason: null,
     remarks: input.description.trim() || null,
   };
@@ -1220,6 +1545,135 @@ export async function upsertQuarterPerformance(
   );
 }
 
+/**
+ * 월별 실적 저장. `performance_monthly` 컬럼이 없으면 레거시 분기 컬럼으로 폴백합니다.
+ */
+export async function upsertMonthPerformance(
+  input: {
+    kpiId: string;
+    month: MonthKey;
+    achievement_rate: number;
+    description: string;
+    evidenceUrl?: string | null;
+  },
+  options?: {
+    adminBypassApprovalLock?: boolean;
+    actorRole?: string | null;
+  }
+): Promise<{ targetId: string }> {
+  const supabase = createBrowserSupabase();
+  const hasHalfType = await getKpiTargetsHasHalfTypeColumn();
+  const targetId = await findOrCreateKpiTargetRowIdForYear(
+    supabase,
+    input.kpiId,
+    hasHalfType ? HALF_TYPE_H1 : undefined
+  );
+
+  const { data: cur, error: selErr } = await supabase
+    .from("kpi_targets")
+    .select("performance_monthly")
+    .eq("id", targetId)
+    .maybeSingle();
+  if (selErr) {
+    const msg = selErr.message.toLowerCase();
+    if (
+      /performance_monthly|schema cache|column|could not find/i.test(msg)
+    ) {
+      return upsertQuarterPerformance(
+        {
+          kpiId: input.kpiId,
+          quarter: monthToLegacyQuarter(input.month) as QuarterLabel,
+          achievement_rate: input.achievement_rate,
+          description: input.description,
+          evidenceUrl: input.evidenceUrl,
+        },
+        options
+      );
+    }
+    throw new Error(
+      `kpi_targets 조회 실패: ${selErr.message} (연결·RLS·컬럼을 확인해 주세요.)`
+    );
+  }
+  kpiTargetsColumnExistsCache.set("performance_monthly", true);
+  const curRec = cur as Record<string, unknown> | null;
+  const pm: Record<string, PerformanceMonthlyCell> = {};
+  const prevPm = curRec?.performance_monthly;
+  if (prevPm && typeof prevPm === "object" && !Array.isArray(prevPm)) {
+    const o = prevPm as Record<string, unknown>;
+    for (const k of Object.keys(o)) {
+      const cell = o[k];
+      if (cell && typeof cell === "object" && !Array.isArray(cell)) {
+        pm[k] = { ...(cell as PerformanceMonthlyCell) };
+      }
+    }
+  }
+
+  const key = String(input.month);
+  const prevCell = pm[key] ?? {};
+  const prevStep =
+    typeof prevCell.approval_step === "string"
+      ? prevCell.approval_step.trim().toLowerCase()
+      : "";
+  const actor = normalizeRole(options?.actorRole);
+  const privilegedEditor =
+    actor === "admin" || actor === "group_leader" || actor === "team_leader";
+  if (!options?.adminBypassApprovalLock && !privilegedEditor) {
+    if (prevStep === PERF_STATUS_APPROVED) {
+      throw new Error(
+        "승인 완료(approved) 실적은 그룹장·팀장·관리자만 수정할 수 있습니다."
+      );
+    }
+  }
+
+  const r = clampPercent100(input.achievement_rate);
+  const nextCell: PerformanceMonthlyCell = {
+    ...prevCell,
+    achievement_rate: r,
+    approval_step: approvalStepAfterPerformanceSubmit(options?.actorRole),
+    rejection_reason: null,
+    remarks: input.description.trim() || null,
+  };
+  if (input.evidenceUrl !== undefined) {
+    nextCell.evidence_url = input.evidenceUrl;
+  }
+  pm[key] = nextCell;
+
+  const hasYear = await getKpiTargetsHasYearColumn();
+  const upsertPayloadBase: Record<string, unknown> = {
+    id: targetId,
+    kpi_id: input.kpiId,
+    performance_monthly: pm,
+    approval_step: PERF_STATUS_DRAFT,
+    rejection_reason: null,
+  };
+  if (hasYear) upsertPayloadBase.year = CURRENT_KPI_YEAR;
+  if (hasHalfType) upsertPayloadBase.half_type = HALF_TYPE_H1;
+
+  const filtered = await filterPayloadToExistingKpiTargetColumns(upsertPayloadBase);
+  if (Object.keys(filtered).length === 0) {
+    throw new Error(
+      "kpi_targets에 performance_monthly 컬럼이 없습니다. supabase/migrations의 SQL을 실행한 뒤 API 스키마를 새로고침하세요."
+    );
+  }
+
+  const { data: savedRow, error } = await supabase
+    .from("kpi_targets")
+    .upsert(filtered)
+    .select("id")
+    .single();
+  if (error) {
+    throw new Error(
+      `kpi_targets 실적 저장 실패: ${error.message} (컬럼·RLS·network를 확인해 주세요.)`
+    );
+  }
+  const savedId =
+    savedRow && typeof (savedRow as { id?: unknown }).id === "string"
+      ? (savedRow as { id: string }).id
+      : null;
+  if (savedId) return { targetId: savedId };
+  return { targetId };
+}
+
 export async function updateKpiTargetEvidenceUrl(input: {
   targetId: string;
   evidenceUrl: string;
@@ -1279,12 +1733,62 @@ export async function updateKpiTargetEvidenceUrl(input: {
   }
 }
 
+/** 월별 JSON에 증빙 경로 저장 (`performance_monthly` 컬럼 필요) */
+export async function updatePerformanceMonthlyEvidenceUrl(input: {
+  targetId: string;
+  month: MonthKey;
+  evidenceUrl: string;
+}): Promise<void> {
+  const supabase = createBrowserSupabase();
+  if (!(await getKpiTargetsHasPerformanceMonthlyColumn())) {
+    await updateKpiTargetEvidenceUrl({
+      targetId: input.targetId,
+      evidenceUrl: input.evidenceUrl,
+    });
+    return;
+  }
+  const tid = input.targetId.trim();
+  const { data: cur, error: selErr } = await supabase
+    .from("kpi_targets")
+    .select("performance_monthly")
+    .eq("id", tid)
+    .maybeSingle();
+  if (selErr) throw new Error(selErr.message);
+  const rec = cur as Record<string, unknown> | null;
+  const pm: Record<string, PerformanceMonthlyCell> = {};
+  const prevPm = rec?.performance_monthly;
+  if (prevPm && typeof prevPm === "object" && !Array.isArray(prevPm)) {
+    const o = prevPm as Record<string, unknown>;
+    for (const k of Object.keys(o)) {
+      const cell = o[k];
+      if (cell && typeof cell === "object" && !Array.isArray(cell)) {
+        pm[k] = { ...(cell as PerformanceMonthlyCell) };
+      }
+    }
+  }
+  const key = String(input.month);
+  pm[key] = {
+    ...(pm[key] ?? {}),
+    evidence_url: input.evidenceUrl.trim(),
+  };
+  const filtered = await filterPayloadToExistingKpiTargetColumns({
+    id: tid,
+    performance_monthly: pm,
+  });
+  const { error } = await supabase.from("kpi_targets").update(filtered).eq("id", tid);
+  if (error) throw new Error(error.message);
+}
+
 export type ApprovalWorkflowStage = "primary" | "final";
 
 /** 승인 대기 실적 목록 (그룹장·팀장 화면) */
 export type PendingPerformanceListRow = {
+  /** 목록·React key용 (월별: `${targetRowId}:M${월}`) */
   id: string;
-  /** 표시용 기간 라벨 (상·하반기) */
+  /** kpi_targets 행 ID — 승인 API에 전달 */
+  targetRowId: string;
+  /** 월별 실적일 때 1~12, 레거시 행 단위면 null */
+  month: MonthKey | null;
   periodLabel: string;
   half_type: string;
   achievement_rate: number | null;
@@ -1309,14 +1813,6 @@ export async function fetchPerformancesPendingStage(options: {
     .from("kpi_targets")
     .select("*, kpi_items(main_topic, sub_topic, dept_id)");
   if (hasYear) tq = tq.eq("year", CURRENT_KPI_YEAR);
-  if (options.stage === "primary") {
-    tq = tq.in("approval_step", [
-      PERF_STATUS_PENDING_PRIMARY,
-      PERF_LEGACY_PENDING,
-    ]);
-  } else {
-    tq = tq.eq("approval_step", PERF_STATUS_PENDING_FINAL);
-  }
 
   const { data: targetRows, error: te } = await tq;
   if (te) throw new Error(te.message);
@@ -1342,32 +1838,93 @@ export async function fetchPerformancesPendingStage(options: {
     }
     if (deptId) deptIds.add(deptId);
 
-    const approvalStep =
-      typeof t.approval_step === "string" ? t.approval_step : "";
     const perfHalf = hasTargetHalf
       ? normalizeHalfTypeKey(String(t.half_type ?? "")) || HALF_TYPE_H1
       : HALF_TYPE_H1;
-    const quarterRangeLabel = quarterRangeLabelFromTargetRecord(t);
+    const quarterRangeLabel = legacyQuarterRangeLabelFromTargetRecord(t);
 
-    staged.push({
-      id: tid,
-      periodLabel: quarterRangeLabel ?? halfTypeDisplayLabel(perfHalf),
-      half_type: perfHalf,
-      achievement_rate: targetAchievementPercentFromRecord(t),
-      description:
-        typeof t.remarks === "string" ? t.remarks : null,
-      evidence_url: toEvidencePublicUrl(supabase, t.evidence_url),
-      approval_step: approvalStep,
-      departmentName: "-",
-      kpiMainLabel: pickText(itemRec, [
-        "sub_topic",
-        "topic_sub",
-        "sub_title",
-        "subtitle",
-      ]),
-      kpiSubLabel: pickText(itemRec, ["main_topic", "topic_main"]),
-      deptId,
-    });
+    const pushLegacyRow = (approvalStep: string) => {
+      staged.push({
+        id: tid,
+        targetRowId: tid,
+        month: null,
+        periodLabel:
+          formatKpiTargetActiveMonthRangeLabel(t) ??
+          quarterRangeLabel ??
+          halfTypeDisplayLabel(perfHalf),
+        half_type: perfHalf,
+        achievement_rate: targetAchievementPercentFromRecord(t),
+        description:
+          typeof t.remarks === "string" ? t.remarks : null,
+        evidence_url: toEvidencePublicUrl(supabase, t.evidence_url),
+        approval_step: approvalStep,
+        departmentName: "-",
+        kpiMainLabel: pickText(itemRec, [
+          "sub_topic",
+          "topic_sub",
+          "sub_title",
+          "subtitle",
+        ]),
+        kpiSubLabel: pickText(itemRec, ["main_topic", "topic_main"]),
+        deptId,
+      });
+    };
+
+    if (performanceMonthlyIsNonEmpty(t.performance_monthly)) {
+      const o = t.performance_monthly as Record<string, unknown>;
+      let stagedMonthPending = false;
+      for (let mi = 1; mi <= 12; mi += 1) {
+        const cell = o[String(mi)];
+        if (!cell || typeof cell !== "object" || Array.isArray(cell)) continue;
+        const c = cell as PerformanceMonthlyCell;
+        const st =
+          typeof c.approval_step === "string"
+            ? c.approval_step.trim().toLowerCase()
+            : "";
+        const wantPrimary =
+          options.stage === "primary" &&
+          (st === PERF_STATUS_PENDING_PRIMARY || st === PERF_LEGACY_PENDING);
+        const wantFinal =
+          options.stage === "final" && st === PERF_STATUS_PENDING_FINAL;
+        if (!wantPrimary && !wantFinal) continue;
+        const rate = toNum(c.achievement_rate as number | string | null | undefined);
+        staged.push({
+          id: `${tid}:M${mi}`,
+          targetRowId: tid,
+          month: mi as MonthKey,
+          periodLabel: `${mi}월`,
+          half_type: monthToHalfTypeLabel(mi as MonthKey),
+          achievement_rate: rate,
+          description:
+            typeof c.remarks === "string" ? c.remarks : null,
+          evidence_url: toEvidencePublicUrl(supabase, c.evidence_url),
+          approval_step: st,
+          departmentName: "-",
+          kpiMainLabel: pickText(itemRec, [
+            "sub_topic",
+            "topic_sub",
+            "sub_title",
+            "subtitle",
+          ]),
+          kpiSubLabel: pickText(itemRec, ["main_topic", "topic_main"]),
+          deptId,
+        });
+        stagedMonthPending = true;
+      }
+      if (stagedMonthPending) continue;
+    }
+
+    const approvalStep =
+      typeof t.approval_step === "string" ? t.approval_step : "";
+    const st = approvalStep.trim().toLowerCase();
+    if (
+      options.stage === "primary" &&
+      (st === PERF_STATUS_PENDING_PRIMARY || st === PERF_LEGACY_PENDING)
+    ) {
+      pushLegacyRow(approvalStep);
+    } else if (options.stage === "final" && st === PERF_STATUS_PENDING_FINAL) {
+      pushLegacyRow(approvalStep);
+    }
   }
 
   const deptMap = new Map<string, string>();
@@ -1406,20 +1963,42 @@ export async function fetchPendingPerformancesForApproval(options?: {
 
 /**
  * 2단계 승인: 그룹장(1차) → 팀장(최종). 반려 시 제출전(draft) + 사유.
- * @param performanceId `kpi_targets.id` (실적·승인 동일 행)
+ * @param performanceId kpi_targets 행 UUID. 월별 승인 대기 목록의 복합 키(targetRowId + ":M" + 월)도 허용.
+ * @param options.month 월별 실적(`performance_monthly`)일 때만 지정(복합 ID면 생략 가능).
  */
 export async function reviewPerformanceWorkflow(
   performanceId: string,
   input:
     | { action: "approve_primary" }
     | { action: "approve_final" }
-    | { action: "reject"; rejectionReason: string }
+    | { action: "reject"; rejectionReason: string },
+  options?: { month?: MonthKey }
 ): Promise<void> {
   const supabase = createBrowserSupabase();
-  const tid = performanceId.trim();
+  let tid = performanceId.trim();
   if (!tid) {
     throw new Error("대상 ID가 없습니다.");
   }
+  /** 승인 대기 목록 등: `${kpi_targets.id}:M${월}` → 행 ID + 월 분리 */
+  let monthFromComposite: MonthKey | undefined;
+  const compositeIdx = tid.indexOf(":M");
+  if (compositeIdx > 0) {
+    const base = tid.slice(0, compositeIdx);
+    const suffix = tid.slice(compositeIdx + 2);
+    const mo = Number(suffix);
+    if (
+      suffix !== "" &&
+      Number.isInteger(mo) &&
+      mo >= 1 &&
+      mo <= 12
+    ) {
+      tid = base;
+      monthFromComposite = mo as MonthKey;
+    }
+  }
+  const month =
+    options?.month !== undefined ? options.month : monthFromComposite;
+
   const { data: exists, error: exErr } = await supabase
     .from("kpi_targets")
     .select("id")
@@ -1428,6 +2007,88 @@ export async function reviewPerformanceWorkflow(
   if (exErr) throw new Error(exErr.message);
   if (!exists) {
     throw new Error("kpi_targets 행을 찾을 수 없습니다.");
+  }
+
+  if (
+    month !== undefined &&
+    (await getKpiTargetsHasPerformanceMonthlyColumn())
+  ) {
+    const { data: cur, error: rErr } = await supabase
+      .from("kpi_targets")
+      .select("performance_monthly")
+      .eq("id", tid)
+      .maybeSingle();
+    if (rErr) throw new Error(rErr.message);
+    const rec = cur as Record<string, unknown> | null;
+    const pm: Record<string, PerformanceMonthlyCell> = {};
+    const prevPm = rec?.performance_monthly;
+    if (prevPm && typeof prevPm === "object" && !Array.isArray(prevPm)) {
+      const o = prevPm as Record<string, unknown>;
+      for (const k of Object.keys(o)) {
+        const cell = o[k];
+        if (cell && typeof cell === "object" && !Array.isArray(cell)) {
+          pm[k] = { ...(cell as PerformanceMonthlyCell) };
+        }
+      }
+    }
+    const key = String(month);
+    const cell = pm[key];
+    if (!cell || typeof cell !== "object") {
+      throw new Error("해당 월 실적 데이터를 찾을 수 없습니다.");
+    }
+    const curSt =
+      typeof cell.approval_step === "string"
+        ? cell.approval_step.trim().toLowerCase()
+        : "";
+
+    if (input.action === "approve_primary") {
+      if (
+        curSt !== PERF_STATUS_PENDING_PRIMARY &&
+        curSt !== PERF_LEGACY_PENDING
+      ) {
+        throw new Error("1차 승인 대기 상태가 아닙니다.");
+      }
+      pm[key] = {
+        ...cell,
+        approval_step: PERF_STATUS_PENDING_FINAL,
+        rejection_reason: null,
+      };
+    } else if (input.action === "approve_final") {
+      if (curSt !== PERF_STATUS_PENDING_FINAL) {
+        throw new Error("최종 승인 대기 상태가 아닙니다.");
+      }
+      pm[key] = {
+        ...cell,
+        approval_step: PERF_STATUS_APPROVED,
+        rejection_reason: null,
+      };
+    } else {
+      const reason = input.rejectionReason.trim();
+      if (!reason) throw new Error("반려 사유를 입력해 주세요.");
+      if (
+        curSt !== PERF_STATUS_PENDING_PRIMARY &&
+        curSt !== PERF_STATUS_PENDING_FINAL &&
+        curSt !== PERF_LEGACY_PENDING
+      ) {
+        throw new Error("반려할 수 있는 승인 단계가 아닙니다.");
+      }
+      pm[key] = {
+        ...cell,
+        approval_step: PERF_STATUS_DRAFT,
+        rejection_reason: reason,
+      };
+    }
+
+    const filtered = await filterPayloadToExistingKpiTargetColumns({
+      id: tid,
+      performance_monthly: pm,
+    });
+    const { error } = await supabase
+      .from("kpi_targets")
+      .update(filtered)
+      .eq("id", tid);
+    if (error) throw new Error(error.message);
+    return;
   }
 
   if (input.action === "approve_primary") {
@@ -1559,12 +2220,12 @@ export async function clearAllKpiData(): Promise<void> {
   }
 }
 
-export type QuarterDeadlineRow = {
-  quarter: QuarterLabel;
+export type MonthDeadlineRow = {
+  month: MonthKey;
   input_deadline: string | null;
 };
 
-export async function fetchQuarterDeadlines(): Promise<QuarterDeadlineRow[]> {
+export async function fetchMonthDeadlines(): Promise<MonthDeadlineRow[]> {
   const supabase = createBrowserSupabase();
   const { data, error } = await supabase
     .from("system_settings")
@@ -1575,18 +2236,40 @@ export async function fetchQuarterDeadlines(): Promise<QuarterDeadlineRow[]> {
       `${error.message} (system_settings 테이블이 없다면 schema-kpi.sql의 생성 SQL을 실행해 주세요.)`
     );
   }
-  return (data ?? []) as QuarterDeadlineRow[];
+  const out = new Map<MonthKey, string | null>();
+  for (const m of KPI_MONTHS) out.set(m, null);
+  for (const row of data ?? []) {
+    const raw = String((row as { quarter?: unknown }).quarter ?? "").trim();
+    const mm = raw.match(/^M(\d{1,2})$/i);
+    if (mm?.[1]) {
+      const n = Number(mm[1]);
+      if (n >= 1 && n <= 12) {
+        out.set(n as MonthKey, (row as { input_deadline?: string | null }).input_deadline ?? null);
+      }
+      continue;
+    }
+    const q = raw.match(/([1-4])\s*Q/i);
+    if (q?.[1]) {
+      const qq = Number(q[1]);
+      const months =
+        qq === 1 ? [1, 2, 3] : qq === 2 ? [4, 5, 6] : qq === 3 ? [7, 8, 9] : [10, 11, 12];
+      const v = (row as { input_deadline?: string | null }).input_deadline ?? null;
+      for (const m of months) out.set(m as MonthKey, v);
+    }
+  }
+  return KPI_MONTHS.map((m) => ({ month: m, input_deadline: out.get(m) ?? null }));
 }
 
-export async function saveQuarterDeadline(input: {
-  quarter: QuarterLabel;
+export async function saveMonthDeadline(input: {
+  month: MonthKey;
   input_deadline: string | null;
 }): Promise<void> {
   const supabase = createBrowserSupabase();
+  const key = monthToHalfTypeLabel(input.month);
   const { data: updated, error: updateErr } = await supabase
     .from("system_settings")
     .update({ input_deadline: input.input_deadline })
-    .eq("quarter", input.quarter)
+    .eq("quarter", key)
     .select("quarter");
   if (updateErr) {
     throw new Error(
@@ -1598,7 +2281,7 @@ export async function saveQuarterDeadline(input: {
   }
 
   const { error } = await supabase.from("system_settings").insert({
-    quarter: input.quarter,
+    quarter: key,
     input_deadline: input.input_deadline,
   });
   if (error) throw new Error(error.message);
@@ -1703,13 +2386,13 @@ async function upsertKpiTargetsCompat(input: {
   note: string;
 }): Promise<void> {
   const supabase = createBrowserSupabase();
+  const hasH1TargetPct = await getKpiTargetsHasColumn("h1_target_pct");
+  const hasH2TargetPct = await getKpiTargetsHasColumn("h2_target_pct");
 
   const payloadCore: Record<string, unknown> = {
     h1_target: input.firstHalfTarget || null,
-    h1_rate: parsePercentOrNull(input.firstHalfRate),
     h1_effect: input.firstHalfEffect || null,
     h2_target: input.secondHalfTarget || null,
-    h2_rate: parsePercentOrNull(input.secondHalfRate),
     h2_effect: input.secondHalfEffect || null,
     challenge_goal: input.challengeTarget || null,
     remarks: input.note || null,
@@ -1717,6 +2400,18 @@ async function upsertKpiTargetsCompat(input: {
     rejection_reason: null as string | null,
     half_type: HALF_TYPE_H1,
   };
+  if (hasH1TargetPct) {
+    payloadCore.h1_target_pct = parsePercentOrNull(input.firstHalfRate);
+    payloadCore.h1_rate = null;
+  } else {
+    payloadCore.h1_rate = parsePercentOrNull(input.firstHalfRate);
+  }
+  if (hasH2TargetPct) {
+    payloadCore.h2_target_pct = parsePercentOrNull(input.secondHalfRate);
+    payloadCore.h2_rate = null;
+  } else {
+    payloadCore.h2_rate = parsePercentOrNull(input.secondHalfRate);
+  }
   const yearProbe = await supabase.from("kpi_targets").select("year").limit(1);
   const hasYearColumn = !yearProbe.error;
   if (
@@ -1735,7 +2430,8 @@ async function upsertKpiTargetsCompat(input: {
   const payload = hasYearColumn
     ? { kpi_id: input.kpiId, year: CURRENT_KPI_YEAR, ...payloadCore }
     : { kpi_id: input.kpiId, ...payloadCore };
-  const inserted = await supabase.from("kpi_targets").insert(payload);
+  const filtered = await filterPayloadToExistingKpiTargetColumns(payload);
+  const inserted = await supabase.from("kpi_targets").insert(filtered);
   if (inserted.error) throw new Error(inserted.error.message);
 }
 
@@ -1753,7 +2449,9 @@ export async function importKpisFromExcelRows(input: {
       .limit(1),
     supabase
       .from("kpi_targets")
-      .select("id, kpi_id, h1_target, h1_rate, h1_effect, h2_target, h2_rate, h2_effect, challenge_goal, remarks")
+      .select(
+        "id, kpi_id, h1_target, h1_target_pct, h1_rate, h1_effect, h2_target, h2_target_pct, h2_rate, h2_effect, challenge_goal, remarks"
+      )
       .limit(1),
   ]);
   for (const res of schemaPreflight) {

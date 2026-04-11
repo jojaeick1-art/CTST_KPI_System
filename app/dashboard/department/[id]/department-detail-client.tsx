@@ -9,7 +9,6 @@ import {
   ClipboardList,
   FileUp,
   Loader2,
-  LayoutDashboard,
   BarChart3,
   CheckCircle2,
   Settings,
@@ -22,11 +21,10 @@ import {
   canAccessApprovalsPage,
   canAccessSystemSettings,
   canBulkUploadKpiExcel,
-  canSubmitQuarterPerformance,
+  canSubmitMonthlyPerformance,
   DASHBOARD_SHOW_MAIN_SESSION_KEY,
   hrefDashboardDepartmentList,
   isAdminRole,
-  mustRestrictToAssignedDepartment,
   normalizeRole,
 } from "@/src/lib/rbac";
 import {
@@ -36,6 +34,7 @@ import {
   useImportKpisByExcelMutation,
 } from "@/src/hooks/useKpiQueries";
 import { PerformanceModal } from "./performance-modal";
+import { ChangePasswordButton } from "../../change-password-modal";
 
 type Props = { departmentId: string };
 
@@ -237,14 +236,12 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     normalizedRole === "group_leader" ||
     normalizedRole === "team_leader";
   const canExcel = canBulkUploadKpiExcel(role);
+  const isOwnDepartment =
+    Boolean(userDeptId) && userDeptId === departmentId;
   const canEditPerformance =
-    roleCanAlwaysEdit ||
-    (canSubmitQuarterPerformance(role) &&
-      (isAdmin || !userDeptId || userDeptId === departmentId));
-  const blockedWrongDept =
-    mustRestrictToAssignedDepartment(role) &&
-    Boolean(userDeptId) &&
-    userDeptId !== departmentId;
+    isAdmin ||
+    (isOwnDepartment &&
+      (roleCanAlwaysEdit || canSubmitMonthlyPerformance(role)));
 
   const dashboardListHref = hrefDashboardDepartmentList(role, userDeptId);
 
@@ -282,14 +279,19 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   return (
     <div className="flex min-h-screen flex-col bg-gradient-to-b from-sky-50/90 via-white to-white md:flex-row">
       <aside className="flex w-full flex-shrink-0 flex-col border-b border-sky-100 bg-white md:w-60 md:border-b-0 md:border-r md:border-sky-100">
-        <div className="flex items-center gap-2 border-b border-sky-100 px-4 py-4">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-sky-100 text-sky-700">
-            <LayoutDashboard className="h-5 w-5" aria-hidden />
+        <div className="flex h-[95px] items-center gap-2 border-b border-sky-100 px-4">
+          <div className="flex h-[114px] w-[120px] items-center justify-center overflow-hidden rounded-xl">
+            <img
+              src="/logo_ctst.png"
+              alt="CTST 로고"
+              className="h-full w-full object-contain"
+            />
           </div>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-sky-700/90">
-              CTST KPI
+            <p className="whitespace-nowrap text-xs font-semibold uppercase tracking-wide text-sky-700/90">
+              KPI 관리 시스템
             </p>
+            <p className="text-[11px] text-slate-500">내부 성과 관리</p>
           </div>
         </div>
         <nav className="flex flex-1 flex-col gap-0.5 p-3" aria-label="주 메뉴">
@@ -323,13 +325,16 @@ export function DepartmentDetailClient({ departmentId }: Props) {
       </aside>
 
       <main className="min-w-0 flex-1 px-4 py-6 sm:p-8">
-        <Link
-          href={dashboardListHref}
-          className="mb-6 inline-flex items-center gap-1.5 text-sm font-medium text-sky-700 hover:text-sky-800"
-        >
-          <ArrowLeft className="h-4 w-4" aria-hidden />
-          대시보드로
-        </Link>
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+          <Link
+            href={dashboardListHref}
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-sky-700 hover:text-sky-800"
+          >
+            <ArrowLeft className="h-4 w-4" aria-hidden />
+            대시보드로
+          </Link>
+          <ChangePasswordButton profileUsername={profile.username} />
+        </div>
 
         {detailQuery.isPending ? (
           <div className="flex justify-center py-16">
@@ -341,27 +346,13 @@ export function DepartmentDetailClient({ departmentId }: Props) {
           </div>
         ) : !detailQuery.data?.department ? (
           <p className="text-slate-600">해당 부서를 찾을 수 없습니다.</p>
-        ) : blockedWrongDept ? (
-          <div className="rounded-xl border border-amber-200 bg-amber-50/90 px-4 py-5 text-sm text-amber-950">
-            <p className="font-medium">이 부서는 귀하의 소속 팀과 다릅니다.</p>
-            <p className="mt-2 text-amber-900/90">
-              대표·관리자를 제외한 계정은 본인 소속 부서(dept_id) KPI만 이용할 수 있습니다.
-            </p>
-            {userDeptId ? (
-              <Link
-                href={`/dashboard/department/${userDeptId}`}
-                className="mt-3 inline-block font-medium text-sky-800 underline-offset-2 hover:underline"
-              >
-                내 부서 KPI로 이동
-              </Link>
-            ) : (
-              <p className="mt-2 text-xs text-amber-800/90">
-                profiles.dept_id 가 비어 있으면 관리자에게 소속 부서 연결을 요청해 주세요.
-              </p>
-            )}
-          </div>
         ) : (
           <>
+            {!isOwnDepartment ? (
+              <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-900">
+                타 부서 KPI는 조회만 가능합니다. 실적 등록·수정은 본인 소속 부서에서만 가능합니다.
+              </div>
+            ) : null}
             <header className="mb-8">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
@@ -379,7 +370,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                   <div className="mt-3 inline-flex items-center gap-2 rounded-xl border border-sky-100 bg-white px-3 py-2 shadow-sm shadow-sky-100/50">
                     <Target className="h-4 w-4 text-sky-600" aria-hidden />
                     <p className="text-sm font-medium text-slate-700">
-                      전체 평균 진척률{" "}
+                      전체 평균 달성률{" "}
                       <span className="text-xs font-normal text-slate-500">
                         (승인된 실적만)
                       </span>
@@ -458,7 +449,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                           상/하반기 목표 요약
                         </th>
                         <th className="px-4 py-3 text-left font-semibold">
-                          진척률
+                          달성률
                           <span className="ml-1 font-normal text-slate-400">
                             (승인)
                           </span>

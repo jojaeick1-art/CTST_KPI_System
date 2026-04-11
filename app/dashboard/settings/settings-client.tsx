@@ -18,7 +18,8 @@ import {
   Users,
 } from "lucide-react";
 import { createBrowserSupabase } from "@/src/lib/supabase";
-import { KPI_QUARTERS, type QuarterLabel } from "@/src/lib/kpi-queries";
+import { ChangePasswordButton } from "../change-password-modal";
+import { KPI_MONTHS, type MonthKey } from "@/src/lib/kpi-queries";
 import {
   canAccessApprovalsPage,
   canAccessSystemSettings,
@@ -30,15 +31,18 @@ import {
   useDashboardProfile,
   useDeleteDepartmentMutation,
   useDepartmentsForManagement,
-  useQuarterDeadlines,
+  useMonthDeadlines,
   useRenameDepartmentMutation,
-  useSaveQuarterDeadlineMutation,
+  useSaveMonthDeadlineMutation,
 } from "@/src/hooks/useKpiQueries";
 
 function displayNameFromSession(
+  profileFullName: string | null | undefined,
   username: string,
   userMetadata: Record<string, unknown> | undefined
 ): string {
+  const profileName = typeof profileFullName === "string" ? profileFullName.trim() : "";
+  if (profileName) return profileName;
   const full =
     typeof userMetadata?.full_name === "string"
       ? userMetadata.full_name
@@ -64,14 +68,14 @@ export function SettingsClient() {
   const deptQuery = useDepartmentsForManagement(
     profileQuery.isSuccess && profileQuery.data !== null && isAdmin
   );
-  const deadlineQuery = useQuarterDeadlines(
+  const deadlineQuery = useMonthDeadlines(
     profileQuery.isSuccess && profileQuery.data !== null && isAdmin
   );
 
   const createDeptMut = useCreateDepartmentMutation();
   const renameDeptMut = useRenameDepartmentMutation();
   const deleteDeptMut = useDeleteDepartmentMutation();
-  const saveDeadlineMut = useSaveQuarterDeadlineMutation();
+  const saveDeadlineMut = useSaveMonthDeadlineMutation();
   const clearAllDataMut = useClearAllKpiDataMutation();
 
   const [newDeptName, setNewDeptName] = useState("");
@@ -96,9 +100,9 @@ export function SettingsClient() {
   useEffect(() => {
     if (!deadlineQuery.data) return;
     const next: Record<string, string> = {};
-    for (const q of KPI_QUARTERS) next[q] = "";
+    for (const m of KPI_MONTHS) next[`M${m}`] = "";
     for (const row of deadlineQuery.data) {
-      next[row.quarter] = row.input_deadline ?? "";
+      next[`M${row.month}`] = row.input_deadline ?? "";
     }
     setDeadlineDrafts(next);
   }, [deadlineQuery.data]);
@@ -150,11 +154,12 @@ export function SettingsClient() {
     }
   }
 
-  async function handleSaveDeadline(quarter: QuarterLabel) {
+  async function handleSaveDeadline(month: MonthKey) {
     try {
-      const value = deadlineDrafts[quarter]?.trim() ?? "";
+      const key = `M${month}`;
+      const value = deadlineDrafts[key]?.trim() ?? "";
       await saveDeadlineMut.mutateAsync({
-        quarter,
+        month,
         input_deadline: value || null,
       });
     } catch (e) {
@@ -216,6 +221,7 @@ export function SettingsClient() {
   const displayName = useMemo(() => {
     if (!ctx) return "";
     return displayNameFromSession(
+      ctx.profile.full_name,
       ctx.profile.username,
       ctx.session.user.user_metadata as Record<string, unknown> | undefined
     );
@@ -235,15 +241,19 @@ export function SettingsClient() {
   return (
     <div className="flex min-h-screen flex-col bg-gradient-to-b from-sky-50/90 via-white to-white md:flex-row">
       <aside className="flex w-full flex-shrink-0 flex-col border-b border-sky-100 bg-white md:w-60 md:border-b-0 md:border-r md:border-sky-100">
-        <div className="flex items-center gap-2 border-b border-sky-100 px-4 py-4">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-sky-100 text-sky-700">
-            <Settings className="h-5 w-5" aria-hidden />
+        <div className="flex h-[95px] items-center gap-2 border-b border-sky-100 px-4">
+          <div className="flex h-[114px] w-[120px] items-center justify-center overflow-hidden rounded-xl">
+            <img
+              src="/logo_ctst.png"
+              alt="CTST 로고"
+              className="h-full w-full object-contain"
+            />
           </div>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-sky-700/90">
-              CTST KPI
+            <p className="whitespace-nowrap text-xs font-semibold uppercase tracking-wide text-sky-700/90">
+              KPI 관리 시스템
             </p>
-            <p className="text-[11px] text-slate-500">시스템 관리</p>
+            <p className="text-[11px] text-slate-500">내부 성과 관리</p>
           </div>
         </div>
         <nav className="flex flex-1 flex-col gap-0.5 p-3" aria-label="주 메뉴">
@@ -284,9 +294,11 @@ export function SettingsClient() {
                 시스템 설정
               </h1>
               <p className="mt-0.5 text-sm text-slate-500">
-                부서 관리, 분기 입력 마감일, 권한 정보를 관리합니다
+                부서 관리, 월별 입력 마감일, 권한 정보를 관리합니다
               </p>
             </div>
+            <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:gap-3">
+              <ChangePasswordButton profileUsername={ctx.profile.username} />
             <div className="flex items-center gap-3 rounded-xl border border-sky-100 bg-white px-4 py-2.5 shadow-sm shadow-sky-100/50">
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-100 text-sky-700">
                 <User className="h-5 w-5" aria-hidden />
@@ -303,6 +315,7 @@ export function SettingsClient() {
                   </span>
                 </div>
               </div>
+            </div>
             </div>
           </div>
         </header>
@@ -420,7 +433,7 @@ export function SettingsClient() {
           <section className="rounded-2xl border border-sky-100 bg-white p-4 shadow-sm shadow-sky-100/40">
             <h2 className="mb-3 flex items-center gap-2 text-base font-semibold text-slate-800">
               <Save className="h-4 w-4 text-sky-600" />
-              분기별 입력 마감 설정
+              월별 입력 마감 설정
             </h2>
             {deadlineQuery.isError ? (
               <p className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
@@ -430,24 +443,24 @@ export function SettingsClient() {
               </p>
             ) : (
               <div className="space-y-2">
-                {KPI_QUARTERS.map((q) => (
+                {KPI_MONTHS.map((m) => (
                   <div
-                    key={q}
+                    key={m}
                     className="flex items-center justify-between rounded-lg border border-sky-100 bg-sky-50/40 px-3 py-2"
                   >
-                    <span className="w-24 text-sm font-medium text-slate-700">{q}</span>
+                    <span className="w-24 text-sm font-medium text-slate-700">{m}월</span>
                     <input
                       type="date"
-                      value={deadlineDrafts[q] ?? ""}
+                      value={deadlineDrafts[`M${m}`] ?? ""}
                       onChange={(e) =>
-                        setDeadlineDrafts((prev) => ({ ...prev, [q]: e.target.value }))
+                        setDeadlineDrafts((prev) => ({ ...prev, [`M${m}`]: e.target.value }))
                       }
                       className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-[#1a1a1a] outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200"
                     />
                     <button
                       type="button"
                       disabled={saveDeadlineMut.isPending}
-                      onClick={() => void handleSaveDeadline(q)}
+                      onClick={() => void handleSaveDeadline(m)}
                       className="inline-flex items-center gap-1 rounded-md bg-sky-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-60"
                     >
                       {saveDeadlineMut.isPending ? (
