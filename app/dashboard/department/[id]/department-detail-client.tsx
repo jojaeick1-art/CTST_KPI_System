@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -68,6 +68,22 @@ function indicatorModeShortLabel(t: KpiIndicatorType): string {
   if (t === "ppm") return "PPM";
   if (t === "quantity") return "수량(k)";
   return "건수";
+}
+
+/** "상반기 … / 하반기 …" 형태면 슬래시 기준으로 두 줄 표시 */
+function halfYearSummaryTwoLines(text: string | null | undefined): ReactNode {
+  const raw = (text ?? "").trim();
+  if (!raw) return <span className="text-slate-400">—</span>;
+  const m = raw.match(/^(.+?)\s*\/\s*(하반기[\s\S]*)$/);
+  if (m?.[1]?.trim() && m?.[2]?.trim()) {
+    return (
+      <span className="inline-block min-w-0 max-w-full text-left align-top">
+        <span className="block break-words leading-snug">{m[1].trim()}</span>
+        <span className="mt-0.5 block break-words leading-snug">{m[2].trim()}</span>
+      </span>
+    );
+  }
+  return <span className="break-words leading-snug">{raw}</span>;
 }
 
 export function DepartmentDetailClient({ departmentId }: Props) {
@@ -550,37 +566,47 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                   </p>
                 ) : null}
                 <div className="overflow-x-auto">
-                  <table className="min-w-[1300px] w-full border-collapse text-sm">
+                  <table className="min-w-[1500px] w-full border-collapse text-sm">
                     <thead className="bg-sky-50/80 text-slate-700">
                       <tr>
-                        <th className="px-4 py-3 text-left font-semibold">메인주제</th>
-                        <th className="px-4 py-3 text-left font-semibold">서브주제</th>
-                        <th className="px-4 py-3 text-left font-semibold">B/M</th>
-                        <th className="px-4 py-3 text-left font-semibold">가중치</th>
-                        <th className="px-4 py-3 text-left font-semibold">담당자</th>
-                        <th className="px-4 py-3 text-left font-semibold">
-                          상/하반기 목표 요약
+                        <th className="min-w-[14.5rem] whitespace-nowrap px-4 py-3 text-left font-semibold">
+                          메인주제
                         </th>
-                        <th className="px-4 py-3 text-left font-semibold">
+                        <th className="min-w-[13rem] whitespace-nowrap px-4 py-3 text-left font-semibold">
+                          서브주제
+                        </th>
+                        <th className="min-w-[3.5rem] whitespace-nowrap px-4 py-3 text-left font-semibold">
+                          B/M
+                        </th>
+                        <th className="min-w-[4.5rem] whitespace-nowrap px-4 py-3 text-left font-semibold">
+                          가중치
+                        </th>
+                        <th className="min-w-[5.5rem] whitespace-nowrap px-4 py-3 text-left font-semibold">
+                          담당자
+                        </th>
+                        <th className="w-[10.5rem] min-w-[10.5rem] max-w-[10.5rem] whitespace-nowrap px-3 py-3 text-left font-semibold">
+                          목표 요약
+                        </th>
+                        <th className="min-w-[7rem] whitespace-nowrap px-4 py-3 text-left font-semibold">
                           달성률
-                          <span className="ml-1 font-normal text-slate-400">
-                            (승인)
-                          </span>
+                          <span className="ml-1 font-normal text-slate-400">(승인)</span>
                         </th>
-                        <th className="px-4 py-3 text-left font-semibold">현재 상태</th>
+                        <th className="min-w-[6.5rem] whitespace-nowrap px-4 py-3 text-left font-semibold">
+                          현재 상태
+                        </th>
                         <th
-                          className="w-[8.5rem] min-w-[8.5rem] px-4 py-3 text-left font-semibold"
+                          className="w-[8.5rem] min-w-[8.5rem] whitespace-nowrap px-4 py-3 text-left font-semibold"
                           title="일반: 달성률 % 직접 입력. PPM·수량(k)·건수: 실적 수치 입력 후 달성률 계산. 수량(k)은 천 단위(k)로 입력합니다."
                         >
                           실적 방식
                         </th>
                         <th
-                          className="w-[11.5rem] min-w-[11.5rem] px-4 py-3 text-left font-semibold"
+                          className="w-[9rem] min-w-[9rem] max-w-[9rem] whitespace-nowrap px-3 py-3 text-left font-semibold"
                           title="PPM·수량(k)·건수일 때 목표값. 수량(k) 목표도 k(천) 단위 숫자입니다."
                         >
                           목표
                         </th>
-                        <th className="py-3 pl-2.5 pr-4 text-left font-semibold">
+                        <th className="min-w-[9.5rem] whitespace-nowrap py-3 pl-2.5 pr-4 text-left font-semibold">
                           관리
                         </th>
                       </tr>
@@ -591,7 +617,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                         return (
                           <tr
                             key={item.id}
-                            className={`h-[4.25rem] min-h-[4.25rem] border-t border-sky-50 text-slate-700 transition hover:bg-sky-50/50 ${
+                            className={`min-h-[4.25rem] border-t border-sky-50 text-slate-700 transition hover:bg-sky-50/50 ${
                               item.hasRejectionNotice
                                 ? "bg-red-50/50 ring-1 ring-inset ring-red-300"
                                 : ""
@@ -646,18 +672,27 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                             <td className="align-middle px-4 py-2">{item.bm}</td>
                             <td className="align-middle px-4 py-2">{item.weight}</td>
                             <td className="align-middle px-4 py-2">{item.owner}</td>
-                            <td className="align-middle px-4 py-2 text-xs leading-5 text-slate-600">
-                              {item.halfYearSummary}
+                            <td className="align-top w-[10.5rem] max-w-[10.5rem] px-3 py-2 text-xs leading-5 text-slate-600">
+                              {halfYearSummaryTwoLines(item.halfYearSummary)}
                             </td>
                             <td className="align-middle px-4 py-2">
-                              <span className="inline-flex rounded-full bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-700 ring-1 ring-sky-100">
-                                {has
-                                  ? formatKoPercentMax2(item.averageAchievement ?? 0)
-                                  : "0% · 데이터 없음"}
+                              <span className="inline-flex flex-col items-start gap-0.5 rounded-full bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700 ring-1 ring-sky-100">
+                                {has ? (
+                                  <span className="tabular-nums leading-tight">
+                                    {formatKoPercentMax2(item.averageAchievement ?? 0)}
+                                  </span>
+                                ) : (
+                                  <>
+                                    <span className="leading-none tabular-nums">0%</span>
+                                    <span className="text-[10px] font-medium leading-tight text-sky-700/90">
+                                      데이터 없음
+                                    </span>
+                                  </>
+                                )}
                               </span>
                             </td>
                             <td className="align-middle px-4 py-2">
-                              <span className="inline-flex rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs font-medium text-slate-700">
+                              <span className="inline-flex whitespace-nowrap rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700">
                                 {approvalStepLabel(item.currentApprovalStep)}
                               </span>
                             </td>
@@ -692,10 +727,10 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                                 </span>
                               )}
                             </td>
-                            <td className="align-middle px-4 py-2">
+                            <td className="align-middle w-[9rem] max-w-[9rem] px-3 py-2">
                               {canConfigureIndicator ? (
                                 pendingIndicator?.kpiId === item.id ? (
-                                  <div className="flex flex-wrap items-center gap-1.5">
+                                  <div className="flex flex-nowrap items-center justify-start gap-1.5">
                                     <input
                                       type="number"
                                       min={0}
@@ -705,14 +740,14 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                                       onChange={(e) =>
                                         setPendingTargetInput(e.target.value)
                                       }
-                                      className="h-8 w-[6.5rem] min-w-0 rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+                                      className="h-8 w-[4.25rem] shrink-0 rounded border border-slate-300 bg-white px-1.5 text-xs text-slate-900 outline-none focus:border-sky-500"
                                       placeholder="목표"
                                     />
                                     <button
                                       type="button"
                                       disabled={updateIndicatorMutation.isPending}
                                       onClick={() => void applyPendingIndicatorTarget()}
-                                      className="h-8 shrink-0 rounded bg-sky-600 px-2 text-[11px] font-semibold text-white hover:bg-sky-700 disabled:opacity-60"
+                                      className="h-8 shrink-0 whitespace-nowrap rounded bg-sky-600 px-1.5 text-[11px] font-semibold text-white hover:bg-sky-700 disabled:opacity-60"
                                     >
                                       적용
                                     </button>
