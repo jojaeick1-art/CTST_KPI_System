@@ -109,6 +109,15 @@ export function canBulkUploadKpiExcel(role: string | null | undefined): boolean 
   return n === "admin" || n === "group_leader";
 }
 
+/**
+ * KPI 항목 실적 방식(% / PPM / 수량(k) / 건수) 드롭다운 편집
+ * — 관리자·그룹장·팀장 (소속 부서 화면은 호출부에서 제한, RLS는 Supabase).
+ */
+export function canConfigureKpiIndicatorType(role: string | null | undefined): boolean {
+  const n = normalizeRole(role);
+  return n === "admin" || n === "group_leader" || n === "team_leader";
+}
+
 /** 월별 실적 제출(저장) — 그룹장·수석~프로·관리자 (팀장·대표 제외) */
 export function canSubmitMonthlyPerformance(role: string | null | undefined): boolean {
   const n = normalizeRole(role);

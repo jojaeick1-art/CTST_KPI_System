@@ -196,6 +196,67 @@ function clampPercent100(n: number): number {
   return Math.min(100, Math.max(0, n));
 }
 
+/**
+ * 역지표(PPM) 달성률(%): Max(0, (2 - 실적PPM/목표PPM) * 100).
+ * 상한은 두지 않음(목표 대비 실적이 매우 낮으면 100% 초과 가능).
+ */
+export function reversePpmAchievementPercent(
+  actualPpm: number,
+  targetPpm: number
+): number {
+  if (
+    !Number.isFinite(actualPpm) ||
+    !Number.isFinite(targetPpm) ||
+    targetPpm <= 0
+  ) {
+    return 0;
+  }
+  return Math.max(0, (2 - actualPpm / targetPpm) * 100);
+}
+
+/** DB·UI 공통 — `kpi_items.indicator_type` */
+export type KpiIndicatorType = "normal" | "ppm" | "quantity" | "count";
+
+export function indicatorUsesComputedAchievement(
+  t: KpiIndicatorType
+): t is "ppm" | "quantity" | "count" {
+  return t !== "normal";
+}
+
+/**
+ * 수량(k)·건수: 목표 대비 실적 (실적/목표×100), 0~100%로 표시.
+ * 실적이 목표를 넘으면 100%로 캡.
+ */
+export function quantityCountAchievementPercent(
+  actual: number,
+  target: number
+): number {
+  if (!Number.isFinite(actual) || !Number.isFinite(target) || target <= 0) {
+    return 0;
+  }
+  return clampPercent100((actual / target) * 100);
+}
+
+export function computedAchievementPercent(
+  indicator: KpiIndicatorType,
+  actual: number,
+  target: number
+): number {
+  if (indicator === "ppm") return reversePpmAchievementPercent(actual, target);
+  if (indicator === "quantity" || indicator === "count") {
+    return quantityCountAchievementPercent(actual, target);
+  }
+  return clampPercent100(actual);
+}
+
+function parseKpiIndicatorTypeFromDb(raw: unknown): KpiIndicatorType {
+  const s = String(raw ?? "").trim().toLowerCase();
+  if (s === "ppm" || s === "reverse" || s === "역지표") return "ppm";
+  if (s === "quantity" || s === "수량" || s === "qty") return "quantity";
+  if (s === "count" || s === "건수" || s === "cnt") return "count";
+  return "normal";
+}
+
 function pctRoughlyEqual(a: number, b: number): boolean {
   return Math.abs(a - b) < 0.0001;
 }
@@ -232,6 +293,8 @@ function halfYearAchievementPercentFromTarget(
 
 type PerformanceMonthlyCell = {
   achievement_rate?: number | string | null;
+  /** 역지표(PPM) 월별 실적 PPM */
+  actual_value?: number | string | null;
   approval_step?: string | null;
   remarks?: string | null;
   evidence_url?: string | null;
@@ -247,25 +310,31 @@ function performanceMonthlyIsNonEmpty(raw: unknown): boolean {
   );
 }
 
-/** `performance_monthly` 안 월별 승인(approved) 달성률만 집계 */
-function pushApprovedMonthlyAchievements(
+/**
+ * `performance_monthly`: 달성률이 저장된 월 중 **번호가 가장 큰 월** 1건만 집계
+ * (예: 5월·6월 모두 입력되면 6월 값이 목록·부서 평균에 반영).
+ */
+function pushLatestMonthlyAchievement(
   t: Record<string, unknown>,
   list: number[]
 ): void {
   const raw = t.performance_monthly;
   if (!performanceMonthlyIsNonEmpty(raw)) return;
   const o = raw as Record<string, unknown>;
+  let lastMonth = 0;
+  let lastRate: number | null = null;
   for (let mi = 1; mi <= 12; mi += 1) {
     const cell = o[String(mi)];
     if (!cell || typeof cell !== "object" || Array.isArray(cell)) continue;
     const rec = cell as PerformanceMonthlyCell;
-    const step =
-      typeof rec.approval_step === "string"
-        ? rec.approval_step.trim().toLowerCase()
-        : "";
-    if (step !== PERF_STATUS_APPROVED) continue;
     const rate = toNum(rec.achievement_rate as number | string | null | undefined);
-    if (rate !== null) list.push(clampPercent100(rate));
+    if (rate !== null) {
+      lastMonth = mi;
+      lastRate = rate;
+    }
+  }
+  if (lastMonth > 0 && lastRate !== null) {
+    list.push(lastRate);
   }
 }
 
@@ -333,7 +402,7 @@ function collectApprovedAchievementRatesForItemTargets(
     performanceMonthlyIsNonEmpty(t.performance_monthly)
   );
   if (primaryMonthly) {
-    pushApprovedMonthlyAchievements(primaryMonthly, rates);
+    pushLatestMonthlyAchievement(primaryMonthly, rates);
     return rates;
   }
   for (const t of targets) {
@@ -344,8 +413,8 @@ function collectApprovedAchievementRatesForItemTargets(
 
 /**
  * 목록·집계에서 KPI 항목 1건의 대표 달성률.
- * 1Q~4Q 등 승인 실적이 여러 개면 산술 평균이 아니라 **최고값**을 사용해
- * 연말 최종 달성(예: 4Q 100%)이 목록에 반영되도록 함.
+ * - 월별 JSON(`performance_monthly`)이면 호출 전에 **가장 늦은 입력 월 1개**만 넣음.
+ * - 레거시 분기·반기는 여러 값이면 **최고값** 유지.
  */
 function representativeAchievementPercentForRates(
   rates: number[]
@@ -485,7 +554,11 @@ export type DepartmentKpiDetailItem = {
   h1TargetDate: string | null;
   h2TargetDate: string | null;
   scheduleRaw: string | null;
-  /** 분기별 승인 실적 중 최고 달성률(목록 표시용). 없으면 null */
+  /** 일반(%) / PPM / 수량 / 건수 */
+  indicatorType: KpiIndicatorType;
+  /** ppm·quantity·count일 때 목표값 (`kpi_items.target_value`) */
+  targetPpm: number | null;
+  /** 목록·부서 평균용 대표 달성률. 월별 입력 시 가장 늦은 월 기준. 없으면 null */
   averageAchievement: number | null;
   targetCount: number;
   /** 반려 사유가 남아 있으면 true — 목록에서 강조 표시 */
@@ -797,6 +870,8 @@ export async function fetchDepartmentKpiDetail(
       typeof item.id === "string" && item.id.length > 0
         ? item.id.slice(0, 8)
         : "unknown";
+    const indicatorType = parseKpiIndicatorTypeFromDb(item.indicator_type);
+    const targetPpm = pickNumber(item, ["target_value", "target_ppm"]);
     return {
       id: typeof item.id === "string" ? item.id : `kpi-${itemIdText}`,
       mainTopic: pickText(item, ["main_topic", "topic_main"]),
@@ -820,6 +895,8 @@ export async function fetchDepartmentKpiDetail(
       h1TargetDate,
       h2TargetDate,
       scheduleRaw,
+      indicatorType,
+      targetPpm,
       averageAchievement,
       targetCount: targets.length,
       hasRejectionNotice: targetsHaveRejectionReason(targets),
@@ -932,6 +1009,8 @@ export type ItemPerformanceRow = {
   id: string;
   half_type: string;
   achievement_rate: number | null;
+  /** ppm·수량·건수 등: 월별 실적 원값 (`performance_monthly.*.actual_value`) */
+  actual_value: number | null;
   approval_step: string | null;
   evidence_path: string | null;
   evidence_url: string | null;
@@ -1131,6 +1210,7 @@ function mapTargetRecordToItemPerformanceRow(
     id,
     half_type: ht,
     achievement_rate: halfYearAchievementPercentFromTarget(t, canonical),
+    actual_value: null,
     approval_step:
       typeof t.approval_step === "string" ? t.approval_step : null,
     evidence_path:
@@ -1169,6 +1249,7 @@ async function buildItemPerformanceRowsFromKpiTargets(
         achievement_rate: isLegacyQuarterAnchorMonth(m)
           ? quarterAchievementPercentFromTarget(t0, q)
           : null,
+        actual_value: null,
       };
     });
   }
@@ -1204,11 +1285,17 @@ async function buildItemPerformanceRowsFromKpiTargets(
         rateRaw !== null && rateRaw !== undefined
           ? toNum(rateRaw as number | string)
           : null;
+      const avRaw = cell?.actual_value;
+      const actualVal =
+        avRaw !== null && avRaw !== undefined
+          ? toNum(avRaw as number | string)
+          : null;
       const ev = cell?.evidence_url;
       return {
         id,
         half_type: monthToHalfTypeLabel(m),
         achievement_rate: rate,
+        actual_value: actualVal,
         approval_step: typeof st === "string" ? st : null,
         evidence_path:
           typeof ev === "string" && ev.trim() ? ev.trim() : null,
@@ -1246,6 +1333,7 @@ async function buildItemPerformanceRowsFromKpiTargets(
       achievement_rate: isLegacyQuarterAnchorMonth(m)
         ? quarterAchievementPercentFromTarget(src, q)
         : null,
+      actual_value: null,
       approval_step:
         typeof src.approval_step === "string" ? src.approval_step : null,
       evidence_path:
@@ -1555,6 +1643,12 @@ export async function upsertMonthPerformance(
     achievement_rate: number;
     description: string;
     evidenceUrl?: string | null;
+    /**
+     * `normal`: 달성률만. 그 외: 공식으로 산출한 달성률 + `actual_value`에 실적 원값.
+     * ppm은 달성률 상한 없음(0 이상), quantity·count는 0~100.
+     */
+    indicatorMode?: KpiIndicatorType;
+    actualValue?: number | null;
   },
   options?: {
     adminBypassApprovalLock?: boolean;
@@ -1625,7 +1719,11 @@ export async function upsertMonthPerformance(
     }
   }
 
-  const r = clampPercent100(input.achievement_rate);
+  const mode: KpiIndicatorType = input.indicatorMode ?? "normal";
+  const r =
+    mode === "ppm"
+      ? Math.max(0, input.achievement_rate)
+      : clampPercent100(input.achievement_rate);
   const nextCell: PerformanceMonthlyCell = {
     ...prevCell,
     achievement_rate: r,
@@ -1633,6 +1731,17 @@ export async function upsertMonthPerformance(
     rejection_reason: null,
     remarks: input.description.trim() || null,
   };
+  if (indicatorUsesComputedAchievement(mode)) {
+    if (
+      input.actualValue !== null &&
+      input.actualValue !== undefined &&
+      Number.isFinite(input.actualValue)
+    ) {
+      nextCell.actual_value = input.actualValue;
+    }
+  } else {
+    delete nextCell.actual_value;
+  }
   if (input.evidenceUrl !== undefined) {
     nextCell.evidence_url = input.evidenceUrl;
   }
@@ -2208,6 +2317,44 @@ export async function removeKpiItemCascade(kpiItemId: string): Promise<void> {
   }
 }
 
+/** 그룹장·관리자 UI: 항목별 실적 방식 및 목표값(`target_value`) */
+export async function updateKpiItemIndicatorSettings(input: {
+  kpiItemId: string;
+  indicatorType: KpiIndicatorType;
+  targetPpm: number | null;
+}): Promise<void> {
+  const supabase = createBrowserSupabase();
+  const id = input.kpiItemId.trim();
+  if (!id) throw new Error("KPI 항목 ID가 없습니다.");
+  if (input.indicatorType === "normal") {
+    const { error } = await supabase
+      .from("kpi_items")
+      .update({ indicator_type: "normal", target_value: null })
+      .eq("id", id);
+    if (error) {
+      throw new Error(
+        `${error.message} (kpi_items.indicator_type / target_value 컬럼·RLS를 확인해 주세요.)`
+      );
+    }
+    return;
+  }
+  const t = input.targetPpm;
+  if (t === null || !Number.isFinite(t) || t <= 0) {
+    throw new Error(
+      "PPM·수량(k)·건수 방식은 목표값을 0보다 큰 숫자로 입력해 주세요. 수량(k)은 k(천) 단위입니다."
+    );
+  }
+  const { error } = await supabase
+    .from("kpi_items")
+    .update({ indicator_type: input.indicatorType, target_value: t })
+    .eq("id", id);
+  if (error) {
+    throw new Error(
+      `${error.message} (kpi_items.indicator_type / target_value 컬럼·RLS를 확인해 주세요.)`
+    );
+  }
+}
+
 export async function clearAllKpiData(): Promise<void> {
   const supabase = createBrowserSupabase();
   const { error: targetErr } = await supabase.from("kpi_targets").delete().not("id", "is", null);
@@ -2338,7 +2485,7 @@ async function upsertKpiItemCompat(input: {
   const existingId = input.existingByComposite.get(compositeKey) ?? null;
   const safeWeight = parseWeightOrZero(input.weight);
 
-  const payload = {
+  const basePayload = {
     dept_id: input.deptId,
     main_topic: input.mainTopic,
     sub_topic: input.subTopic,
@@ -2351,7 +2498,7 @@ async function upsertKpiItemCompat(input: {
   if (existingId) {
     const updated = await supabase
       .from("kpi_items")
-      .update(payload)
+      .update(basePayload)
       .eq("id", existingId)
       .select("id")
       .single();
@@ -2363,7 +2510,11 @@ async function upsertKpiItemCompat(input: {
 
   const inserted = await supabase
     .from("kpi_items")
-    .insert(payload)
+    .insert({
+      ...basePayload,
+      indicator_type: "normal",
+      target_value: null as number | null,
+    })
     .select("id")
     .single();
   if (inserted.error || !inserted.data?.id) {

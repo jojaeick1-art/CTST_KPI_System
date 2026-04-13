@@ -16,11 +16,22 @@ import {
   Target,
 } from "lucide-react";
 import { createBrowserSupabase } from "@/src/lib/supabase";
-import { CURRENT_KPI_YEAR } from "@/src/lib/kpi-queries";
+import {
+  CURRENT_KPI_YEAR,
+  indicatorUsesComputedAchievement,
+  type DepartmentKpiDetailItem,
+  type KpiIndicatorType,
+} from "@/src/lib/kpi-queries";
+import {
+  formatKoMax2Decimals,
+  formatKoPercentMax2,
+  roundToMax2DecimalPlaces,
+} from "@/src/lib/format-display-number";
 import {
   canAccessApprovalsPage,
   canAccessSystemSettings,
   canBulkUploadKpiExcel,
+  canConfigureKpiIndicatorType,
   canSubmitMonthlyPerformance,
   DASHBOARD_SHOW_MAIN_SESSION_KEY,
   hrefDashboardDepartmentList,
@@ -32,11 +43,32 @@ import {
   useDeleteKpiItemMutation,
   useDepartmentKpiDetail,
   useImportKpisByExcelMutation,
+  useUpdateKpiItemIndicatorMutation,
 } from "@/src/hooks/useKpiQueries";
 import { PerformanceModal } from "./performance-modal";
 import { ChangePasswordButton } from "../../change-password-modal";
 
 type Props = { departmentId: string };
+
+function indicatorBadgeClass(t: KpiIndicatorType): string {
+  switch (t) {
+    case "ppm":
+      return "bg-violet-50 text-violet-800 ring-violet-200";
+    case "quantity":
+      return "bg-emerald-50 text-emerald-800 ring-emerald-200";
+    case "count":
+      return "bg-amber-50 text-amber-900 ring-amber-200";
+    default:
+      return "bg-slate-50 text-slate-700 ring-slate-200";
+  }
+}
+
+function indicatorModeShortLabel(t: KpiIndicatorType): string {
+  if (t === "normal") return "일반 (%)";
+  if (t === "ppm") return "PPM";
+  if (t === "quantity") return "수량(k)";
+  return "건수";
+}
 
 export function DepartmentDetailClient({ departmentId }: Props) {
   const router = useRouter();
@@ -45,6 +77,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   const detailQuery = useDepartmentKpiDetail(departmentId);
   const importMutation = useImportKpisByExcelMutation();
   const deleteKpiItemMutation = useDeleteKpiItemMutation();
+  const updateIndicatorMutation = useUpdateKpiItemIndicatorMutation();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [selectedKpi, setSelectedKpi] = useState<{
     id: string;
@@ -63,9 +96,17 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     h1TargetDate: string | null;
     h2TargetDate: string | null;
     scheduleRaw: string | null;
+    indicatorType: KpiIndicatorType;
+    targetPpm: number | null;
   } | null>(null);
   const [modalMode, setModalMode] = useState<"viewer" | "editor">("viewer");
   const [exportingExcel, setExportingExcel] = useState(false);
+  /** 목표값이 없는 상태에서 PPM·수량(k)·건수로 바꿀 때만 표시 */
+  const [pendingIndicator, setPendingIndicator] = useState<{
+    kpiId: string;
+    indicatorType: KpiIndicatorType;
+  } | null>(null);
+  const [pendingTargetInput, setPendingTargetInput] = useState("");
 
   function approvalStepLabel(step: string | null | undefined): string {
     const s = (step ?? "").trim().toLowerCase();
@@ -194,7 +235,9 @@ export function DepartmentDetailClient({ departmentId }: Props) {
         "상반기 목표(%)": item.firstHalfTarget ?? item.firstHalfRate ?? "",
         "하반기 목표(%)": item.secondHalfTarget ?? item.secondHalfRate ?? "",
         "현재 실적(승인 기준, %)":
-          item.averageAchievement === null ? "" : Math.round(item.averageAchievement),
+          item.averageAchievement === null
+            ? ""
+            : roundToMax2DecimalPlaces(item.averageAchievement),
         "현재 상태": approvalStepLabel(item.currentApprovalStep),
       }));
       const ws = mod.utils.json_to_sheet(rows);
@@ -238,12 +281,68 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   const canExcel = canBulkUploadKpiExcel(role);
   const isOwnDepartment =
     Boolean(userDeptId) && userDeptId === departmentId;
+  const canConfigureIndicator =
+    canConfigureKpiIndicatorType(role) && (isAdmin || isOwnDepartment);
   const canEditPerformance =
     isAdmin ||
     (isOwnDepartment &&
       (roleCanAlwaysEdit || canSubmitMonthlyPerformance(role)));
 
   const dashboardListHref = hrefDashboardDepartmentList(role, userDeptId);
+
+  async function handleIndicatorTypeSelect(
+    item: DepartmentKpiDetailItem,
+    nextType: KpiIndicatorType
+  ) {
+    setPendingIndicator(null);
+    setPendingTargetInput("");
+    try {
+      if (nextType === "normal") {
+        await updateIndicatorMutation.mutateAsync({
+          kpiItemId: item.id,
+          indicatorType: "normal",
+          targetPpm: null,
+        });
+        await detailQuery.refetch();
+        return;
+      }
+      const t = item.targetPpm;
+      if (t !== null && t !== undefined && t > 0) {
+        await updateIndicatorMutation.mutateAsync({
+          kpiItemId: item.id,
+          indicatorType: nextType,
+          targetPpm: t,
+        });
+        await detailQuery.refetch();
+        return;
+      }
+      setPendingIndicator({ kpiId: item.id, indicatorType: nextType });
+      setPendingTargetInput("");
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "실적 방식 저장에 실패했습니다.");
+    }
+  }
+
+  async function applyPendingIndicatorTarget() {
+    if (!pendingIndicator) return;
+    const n = Number(String(pendingTargetInput).trim().replace(",", "."));
+    if (!Number.isFinite(n) || n <= 0) {
+      window.alert("목표값을 0보다 큰 숫자로 입력해 주세요.");
+      return;
+    }
+    try {
+      await updateIndicatorMutation.mutateAsync({
+        kpiItemId: pendingIndicator.kpiId,
+        indicatorType: pendingIndicator.indicatorType,
+        targetPpm: n,
+      });
+      setPendingIndicator(null);
+      setPendingTargetInput("");
+      await detailQuery.refetch();
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "목표값 저장에 실패했습니다.");
+    }
+  }
 
   async function handleDeleteKpiItem(kpiItemId: string): Promise<void> {
     if (!isAdmin) {
@@ -378,7 +477,9 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                       <span className="text-base font-bold text-sky-700">
                         {detailQuery.data.departmentAverageAchievement === null
                           ? "0% (데이터 없음)"
-                          : `${Math.round(detailQuery.data.departmentAverageAchievement)}%`}
+                          : formatKoPercentMax2(
+                              detailQuery.data.departmentAverageAchievement
+                            )}
                       </span>
                     </p>
                   </div>
@@ -436,8 +537,20 @@ export function DepartmentDetailClient({ departmentId }: Props) {
               </p>
             ) : (
               <div className="overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-sm shadow-sky-100/40">
+                {canConfigureIndicator ? (
+                  <p className="border-b border-sky-50 bg-sky-50/40 px-4 py-2.5 text-xs leading-relaxed text-slate-600">
+                    엑셀·CSV는 <span className="font-semibold">기존 양식 그대로</span> 업로드하면 됩니다.
+                    업로드 후 아래 표의{" "}
+                    <span className="font-semibold text-slate-800">실적 방식</span> 열 드롭다운에서 항목마다{" "}
+                    <span className="font-semibold">일반(%)</span>,{" "}
+                    <span className="font-semibold">PPM</span>,{" "}
+                    <span className="font-semibold">수량(k)</span>,{" "}
+                    <span className="font-semibold">건수</span> 중 하나를 고르고, PPM·수량(k)·건수는{" "}
+                    <span className="font-semibold text-slate-800">목표</span> 열에 값을 입력합니다. (그룹장·팀장·관리자만 편집)
+                  </p>
+                ) : null}
                 <div className="overflow-x-auto">
-                  <table className="min-w-[980px] w-full border-collapse text-sm">
+                  <table className="min-w-[1300px] w-full border-collapse text-sm">
                     <thead className="bg-sky-50/80 text-slate-700">
                       <tr>
                         <th className="px-4 py-3 text-left font-semibold">메인주제</th>
@@ -455,23 +568,36 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                           </span>
                         </th>
                         <th className="px-4 py-3 text-left font-semibold">현재 상태</th>
-                        <th className="px-4 py-3 text-left font-semibold">관리</th>
+                        <th
+                          className="w-[8.5rem] min-w-[8.5rem] px-4 py-3 text-left font-semibold"
+                          title="일반: 달성률 % 직접 입력. PPM·수량(k)·건수: 실적 수치 입력 후 달성률 계산. 수량(k)은 천 단위(k)로 입력합니다."
+                        >
+                          실적 방식
+                        </th>
+                        <th
+                          className="w-[11.5rem] min-w-[11.5rem] px-4 py-3 text-left font-semibold"
+                          title="PPM·수량(k)·건수일 때 목표값. 수량(k) 목표도 k(천) 단위 숫자입니다."
+                        >
+                          목표
+                        </th>
+                        <th className="py-3 pl-2.5 pr-4 text-left font-semibold">
+                          관리
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
                       {detailQuery.data.items.map((item) => {
                         const has = item.averageAchievement !== null;
-                        const pct = has ? Math.round(item.averageAchievement ?? 0) : 0;
                         return (
                           <tr
                             key={item.id}
-                            className={`border-t border-sky-50 text-slate-700 transition hover:bg-sky-50/50 ${
+                            className={`h-[4.25rem] min-h-[4.25rem] border-t border-sky-50 text-slate-700 transition hover:bg-sky-50/50 ${
                               item.hasRejectionNotice
                                 ? "bg-red-50/50 ring-1 ring-inset ring-red-300"
                                 : ""
                             }`}
                           >
-                            <td className="px-4 py-3 font-medium text-slate-800">
+                            <td className="align-middle px-4 py-2 font-medium text-slate-800">
                               <div className="flex items-center gap-2">
                                 {item.hasRejectionNotice ? (
                                   <span className="inline-flex shrink-0" title="반려 사유가 있는 항목">
@@ -486,7 +612,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                                 {item.mainTopic}
                               </div>
                             </td>
-                            <td className="px-4 py-3">
+                            <td className="align-middle px-4 py-2">
                               <button
                                 type="button"
                                 className="text-left text-sky-700 underline-offset-2 hover:underline"
@@ -509,29 +635,128 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                                     h1TargetDate: item.h1TargetDate,
                                     h2TargetDate: item.h2TargetDate,
                                     scheduleRaw: item.scheduleRaw,
+                                    indicatorType: item.indicatorType,
+                                    targetPpm: item.targetPpm,
                                   });
                                 }}
                               >
                                 {item.subTopic}
                               </button>
                             </td>
-                            <td className="px-4 py-3">{item.bm}</td>
-                            <td className="px-4 py-3">{item.weight}</td>
-                            <td className="px-4 py-3">{item.owner}</td>
-                            <td className="px-4 py-3 text-xs leading-5 text-slate-600">
+                            <td className="align-middle px-4 py-2">{item.bm}</td>
+                            <td className="align-middle px-4 py-2">{item.weight}</td>
+                            <td className="align-middle px-4 py-2">{item.owner}</td>
+                            <td className="align-middle px-4 py-2 text-xs leading-5 text-slate-600">
                               {item.halfYearSummary}
                             </td>
-                            <td className="px-4 py-3">
+                            <td className="align-middle px-4 py-2">
                               <span className="inline-flex rounded-full bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-700 ring-1 ring-sky-100">
-                                {has ? `${pct}%` : "0% · 데이터 없음"}
+                                {has
+                                  ? formatKoPercentMax2(item.averageAchievement ?? 0)
+                                  : "0% · 데이터 없음"}
                               </span>
                             </td>
-                            <td className="px-4 py-3">
+                            <td className="align-middle px-4 py-2">
                               <span className="inline-flex rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs font-medium text-slate-700">
                                 {approvalStepLabel(item.currentApprovalStep)}
                               </span>
                             </td>
-                            <td className="px-4 py-3">
+                            <td className="align-middle px-4 py-2">
+                              {canConfigureIndicator ? (
+                                <select
+                                  value={
+                                    pendingIndicator?.kpiId === item.id
+                                      ? pendingIndicator.indicatorType
+                                      : item.indicatorType
+                                  }
+                                  disabled={updateIndicatorMutation.isPending}
+                                  onChange={(e) =>
+                                    void handleIndicatorTypeSelect(
+                                      item,
+                                      e.target.value as KpiIndicatorType
+                                    )
+                                  }
+                                  className="w-full max-w-[7.25rem] rounded-md border border-slate-300 bg-white px-1.5 py-1.5 text-[11px] font-medium text-slate-800 outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-200 disabled:opacity-60"
+                                  aria-label="실적 방식"
+                                >
+                                  <option value="normal">%</option>
+                                  <option value="ppm">PPM</option>
+                                  <option value="quantity">수량(k)</option>
+                                  <option value="count">건수</option>
+                                </select>
+                              ) : (
+                                <span
+                                  className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${indicatorBadgeClass(item.indicatorType)}`}
+                                >
+                                  {indicatorModeShortLabel(item.indicatorType)}
+                                </span>
+                              )}
+                            </td>
+                            <td className="align-middle px-4 py-2">
+                              {canConfigureIndicator ? (
+                                pendingIndicator?.kpiId === item.id ? (
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      step="any"
+                                      inputMode="decimal"
+                                      value={pendingTargetInput}
+                                      onChange={(e) =>
+                                        setPendingTargetInput(e.target.value)
+                                      }
+                                      className="h-8 w-[6.5rem] min-w-0 rounded border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+                                      placeholder="목표"
+                                    />
+                                    <button
+                                      type="button"
+                                      disabled={updateIndicatorMutation.isPending}
+                                      onClick={() => void applyPendingIndicatorTarget()}
+                                      className="h-8 shrink-0 rounded bg-sky-600 px-2 text-[11px] font-semibold text-white hover:bg-sky-700 disabled:opacity-60"
+                                    >
+                                      적용
+                                    </button>
+                                  </div>
+                                ) : indicatorUsesComputedAchievement(
+                                    item.indicatorType
+                                  ) &&
+                                  item.targetPpm !== null &&
+                                  item.targetPpm > 0 ? (
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <span className="text-xs font-semibold tabular-nums text-slate-800">
+                                      {formatKoMax2Decimals(item.targetPpm)}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      disabled={updateIndicatorMutation.isPending}
+                                      onClick={() => {
+                                        setPendingIndicator({
+                                          kpiId: item.id,
+                                          indicatorType: item.indicatorType,
+                                        });
+                                        setPendingTargetInput(String(item.targetPpm));
+                                      }}
+                                      className="text-[11px] font-semibold text-sky-700 underline-offset-2 hover:underline disabled:opacity-50"
+                                    >
+                                      수정
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-slate-400">—</span>
+                                )
+                              ) : indicatorUsesComputedAchievement(
+                                  item.indicatorType
+                                ) &&
+                                item.targetPpm !== null &&
+                                item.targetPpm > 0 ? (
+                                <span className="text-xs font-medium tabular-nums text-slate-700">
+                                  {formatKoMax2Decimals(item.targetPpm)}
+                                </span>
+                              ) : (
+                                <span className="text-xs text-slate-400">—</span>
+                              )}
+                            </td>
+                            <td className="align-middle py-2 pl-2.5 pr-4">
                               <div className="flex flex-wrap items-center gap-2">
                                 <button
                                   type="button"
@@ -556,6 +781,8 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                                       h1TargetDate: item.h1TargetDate,
                                       h2TargetDate: item.h2TargetDate,
                                       scheduleRaw: item.scheduleRaw,
+                                      indicatorType: item.indicatorType,
+                                      targetPpm: item.targetPpm,
                                     });
                                   }}
                                   className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
@@ -572,7 +799,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                                     }}
                                     className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-50"
                                   >
-                                    KPI 항목 삭제
+                                    삭제
                                   </button>
                                 ) : null}
                               </div>
@@ -598,6 +825,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
         onDeleteKpiItem={(kpiId) => handleDeleteKpiItem(kpiId)}
         onClose={() => setSelectedKpi(null)}
       />
+
     </div>
   );
 }

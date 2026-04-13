@@ -25,8 +25,10 @@ import {
   upsertMonthPerformance,
   upsertQuarterPerformance,
   importKpisFromExcelRows,
+  updateKpiItemIndicatorSettings,
   type ApprovalWorkflowStage,
   type KpiExcelImportRow,
+  type KpiIndicatorType,
   type MonthKey,
   type QuarterLabel,
 } from "@/src/lib/kpi-queries";
@@ -218,6 +220,8 @@ export function useUpsertMonthPerformance() {
       achievement_rate: number;
       description: string;
       evidenceUrl?: string | null;
+      indicatorMode?: KpiIndicatorType;
+      actualValue?: number | null;
       adminBypassApprovalLock?: boolean;
       actorRole?: string | null;
     }) =>
@@ -228,6 +232,8 @@ export function useUpsertMonthPerformance() {
           achievement_rate: args.achievement_rate,
           description: args.description,
           evidenceUrl: args.evidenceUrl,
+          indicatorMode: args.indicatorMode,
+          actualValue: args.actualValue,
         },
         {
           ...(args.adminBypassApprovalLock
@@ -453,6 +459,28 @@ export function useImportKpisByExcelMutation() {
       });
       void queryClient.invalidateQueries({
         queryKey: ["supabase", "department-kpi-summary"],
+      });
+    },
+  });
+}
+
+export function useUpdateKpiItemIndicatorMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: {
+      kpiItemId: string;
+      indicatorType: KpiIndicatorType;
+      targetPpm: number | null;
+    }) => updateKpiItemIndicatorSettings(args),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "department-kpi-detail"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "department-kpi-summary"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "kpi-performances"],
       });
     },
   });

@@ -10,7 +10,9 @@
 --   id uuid primary key default gen_random_uuid(),
 --   dept_id uuid not null references public.departments (id) on delete cascade,
 --   main_topic text,
---   sub_topic text  -- KPI 항목명 등
+--   sub_topic text,  -- KPI 항목명 등
+--   indicator_type text not null default 'normal' check (indicator_type in ('normal', 'ppm', 'quantity', 'count')),
+--   target_value double precision null  -- ppm일 때 목표 PPM
 -- );
 
 -- 실적(달성률·증빙·설명)·승인은 모두 kpi_targets 한 행에 저장합니다. kpi_performances 테이블은 사용하지 않습니다.
