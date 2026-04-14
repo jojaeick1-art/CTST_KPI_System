@@ -1113,6 +1113,7 @@ export function PerformanceModal({
                   }}
                   onClick={(data: unknown) => {
                     const row = data as ChartDatum | undefined;
+                    if (!row) return;
                     setSelectedMonth(row.month);
                   }}
                 >

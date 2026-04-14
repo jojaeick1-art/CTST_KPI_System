@@ -234,6 +234,14 @@ export function KpiCreateModal({
     } =
       validate();
     if (Object.keys(errors).length > 0) return;
+    if (
+      weight === null ||
+      h1TargetValue === null ||
+      targetFinalValue === null ||
+      targetValue === null
+    ) {
+      return;
+    }
 
     await onSubmit({
       deptId,
