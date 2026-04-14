@@ -493,7 +493,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
             <ArrowLeft className="h-4 w-4" aria-hidden />
             대시보드로
           </Link>
-          <ChangePasswordButton profileUsername={profile.username} />
+          <ChangePasswordButton profileUsername={ensuredProfile.username} />
         </div>
 
         {detailQuery.isPending ? (
