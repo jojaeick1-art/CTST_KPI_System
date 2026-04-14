@@ -4,7 +4,7 @@
  */
 
 export const KPI_MONTHS = [
-  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
 ] as const;
 
 export type MonthKey = (typeof KPI_MONTHS)[number];
@@ -23,10 +23,11 @@ export function halfTypeLabelToMonth(ht: string | null | undefined): MonthKey | 
     .match(/^M(\d{1,2})$/i);
   if (!m?.[1]) return null;
   const n = Number(m[1]);
-  return n >= 1 && n <= 12 ? (n as MonthKey) : null;
+  return n >= 1 && n <= 15 ? (n as MonthKey) : null;
 }
 
 export function formatMonthKo(m: MonthKey): string {
+  if (m >= 13) return `27년 ${m - 12}월`;
   return `${m}월`;
 }
 
@@ -35,13 +36,13 @@ export function formatAxisLabel(period: KpiAxisLabel): string {
   return formatMonthKo(period);
 }
 
-/** "6월", "10 월", "10/1" 등에서 월(1~12) 추출 */
+/** "6월", "10 월", "10/1", "13" 등에서 월(1~15) 추출 */
 export function parseMonthFromScheduleText(v: string | null | undefined): number | null {
   if (!v) return null;
   const m = v.match(/(\d{1,2})\s*[\/.\-월]?/);
   if (!m?.[1]) return null;
   const month = Number(m[1]);
-  if (!Number.isFinite(month) || month < 1 || month > 12) return null;
+  if (!Number.isFinite(month) || month < 1 || month > 15) return null;
   return month;
 }
 
@@ -61,14 +62,14 @@ export function scheduleMonthsFromItemDates(
 }
 
 /**
- * 실적 입력·차트에 포함할 월(1~12). 하반기 목표월 이후는 제외(미해당).
+ * 실적 입력·차트에 포함할 월(1~15). 하반기 목표월 이후는 제외(미해당).
  */
 export function activeMonthsForSchedule(sched: MonthSchedule): MonthKey[] {
   const last =
     sched.h2Month ??
     sched.h1Month ??
     12;
-  const cap = Math.min(12, Math.max(1, last));
+  const cap = Math.min(15, Math.max(1, last));
   return KPI_MONTHS.filter((m) => m <= cap) as MonthKey[];
 }
 
@@ -118,6 +119,7 @@ export function monthTargetPercent(args: {
 export type LegacyQuarterLabel = "26Y 1Q" | "26Y 2Q" | "26Y 3Q" | "26Y 4Q";
 
 export function monthToLegacyQuarter(m: MonthKey): LegacyQuarterLabel {
+  if (m >= 13) return "26Y 4Q";
   if (m <= 3) return "26Y 1Q";
   if (m <= 6) return "26Y 2Q";
   if (m <= 9) return "26Y 3Q";

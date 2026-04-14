@@ -34,7 +34,6 @@ import {
   uploadEvidenceFile,
 } from "@/src/lib/kpi-queries";
 import {
-  KPI_AXIS_START,
   KPI_MONTHS,
   activeMonthsForSchedule,
   formatAxisLabel,
@@ -73,6 +72,10 @@ type KpiModalItem = {
   secondHalfTarget: number | null;
   h1TargetDate: string | null;
   h2TargetDate: string | null;
+  periodStartMonth: number | null;
+  periodEndMonth: number | null;
+  targetDirection: "up" | "down" | "na";
+  targetFinalValue: number | null;
   scheduleRaw: string | null;
   indicatorType: KpiIndicatorType;
   /** ppm·quantity·count 공통 목표 (`kpi_items.target_value`) */
@@ -118,8 +121,7 @@ import {
 
 type ChartDatum = {
   periodLabel: string;
-  /** KPI 시작점은 null */
-  month: MonthKey | null;
+  month: MonthKey;
   target: number;
   actual: number;
   description: string | null;
@@ -253,9 +255,11 @@ function monthLockedForEditor(
 function KpiChartTooltip({
   active,
   payload,
+  indicatorType,
 }: {
   active?: boolean;
   payload?: { payload?: ChartDatum }[];
+  indicatorType: KpiIndicatorType;
 }) {
   if (!active || !payload?.length) return null;
   const d =
@@ -264,8 +268,8 @@ function KpiChartTooltip({
   return (
     <div className="rounded-xl border border-sky-200 bg-white/95 px-3 py-2 text-xs shadow-lg backdrop-blur-sm">
       <p className="font-semibold text-slate-800">{d.periodLabel}</p>
-      <p className="text-slate-600">목표 {formatKoPercentMax2(d.target)}</p>
-      <p className="text-sky-700">실적 {formatKoPercentMax2(d.actual)}</p>
+      <p className="text-slate-600">목표 {chartValueLabel(indicatorType, d.target)}</p>
+      <p className="text-sky-700">실적 {chartValueLabel(indicatorType, d.actual)}</p>
       {d.hasComment && d.description ? (
         <p className="mt-1 max-w-[220px] border-t border-sky-100 pt-1 text-[11px] leading-snug text-slate-500">
           {previewComment(d.description, 72)}
@@ -334,6 +338,18 @@ function KpiComposedLegend({ payload }: RechartsLegendContentProps) {
   );
 }
 
+function chartValueLabel(indicatorType: KpiIndicatorType, value: number): string {
+  if (indicatorType === "ppm") return `${formatKoMax2Decimals(value)} ppm`;
+  if (indicatorType === "quantity") return `${formatKoMax2Decimals(value)} k`;
+  if (indicatorType === "count") return `${formatKoMax2Decimals(value)} 건`;
+  return formatKoPercentMax2(value);
+}
+
+function periodRangeLabel(start: number | null, end: number | null): string {
+  if (!start || !end) return "레거시 기준";
+  return `${formatAxisLabel(start as MonthKey)} ~ ${formatAxisLabel(end as MonthKey)}`;
+}
+
 export function PerformanceModal({
   isOpen,
   onClose,
@@ -388,16 +404,50 @@ export function PerformanceModal({
 
   const activeMonthList = useMemo(() => {
     if (!kpiItem) return [] as MonthKey[];
+    const startMonth = kpiItem.periodStartMonth;
+    const endMonth = kpiItem.periodEndMonth;
+    if (
+      startMonth !== null &&
+      endMonth !== null &&
+      Number.isInteger(startMonth) &&
+      Number.isInteger(endMonth) &&
+      startMonth >= 1 &&
+      endMonth <= 15 &&
+      startMonth <= endMonth
+    ) {
+      const months: MonthKey[] = [];
+      for (let m = startMonth; m <= endMonth; m += 1) {
+        months.push(m as MonthKey);
+      }
+      return months;
+    }
     const sched = scheduleMonthsFromItemDates(
       kpiItem.h1TargetDate,
       kpiItem.h2TargetDate
     );
     return activeMonthsForSchedule(sched);
-  }, [kpiItem?.h1TargetDate, kpiItem?.h2TargetDate]);
+  }, [
+    kpiItem?.h1TargetDate,
+    kpiItem?.h2TargetDate,
+    kpiItem?.periodStartMonth,
+    kpiItem?.periodEndMonth,
+  ]);
+
+  const displayMonthList = useMemo(() => {
+    if (!kpiItem || activeMonthList.length === 0) return [] as MonthKey[];
+    const start = activeMonthList[0]!;
+    const periodEnd = activeMonthList[activeMonthList.length - 1]!;
+    const endWithBuffer = Math.min(15, periodEnd + 3);
+    const months: MonthKey[] = [];
+    for (let m = start; m <= endWithBuffer; m += 1) {
+      months.push(m as MonthKey);
+    }
+    return months;
+  }, [kpiItem, activeMonthList]);
 
   const activeSet = useMemo(
-    () => new Set<MonthKey>(activeMonthList),
-    [activeMonthList]
+    () => new Set<MonthKey>(displayMonthList),
+    [displayMonthList]
   );
 
   const rowByMonth = useMemo(() => {
@@ -442,17 +492,31 @@ export function PerformanceModal({
 
   const chartData: ChartDatum[] = useMemo(() => {
     if (!kpiItem) return [];
-    const sched = scheduleMonthsFromItemDates(
-      kpiItem.h1TargetDate,
-      kpiItem.h2TargetDate
-    );
-    const h1v = kpiItem.firstHalfTarget ?? kpiItem.firstHalfRate ?? 0;
-    const h2v =
-      kpiItem.secondHalfTarget ??
-      kpiItem.secondHalfRate ??
-      kpiItem.challengeTarget ??
-      h1v;
-    const series: ChartDatum[] = activeMonthList.map((m) => {
+    const periodStart = activeMonthList[0] ?? 1;
+    const periodEnd = activeMonthList[activeMonthList.length - 1] ?? 12;
+    const h1vRaw = kpiItem.firstHalfTarget ?? kpiItem.firstHalfRate ?? null;
+    const h2vRaw = kpiItem.secondHalfTarget ?? kpiItem.secondHalfRate ?? null;
+    const h1v = h1vRaw ?? 0;
+    const finalTarget =
+      kpiItem.targetFinalValue !== null && kpiItem.targetFinalValue !== undefined
+        ? kpiItem.targetFinalValue
+        : h2vRaw ?? h1vRaw ?? kpiItem.challengeTarget ?? 0;
+    const h1Month = Math.max(periodStart, Math.min(periodEnd, periodStart + 5));
+    const h2Month = Math.max(h1Month + 1, Math.min(periodEnd - 1, periodEnd - 1));
+    const hasH1Kink = h1vRaw !== null;
+    const hasH2Kink = h2vRaw !== null;
+    function segmentValue(
+      month: number,
+      fromMonth: number,
+      toMonth: number,
+      fromValue: number,
+      toValue: number
+    ): number {
+      if (toMonth <= fromMonth) return toValue;
+      const ratio = (month - fromMonth) / (toMonth - fromMonth);
+      return fromValue + (toValue - fromValue) * Math.max(0, Math.min(1, ratio));
+    }
+    const series: ChartDatum[] = displayMonthList.map((m) => {
       const row = rowByMonth.get(m);
       const visibleOnChart = isChartVisibleStep(row?.approval_step ?? null);
       const rawSubmitted =
@@ -461,16 +525,76 @@ export function PerformanceModal({
         !Number.isNaN(Number(row.achievement_rate))
           ? Number(row.achievement_rate)
           : null;
-      const actual = visibleOnChart && rawSubmitted !== null ? rawSubmitted : 0;
+      const rawActualMetric =
+        row?.actual_value !== null &&
+        row?.actual_value !== undefined &&
+        Number.isFinite(Number(row.actual_value))
+          ? Number(row.actual_value)
+          : null;
+      const actual = indicatorUsesComputedAchievement(kpiItem.indicatorType)
+        ? visibleOnChart && rawActualMetric !== null
+          ? rawActualMetric
+          : 0
+        : visibleOnChart && rawSubmitted !== null
+          ? rawSubmitted
+          : 0;
       const description = row?.description ?? null;
-      const tgtRaw = monthTargetPercent({
-        month: m,
-        h1Month: sched.h1Month,
-        h2Month: sched.h2Month,
-        h1Value: h1v,
-        h2Value: h2v,
-      });
-      const target = tgtRaw !== null ? roundToMax2DecimalPlaces(tgtRaw) : 0;
+      const target = indicatorUsesComputedAchievement(kpiItem.indicatorType)
+        ? kpiItem.targetPpm ?? 0
+        : (() => {
+            if (
+              kpiItem.periodStartMonth !== null &&
+              kpiItem.periodEndMonth !== null &&
+              Number.isInteger(kpiItem.periodStartMonth) &&
+              Number.isInteger(kpiItem.periodEndMonth) &&
+              kpiItem.periodStartMonth >= 1 &&
+              kpiItem.periodEndMonth <= 15 &&
+              kpiItem.periodStartMonth <= kpiItem.periodEndMonth
+            ) {
+              const start = kpiItem.periodStartMonth;
+              const end = kpiItem.periodEndMonth;
+              if (m > end) return roundToMax2DecimalPlaces(finalTarget);
+              if (m === end) return roundToMax2DecimalPlaces(finalTarget);
+              if (hasH1Kink && hasH2Kink && h2Month > h1Month) {
+                if (m <= h1Month) {
+                  if (h1Month <= start) return roundToMax2DecimalPlaces(h1vRaw ?? 0);
+                  return roundToMax2DecimalPlaces(
+                    segmentValue(m, start, h1Month, 0, h1vRaw ?? 0)
+                  );
+                }
+                if (m <= h2Month) {
+                  return roundToMax2DecimalPlaces(
+                    segmentValue(m, h1Month, h2Month, h1vRaw ?? 0, h2vRaw ?? h1vRaw ?? 0)
+                  );
+                }
+                return roundToMax2DecimalPlaces(
+                  segmentValue(m, h2Month, end, h2vRaw ?? h1vRaw ?? 0, finalTarget)
+                );
+              }
+              if (hasH1Kink) {
+                if (m <= h1Month) {
+                  if (h1Month <= start) return roundToMax2DecimalPlaces(h1vRaw ?? 0);
+                  return roundToMax2DecimalPlaces(
+                    segmentValue(m, start, h1Month, 0, h1vRaw ?? 0)
+                  );
+                }
+                return roundToMax2DecimalPlaces(
+                  segmentValue(m, h1Month, end, h1vRaw ?? 0, finalTarget)
+                );
+              }
+              const span = Math.max(1, end - start + 1);
+              const progress = (m - start + 1) / span;
+              return roundToMax2DecimalPlaces(finalTarget * Math.max(0, Math.min(1, progress)));
+            }
+            if (m > periodEnd) {
+              return roundToMax2DecimalPlaces(finalTarget);
+            }
+            const legacySpan = Math.max(1, periodEnd - periodStart + 1);
+            const legacyProgress = (m - periodStart + 1) / legacySpan;
+            return roundToMax2DecimalPlaces(
+              finalTarget * Math.max(0, Math.min(1, legacyProgress))
+            );
+          })();
       const showBarTopLabel =
         visibleOnChart ||
         monthHasSubmittedPerformanceInput(
@@ -495,29 +619,23 @@ export function PerformanceModal({
         ...(topLabel ? { barTopLabel: topLabel } : {}),
       };
     });
-    return [
-      {
-        periodLabel: formatAxisLabel(KPI_AXIS_START),
-        month: null,
-        target: 0,
-        actual: 0,
-        description: null,
-        evidence_url: null,
-        hasComment: false,
-      },
-      ...series,
-    ];
-  }, [kpiItem, rowByMonth, activeMonthList]);
+    return series;
+  }, [kpiItem, rowByMonth, activeMonthList, displayMonthList]);
 
   const chartYDomainMax = useMemo(() => {
-    if (kpiItem?.indicatorType !== "ppm") return 100;
+    if (!kpiItem) return 100;
     let mx = 0;
     for (const d of chartData) {
-      if (d.month === null || d.month === undefined) continue;
-      mx = Math.max(mx, d.actual);
+      mx = Math.max(mx, d.actual, d.target);
     }
-    return Math.max(100, Math.ceil(mx / 10) * 10);
-  }, [kpiItem?.indicatorType, chartData]);
+    if (!Number.isFinite(mx) || mx <= 0) return 100;
+    const paddedMax = mx * 1.2;
+    const unit = paddedMax <= 10 ? 1 : 10;
+    if (!indicatorUsesComputedAchievement(kpiItem.indicatorType)) {
+      return Math.max(100, Math.ceil(paddedMax / unit) * unit);
+    }
+    return Math.max(10, Math.ceil(paddedMax / unit) * unit);
+  }, [kpiItem, chartData]);
 
   const selectedRow = rowByMonth.get(selectedMonth) ?? null;
   const selectedSubmittedPercent =
@@ -559,7 +677,7 @@ export function PerformanceModal({
     if (!toast.open) return;
     const t = setTimeout(() => {
       setToast((prev) => ({ ...prev, open: false }));
-    }, 2800);
+    }, 1000);
     return () => clearTimeout(t);
   }, [toast.open]);
 
@@ -832,6 +950,7 @@ export function PerformanceModal({
       <AppToast
         state={toast}
         onClose={() => setToast((prev) => ({ ...prev, open: false }))}
+        position="top-center"
       />
       <div className="relative flex max-h-[95vh] w-full max-w-7xl flex-col overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-2xl shadow-sky-200/50">
         <div className="shrink-0 border-b border-sky-100 bg-gradient-to-br from-sky-600 to-sky-700 px-5 py-5 text-white">
@@ -906,46 +1025,49 @@ export function PerformanceModal({
         <div className="flex min-h-0 flex-1 flex-col lg:flex-row lg:overflow-hidden">
           <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5">
 
-          <div className="mb-4 grid gap-3 rounded-xl border border-sky-100 bg-sky-50/40 p-3 text-sm text-slate-700 sm:grid-cols-2">
-            <p>
-              <span className="font-semibold">B/M:</span> {item.bm}
-            </p>
-            <p>
-              <span className="font-semibold">가중치:</span> {item.weight}
-            </p>
-            <p>
-              <span className="font-semibold">담당자:</span> {item.owner}
-            </p>
-            <p>
-              <span className="font-semibold">목표 요약(상반기 일정 / 하반기 일정):</span>{" "}
-              {item.halfYearSummary}
-            </p>
-            <p className="sm:col-span-2">
-              {indicatorUsesComputedAchievement(item.indicatorType) ? (
-                <>
-                  <span className="font-semibold">{computedKindSummaryKo(item.indicatorType)}:</span>{" "}
-                  {computedTargetLabel(item.indicatorType)}{" "}
-                  {item.targetPpm !== null && item.targetPpm > 0
-                    ? formatKoMax2Decimals(item.targetPpm)
-                    : "—(목표 미설정)"}{" "}
-                  · 상·하반기 일정 기준 차트의 빨간 점선은 기존 목표% 스케줄을 그대로 씁니다.
-                </>
-              ) : (
-                <>
-                  <span className="font-semibold">목표 달성율:</span> 상반기{" "}
-                  {formatKoPercentMax2(
-                    item.firstHalfRate ?? item.firstHalfTarget ?? 0
-                  )}{" "}
-                  / 하반기{" "}
-                  {formatKoPercentMax2(
-                    item.secondHalfRate ??
-                      item.secondHalfTarget ??
-                      item.challengeTarget ??
-                      0
-                  )}
-                </>
-              )}
-            </p>
+          <div className="mb-4 rounded-xl border border-sky-100 bg-white p-4">
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
+              <div className="rounded-lg bg-slate-50 px-3 py-2">
+                <p className="text-[11px] font-semibold text-slate-500">측정 기준</p>
+                <p className="mt-0.5 text-sm font-semibold text-slate-800">{item.bm || "—"}</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 px-3 py-2">
+                <p className="text-[11px] font-semibold text-slate-500">평가 기간</p>
+                <p className="mt-0.5 text-sm font-semibold text-slate-800">
+                  {periodRangeLabel(item.periodStartMonth, item.periodEndMonth)}
+                </p>
+              </div>
+              <div className="rounded-lg bg-slate-50 px-3 py-2">
+                <p className="text-[11px] font-semibold text-slate-500">최종 목표값</p>
+                <p className="mt-0.5 text-sm font-semibold text-slate-800">
+                  {item.targetFinalValue !== null && item.targetFinalValue !== undefined
+                    ? chartValueLabel(item.indicatorType, item.targetFinalValue)
+                    : "—"}
+                </p>
+              </div>
+              <div className="rounded-lg bg-slate-50 px-3 py-2">
+                <p className="text-[11px] font-semibold text-slate-500">자동계산 기준값</p>
+                <p className="mt-0.5 text-sm font-semibold text-slate-800">
+                  {indicatorUsesComputedAchievement(item.indicatorType) &&
+                  item.targetPpm !== null &&
+                  item.targetPpm > 0
+                    ? chartValueLabel(item.indicatorType, item.targetPpm)
+                    : "해당 없음"}
+                </p>
+              </div>
+              <div className="rounded-lg bg-slate-50 px-3 py-2">
+                <p className="text-[11px] font-semibold text-slate-500">가중치</p>
+                <p className="mt-0.5 text-sm font-semibold text-slate-800">
+                  {item.weight || "—"}
+                </p>
+              </div>
+              <div className="rounded-lg bg-slate-50 px-3 py-2">
+                <p className="text-[11px] font-semibold text-slate-500">담당자</p>
+                <p className="mt-0.5 text-sm font-semibold text-slate-800">
+                  {item.owner || "—"}
+                </p>
+              </div>
+            </div>
           </div>
 
           <div className="h-[320px] rounded-xl border border-sky-100 bg-white p-2 sm:h-[360px]">
@@ -966,10 +1088,15 @@ export function PerformanceModal({
                 <XAxis dataKey="periodLabel" tick={{ fill: "#334155", fontSize: 11 }} />
                 <YAxis
                   domain={[0, chartYDomainMax]}
-                  tickFormatter={(v) => formatKoPercentMax2(v)}
+                  tickFormatter={(v) =>
+                    chartValueLabel(
+                      kpiItem.indicatorType,
+                      typeof v === "number" ? v : Number(v)
+                    )
+                  }
                   tick={{ fontSize: 11 }}
                 />
-                <Tooltip content={<KpiChartTooltip />} />
+                <Tooltip content={<KpiChartTooltip indicatorType={kpiItem.indicatorType} />} />
                 <Legend content={KpiComposedLegend} />
                 <Bar
                   dataKey="actual"
@@ -979,35 +1106,25 @@ export function PerformanceModal({
                   radius={[6, 6, 0, 0]}
                   minPointSize={(value, index) => {
                     const d = chartData[index];
-                    if (!d?.month || !d.barTopLabel) return 0;
+                    if (!d?.barTopLabel) return 0;
                     const v = Number(value);
                     if (!Number.isFinite(v) || v !== 0) return 0;
                     return 6;
                   }}
                   onClick={(data: unknown) => {
                     const row = data as ChartDatum | undefined;
-                    if (row?.month !== null && row?.month !== undefined) {
-                      setSelectedMonth(row.month);
-                    }
+                    setSelectedMonth(row.month);
                   }}
                 >
                   {chartData.map((entry) => {
-                    const isSel =
-                      entry.month !== null && entry.month === selectedMonth;
-                    const isStart = entry.month === null;
+                    const isSel = entry.month === selectedMonth;
                     return (
                       <Cell
                         key={entry.periodLabel}
                         fill={
-                          isStart
-                            ? "#cbd5e1"
-                            : isSel
-                              ? "#0369a1"
-                              : "#0284c7"
+                          isSel ? "#0369a1" : "#0284c7"
                         }
-                        className={
-                          isStart ? "pointer-events-none" : "cursor-pointer outline-none"
-                        }
+                        className="cursor-pointer outline-none"
                       />
                     );
                   })}
@@ -1033,10 +1150,8 @@ export function PerformanceModal({
               </ComposedChart>
             </ResponsiveContainer>
             <p className="mt-2 px-1 text-[11px] leading-snug text-slate-500">
-              막대는 <span className="font-medium text-slate-600">그 월에 제출된 값</span>이{" "}
-              <span className="font-medium text-slate-600">1차 승인 이후</span>일 때만 표시됩니다. 그 외는
-              0%입니다. 월별 저장이 되면 달마다 따로 보이고, 예전 형식 컬럼만 쓰면 같은 구간 실적이{" "}
-              <span className="font-medium text-slate-600">1·4·7·10월</span> 막대에만 붙습니다.
+              목표는 <span className="font-medium text-red-600">점선</span>, 실적은{" "}
+              <span className="font-medium text-sky-700">막대</span>로 표시됩니다. 실적 막대는 승인 반영값 기준입니다.
             </p>
           </div>
 
@@ -1045,140 +1160,92 @@ export function PerformanceModal({
               월 선택
             </p>
             <div className="flex flex-wrap gap-2">
-              {KPI_MONTHS.map((mo) => {
+              {displayMonthList.map((mo) => {
                 const on = mo === selectedMonth;
-                const inSchedule = activeSet.has(mo);
                 return (
                   <button
                     key={mo}
                     type="button"
-                    disabled={!inSchedule}
                     onClick={() => setSelectedMonth(mo)}
                     className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
                       on
                         ? "bg-sky-600 text-white shadow-md shadow-sky-300/40"
-                        : inSchedule
-                          ? "border border-sky-200 bg-white text-slate-700 hover:bg-sky-50"
-                          : "cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400"
+                        : "border border-sky-200 bg-white text-slate-700 hover:bg-sky-50"
                     }`}
                   >
-                    {mo}월
+                    {formatAxisLabel(mo)}
                   </button>
                 );
               })}
             </div>
           </div>
 
-          <div className="mt-5 rounded-xl border border-sky-100 bg-sky-50/30 p-4">
+          <div className="mt-5 rounded-xl border border-sky-100 bg-white p-4">
             <h4 className="mb-2 text-sm font-semibold text-slate-800">
-              {selectedMonth}월 상세
+              {formatAxisLabel(selectedMonth)} 상세
             </h4>
-            <dl className="grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-3">
               {indicatorUsesComputedAchievement(item.indicatorType) ? (
-                <div>
-                  <dt className="text-xs text-slate-500">
-                    {computedActualLabel(item.indicatorType)} (제출값)
-                  </dt>
-                  <dd className="font-semibold text-sky-800">
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                  <p className="text-[11px] font-semibold text-slate-500">
+                    {computedActualLabel(item.indicatorType)}
+                  </p>
+                  <p className="mt-0.5 text-base font-bold text-slate-900">
                     {selectedRow?.actual_value !== null &&
                     selectedRow?.actual_value !== undefined
-                      ? formatKoMax2Decimals(selectedRow.actual_value)
+                      ? chartValueLabel(item.indicatorType, Number(selectedRow.actual_value))
                       : "—"}
-                  </dd>
+                  </p>
                 </div>
               ) : null}
-              <div>
-                <dt className="text-xs text-slate-500">
-                  {indicatorUsesComputedAchievement(item.indicatorType)
-                    ? "계산 달성률 (제출값)"
-                    : "달성률 (제출값)"}
-                </dt>
-                <dd className="font-semibold text-sky-800">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <p className="text-[11px] font-semibold text-slate-500">계산 달성률</p>
+                <p className="mt-0.5 text-base font-bold text-sky-800">
                   {selectedSubmittedPercent !== null
                     ? formatKoPercentMax2(selectedSubmittedPercent)
                     : "—"}
-                </dd>
+                </p>
               </div>
-              <div>
-                <dt className="text-xs text-slate-500">차트 실적 막대 (승인 반영)</dt>
-                <dd className="font-semibold text-slate-800">
-                  {formatKoPercentMax2(chartActualSelected)}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-xs text-slate-500">승인 상태</dt>
-                <dd className="font-medium text-slate-800">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <p className="text-[11px] font-semibold text-slate-500">승인 상태</p>
+                <p className="mt-0.5 text-base font-bold text-slate-900">
                   {performanceStatusLabelKo(selectedStatus)}
-                </dd>
+                </p>
               </div>
-              {selectedRejectionReason?.trim() ? (
-                <div className="sm:col-span-2">
-                  <dt className="text-xs text-red-600">반려 사유</dt>
-                  <dd className="mt-0.5 rounded-lg border border-red-100 bg-red-50/50 px-3 py-2 text-slate-800">
-                    {selectedRejectionReason}
-                  </dd>
-                </div>
-              ) : null}
-              <div className="sm:col-span-2">
-                <dt className="text-xs text-slate-500">코멘트</dt>
-                <dd className="mt-0.5 rounded-lg border border-sky-100 bg-white px-3 py-2 text-slate-700">
-                  {selectedDescription?.trim() ? selectedDescription : "등록된 코멘트가 없습니다."}
-                </dd>
-              </div>
-            </dl>
-
-            <div className="mt-4">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                승인 진행 단계
-              </p>
-              {selectedRejectionReason?.trim() ? (
-                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
-                  반려됨
-                </div>
-              ) : (
-                <div className="grid grid-cols-4 gap-2">
-                  {["제출전", "1차 승인 대기", "최종 승인 대기", "승인 완료"].map(
-                    (label, idx) => {
-                      const active = statusTimelineIndex(selectedStatus) >= idx;
-                      return (
-                        <div
-                          key={label}
-                          className={`rounded-lg border px-2 py-2 text-center text-[11px] font-medium ${
-                            active
-                              ? "border-sky-300 bg-sky-50 text-sky-800"
-                              : "border-slate-200 bg-white text-slate-400"
-                          }`}
-                        >
-                          {label}
-                        </div>
-                      );
-                    }
-                  )}
-                </div>
-              )}
             </div>
 
-            <div className="mt-3 rounded-xl border border-sky-100 bg-white p-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                보고서
+            {selectedRejectionReason?.trim() ? (
+              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                <span className="font-semibold">반려 사유:</span> {selectedRejectionReason}
+              </div>
+            ) : null}
+
+            <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <p className="text-[11px] font-semibold text-slate-500">코멘트</p>
+              <p className="mt-0.5 text-sm text-slate-800">
+                {selectedDescription?.trim() ? selectedDescription : "등록된 코멘트가 없습니다."}
               </p>
+            </div>
+
+            <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <p className="text-[11px] font-semibold text-slate-500">보고서</p>
               {selectedEvidencePath ? (
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <p className="max-w-full truncate text-sm text-slate-700">
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <p className="max-w-full truncate text-sm text-slate-800">
                     {selectedEvidenceFileName}
                   </p>
                   <button
                     type="button"
                     onClick={() => void handleDownloadEvidence()}
                     disabled={downloadingEvidence}
-                    className="inline-flex items-center gap-1 rounded-lg border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800 hover:bg-sky-100 disabled:opacity-50"
+                    className="inline-flex items-center gap-1 rounded-lg border border-sky-200 bg-white px-3 py-1.5 text-xs font-semibold text-sky-800 hover:bg-sky-50 disabled:opacity-50"
                   >
                     <Download className="h-4 w-4" />
-                    📄 파일 다운로드
+                    파일 다운로드
                   </button>
                 </div>
               ) : (
-                <p className="mt-2 text-sm text-slate-500">보고서가 없습니다</p>
+                <p className="mt-1 text-sm text-slate-500">보고서가 없습니다</p>
               )}
             </div>
 
@@ -1251,7 +1318,7 @@ export function PerformanceModal({
                   onChange={(e) => setEditorMonth(Number(e.target.value) as MonthKey)}
                   className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-[#1a1a1a] outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200"
                 >
-                  {KPI_MONTHS.map((mo) => {
+                  {displayMonthList.map((mo) => {
                     const row = findRowByMonth(liveRows, mo);
                     const locked = monthLockedForEditor(
                       row?.approval_step,
@@ -1261,10 +1328,10 @@ export function PerformanceModal({
                       <option
                         key={mo}
                         value={mo}
-                        disabled={!activeSet.has(mo) || locked}
+                        disabled={locked}
                       >
-                        {mo}월
-                        {!activeSet.has(mo) ? " (대상 아님)" : locked ? " (승인대기/완료·잠금)" : ""}
+                        {formatAxisLabel(mo)}
+                        {locked ? " (승인대기/완료·잠금)" : ""}
                       </option>
                     );
                   })}

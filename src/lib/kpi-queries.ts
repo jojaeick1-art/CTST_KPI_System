@@ -311,30 +311,24 @@ function performanceMonthlyIsNonEmpty(raw: unknown): boolean {
 }
 
 /**
- * `performance_monthly`: 달성률이 저장된 월 중 **번호가 가장 큰 월** 1건만 집계
- * (예: 5월·6월 모두 입력되면 6월 값이 목록·부서 평균에 반영).
+ * `performance_monthly`: 월별 달성률을 모두 집계
+ * (항목 종합 달성률 계산용).
  */
-function pushLatestMonthlyAchievement(
+function pushMonthlyAchievements(
   t: Record<string, unknown>,
   list: number[]
 ): void {
   const raw = t.performance_monthly;
   if (!performanceMonthlyIsNonEmpty(raw)) return;
   const o = raw as Record<string, unknown>;
-  let lastMonth = 0;
-  let lastRate: number | null = null;
-  for (let mi = 1; mi <= 12; mi += 1) {
+  for (const mi of KPI_MONTHS) {
     const cell = o[String(mi)];
     if (!cell || typeof cell !== "object" || Array.isArray(cell)) continue;
     const rec = cell as PerformanceMonthlyCell;
     const rate = toNum(rec.achievement_rate as number | string | null | undefined);
     if (rate !== null) {
-      lastMonth = mi;
-      lastRate = rate;
+      list.push(rate);
     }
-  }
-  if (lastMonth > 0 && lastRate !== null) {
-    list.push(lastRate);
   }
 }
 
@@ -402,7 +396,7 @@ function collectApprovedAchievementRatesForItemTargets(
     performanceMonthlyIsNonEmpty(t.performance_monthly)
   );
   if (primaryMonthly) {
-    pushLatestMonthlyAchievement(primaryMonthly, rates);
+    pushMonthlyAchievements(primaryMonthly, rates);
     return rates;
   }
   for (const t of targets) {
@@ -413,14 +407,14 @@ function collectApprovedAchievementRatesForItemTargets(
 
 /**
  * 목록·집계에서 KPI 항목 1건의 대표 달성률.
- * - 월별 JSON(`performance_monthly`)이면 호출 전에 **가장 늦은 입력 월 1개**만 넣음.
- * - 레거시 분기·반기는 여러 값이면 **최고값** 유지.
+ * - 월별 JSON(`performance_monthly`)은 저장된 월 값을 평균 집계.
+ * - 레거시 분기·반기도 수집된 값 평균으로 집계.
  */
 function representativeAchievementPercentForRates(
   rates: number[]
 ): number | null {
   if (!rates.length) return null;
-  return Math.max(...rates);
+  return rates.reduce((acc, r) => acc + r, 0) / rates.length;
 }
 
 /** 승인 목록 등 단일 숫자가 필요할 때 (행의 half_type·h1/h2 실적 기준) */
@@ -470,8 +464,7 @@ export async function fetchDepartmentKpiSummary(): Promise<
     .from("kpi_items")
     .select(
       `
-      id,
-      dept_id,
+      *,
       kpi_targets (*)
     `
     );
@@ -481,6 +474,10 @@ export async function fetchDepartmentKpiSummary(): Promise<
     name: d.name,
     averageAchievement: null as number | null,
     kpiItemCount: 0,
+    scoredKpiCount: 0,
+    thresholdScore: null as number | null,
+    progressScore: null as number | null,
+    qualitativeScore: null as number | null,
   }));
 
   if (itemErr) {
@@ -489,10 +486,18 @@ export async function fetchDepartmentKpiSummary(): Promise<
 
   const ratesByDept = new Map<string, number[]>();
   const itemCountByDept = new Map<string, number>();
+  const scoredCountByDept = new Map<string, number>();
+  const thresholdByDept = new Map<string, Array<{ score: number; weight: number }>>();
+  const progressByDept = new Map<string, Array<{ score: number; weight: number }>>();
+  const qualitativeByDept = new Map<string, Array<{ score: number; weight: number }>>();
 
   for (const d of departments ?? []) {
     ratesByDept.set(d.id, []);
     itemCountByDept.set(d.id, 0);
+    scoredCountByDept.set(d.id, 0);
+    thresholdByDept.set(d.id, []);
+    progressByDept.set(d.id, []);
+    qualitativeByDept.set(d.id, []);
   }
 
   const typedItems = (items ?? []) as KpiItemWithPerformances[];
@@ -517,22 +522,59 @@ export async function fetchDepartmentKpiSummary(): Promise<
       hasTargetHalf
     );
     const rep = representativeAchievementPercentForRates(itemRates);
+    if (rep !== null) {
+      scoredCountByDept.set(deptId, (scoredCountByDept.get(deptId) ?? 0) + 1);
+    }
     // 부서 카드 통합 달성률은 "부서 KPI 전체 항목"을 분모로 계산한다.
     // 승인 실적이 없는 항목은 0%로 간주해 평균에 포함한다.
     list.push(rep ?? 0);
+
+    const indicator = parseKpiIndicatorTypeFromDb((item as unknown as Record<string, unknown>).indicator_type);
+    const bmRaw = pickText(item as unknown as Record<string, unknown>, ["bm", "benchmark", "standard"]);
+    const weightRaw = Number(
+      String((item as unknown as Record<string, unknown>).weight ?? "").trim()
+    );
+    const w = Number.isFinite(weightRaw) && weightRaw > 0 ? weightRaw : 1;
+    const score = rep ?? 0;
+    const lowerBm = String(bmRaw ?? "").toLowerCase();
+    if (lowerBm.includes("일정")) {
+      qualitativeByDept.get(deptId)!.push({ score, weight: w });
+    } else if (indicator === "ppm") {
+      thresholdByDept.get(deptId)!.push({ score, weight: w });
+    } else {
+      progressByDept.get(deptId)!.push({ score, weight: w });
+    }
+  }
+
+  function weightedAverage(rows: Array<{ score: number; weight: number }>): number | null {
+    if (!rows.length) return null;
+    const totalWeight = rows.reduce((s, r) => s + r.weight, 0);
+    if (totalWeight <= 0) return null;
+    return rows.reduce((s, r) => s + r.score * r.weight, 0) / totalWeight;
   }
 
   return (departments ?? []).map((d) => {
     const rates = ratesByDept.get(d.id) ?? [];
-    const averageAchievement =
-      rates.length > 0
-        ? rates.reduce((a, b) => a + b, 0) / rates.length
-        : null;
+    const thresholdScore = weightedAverage(thresholdByDept.get(d.id) ?? []);
+    const progressScore = weightedAverage(progressByDept.get(d.id) ?? []);
+    const qualitativeScore = weightedAverage(qualitativeByDept.get(d.id) ?? []);
+    const compositeComponents: Array<{ score: number; weight: number }> = [];
+    if (thresholdScore !== null) compositeComponents.push({ score: thresholdScore, weight: 30 });
+    if (progressScore !== null) compositeComponents.push({ score: progressScore, weight: 50 });
+    if (qualitativeScore !== null) compositeComponents.push({ score: qualitativeScore, weight: 20 });
+    const compositeScore = weightedAverage(compositeComponents);
+    const averageAchievement = compositeScore ?? (rates.length > 0
+      ? rates.reduce((a, b) => a + b, 0) / rates.length
+      : null);
     return {
       id: d.id,
       name: d.name,
       averageAchievement,
       kpiItemCount: itemCountByDept.get(d.id) ?? 0,
+      scoredKpiCount: scoredCountByDept.get(d.id) ?? 0,
+      thresholdScore,
+      progressScore,
+      qualitativeScore,
     };
   });
 }
@@ -553,6 +595,10 @@ export type DepartmentKpiDetailItem = {
   secondHalfTarget: number | null;
   h1TargetDate: string | null;
   h2TargetDate: string | null;
+  periodStartMonth: number | null;
+  periodEndMonth: number | null;
+  targetDirection: "up" | "down" | "na";
+  targetFinalValue: number | null;
   scheduleRaw: string | null;
   /** 일반(%) / PPM / 수량 / 건수 */
   indicatorType: KpiIndicatorType;
@@ -567,8 +613,12 @@ export type DepartmentKpiDetailItem = {
   currentApprovalStep: string | null;
 };
 
+type ScoreTrack = "threshold" | "progress" | "qualitative";
+
 export type DashboardSummaryStats = {
   totalKpiCount: number;
+  totalScoredKpiCount: number;
+  inputRate: number;
   averageAchievement: number;
   pendingPrimaryCount: number;
   pendingFinalCount: number;
@@ -743,11 +793,17 @@ export async function fetchDepartmentKpiDetail(
 ): Promise<{
   department: { id: string; name: string } | null;
   departmentAverageAchievement: number | null;
+  thresholdScore: number | null;
+  progressScore: number | null;
+  qualitativeScore: number | null;
+  compositeScore: number | null;
   items: DepartmentKpiDetailItem[];
 }> {
   const supabase = createBrowserSupabase();
   const hasYear = await getKpiTargetsHasYearColumn();
   const hasTargetHalf = await getKpiTargetsHasHalfTypeColumn();
+  const hasH1TargetPctColumn = await getKpiTargetsHasColumn("h1_target_pct");
+  const hasH2TargetPctColumn = await getKpiTargetsHasColumn("h2_target_pct");
 
   const { data: dept, error: deptErr } = await supabase
     .from("departments")
@@ -759,6 +815,10 @@ export async function fetchDepartmentKpiDetail(
     return {
       department: null,
       departmentAverageAchievement: null,
+      thresholdScore: null,
+      progressScore: null,
+      qualitativeScore: null,
+      compositeScore: null,
       items: [],
     };
   }
@@ -772,12 +832,46 @@ export async function fetchDepartmentKpiDetail(
     return {
       department: dept ? { id: dept.id, name: dept.name } : null,
       departmentAverageAchievement: null,
+      thresholdScore: null,
+      progressScore: null,
+      qualitativeScore: null,
+      compositeScore: null,
       items: [],
     };
   }
 
   const typedItems = (items ?? []) as Record<string, unknown>[];
   const departmentRates: number[] = [];
+  const thresholdWeighted: Array<{ score: number; weight: number }> = [];
+  const progressWeighted: Array<{ score: number; weight: number }> = [];
+  const qualitativeWeighted: Array<{ score: number; weight: number }> = [];
+
+  function resolveScoreTrack(
+    indicatorType: KpiIndicatorType,
+    bmText: string | null | undefined
+  ): ScoreTrack {
+    const bm = String(bmText ?? "").toLowerCase();
+    if (bm.includes("일정")) return "qualitative";
+    if (indicatorType === "ppm") return "threshold";
+    return "progress";
+  }
+
+  function pushWeightedScore(track: ScoreTrack, score: number | null, weightRaw: string) {
+    if (score === null || !Number.isFinite(score)) return;
+    const w = Number(String(weightRaw ?? "").trim());
+    const weight = Number.isFinite(w) && w > 0 ? w : 1;
+    if (track === "threshold") thresholdWeighted.push({ score, weight });
+    else if (track === "qualitative") qualitativeWeighted.push({ score, weight });
+    else progressWeighted.push({ score, weight });
+  }
+
+  function weightedAverage(rows: Array<{ score: number; weight: number }>): number | null {
+    if (!rows.length) return null;
+    const totalWeight = rows.reduce((s, r) => s + r.weight, 0);
+    if (totalWeight <= 0) return null;
+    const total = rows.reduce((s, r) => s + r.score * r.weight, 0);
+    return total / totalWeight;
+  }
 
   const detailItems: DepartmentKpiDetailItem[] = typedItems.map((raw) => {
     const item = asRecord(raw);
@@ -821,13 +915,17 @@ export async function fetchDepartmentKpiDetail(
       "target_rate",
       "goal_rate",
     ]);
-    const h1TargetDateRaw = pickText(targets[0] ?? {}, [
+    const primaryTarget = targets.find((t) => {
+      const half = normalizeHalfTypeKey(String(t.half_type ?? ""));
+      return half === HALF_TYPE_H1;
+    }) ?? targets[0] ?? {};
+    const h1TargetDateRaw = pickText(primaryTarget, [
       "h1_target",
       "first_half_target",
       "target_h1",
       "first_half",
     ]);
-    const h2TargetDateRaw = pickText(targets[0] ?? {}, [
+    const h2TargetDateRaw = pickText(primaryTarget, [
       "h2_target",
       "second_half_target",
       "target_h2",
@@ -835,28 +933,23 @@ export async function fetchDepartmentKpiDetail(
     ]);
     const h1TargetDate = h1TargetDateRaw === "-" ? null : h1TargetDateRaw;
     const h2TargetDate = h2TargetDateRaw === "-" ? null : h2TargetDateRaw;
-    const target0 = targets[0] ?? {};
+    const targetRows = targets;
+    const firstDraftRow = targetRows.find(
+      (t) => String(t.approval_step ?? "").trim().toLowerCase() === PERF_STATUS_DRAFT
+    );
+    const firstHalfTargetFromPct = targetRows
+      .map((t) => pickNumber(t, ["h1_target_pct", "h1_target_value"]))
+      .find((v) => v !== null) ?? null;
+    const secondHalfTargetFromPct = targetRows
+      .map((t) => pickNumber(t, ["h2_target_pct", "h2_target_value"]))
+      .find((v) => v !== null) ?? null;
     /** 목표(Target) 점선 전용 — 실적은 h1_result/h1_rate(2Q) 등과 분리 */
-    const firstHalfTarget =
-      pickNumber(target0, ["h1_target_value", "h1_target_pct"]) ??
-      parsePercentLike(target0.h1_target) ??
-      parsePercentLike(target0.h1_effect) ??
-      pickNumber(target0, ["h1_rate"]) ??
-      pickNumber(item, [
-        "first_half_target",
-        "h1_target",
-        "target_h1",
-      ]);
-    const secondHalfTarget =
-      pickNumber(target0, ["h2_target_value", "h2_target_pct"]) ??
-      parsePercentLike(target0.h2_target) ??
-      parsePercentLike(target0.h2_effect) ??
-      pickNumber(target0, ["h2_rate"]) ??
-      pickNumber(item, [
-        "second_half_target",
-        "h2_target",
-        "target_h2",
-      ]);
+    const firstHalfTarget = hasH1TargetPctColumn
+      ? firstHalfTargetFromPct
+      : pickNumber(firstDraftRow ?? {}, ["h1_rate"]);
+    const secondHalfTarget = hasH2TargetPctColumn
+      ? secondHalfTargetFromPct
+      : pickNumber(firstDraftRow ?? {}, ["h2_rate"]);
     const firstHalfRate = firstHalfTarget;
     const secondHalfRate = secondHalfTarget;
     const scheduleRaw =
@@ -872,13 +965,24 @@ export async function fetchDepartmentKpiDetail(
         : "unknown";
     const indicatorType = parseKpiIndicatorTypeFromDb(item.indicator_type);
     const targetPpm = pickNumber(item, ["target_value", "target_ppm"]);
+    const periodStartMonth = pickNumber(item, ["period_start_month"]);
+    const periodEndMonth = pickNumber(item, ["period_end_month"]);
+    const targetFinalValue = pickNumber(item, ["target_final_value"]);
+    const directionRaw = String(item.target_direction ?? "").trim().toLowerCase();
+    const targetDirection: "up" | "down" | "na" =
+      directionRaw === "down" ? "down" : directionRaw === "na" ? "na" : "up";
+    const bm = pickText(item, ["bm", "base_measure", "benchmark"]);
+    const weightText = pickText(item, ["weight", "weight_rate", "weighted_score"]);
+    const track = resolveScoreTrack(indicatorType, bm);
+    pushWeightedScore(track, averageAchievement, weightText);
+
     return {
       id: typeof item.id === "string" ? item.id : `kpi-${itemIdText}`,
       mainTopic: pickText(item, ["main_topic", "topic_main"]),
       subTopic: pickText(item, ["sub_topic", "topic_sub", "sub_title", "subtitle"]),
       detailActivity: pickText(item, ["detail_activity"]),
-      bm: pickText(item, ["bm", "base_measure", "benchmark"]),
-      weight: pickText(item, ["weight", "weight_rate", "weighted_score"]),
+      bm,
+      weight: weightText,
       owner: pickText(item, [
         "manager_name",
         "owner",
@@ -894,6 +998,10 @@ export async function fetchDepartmentKpiDetail(
       secondHalfTarget,
       h1TargetDate,
       h2TargetDate,
+      periodStartMonth,
+      periodEndMonth,
+      targetDirection,
+      targetFinalValue,
       scheduleRaw,
       indicatorType,
       targetPpm,
@@ -908,10 +1016,22 @@ export async function fetchDepartmentKpiDetail(
     departmentRates.length > 0
       ? departmentRates.reduce((a, b) => a + b, 0) / departmentRates.length
       : null;
+  const thresholdScore = weightedAverage(thresholdWeighted);
+  const progressScore = weightedAverage(progressWeighted);
+  const qualitativeScore = weightedAverage(qualitativeWeighted);
+  const compositeComponents: Array<{ score: number; weight: number }> = [];
+  if (thresholdScore !== null) compositeComponents.push({ score: thresholdScore, weight: 30 });
+  if (progressScore !== null) compositeComponents.push({ score: progressScore, weight: 50 });
+  if (qualitativeScore !== null) compositeComponents.push({ score: qualitativeScore, weight: 20 });
+  const compositeScore = weightedAverage(compositeComponents);
 
   return {
     department: dept ? { id: dept.id, name: dept.name } : null,
     departmentAverageAchievement,
+    thresholdScore,
+    progressScore,
+    qualitativeScore,
+    compositeScore,
     items: detailItems,
   };
 }
@@ -938,23 +1058,15 @@ export async function fetchDashboardSummaryStats(
     return deptId === filterDeptId;
   });
 
-  const uniqueKpi = new Set<string>();
   let pendingPrimaryCount = 0;
   let pendingFinalCount = 0;
-  const targetsByKpiId = new Map<string, Record<string, unknown>[]>();
 
   for (const row of scoped) {
     const rec = asRecord(row as unknown as Record<string, unknown>);
-    if (typeof rec.kpi_id === "string" && rec.kpi_id.trim()) {
-      uniqueKpi.add(rec.kpi_id);
-      const kid = rec.kpi_id.trim();
-      if (!targetsByKpiId.has(kid)) targetsByKpiId.set(kid, []);
-      targetsByKpiId.get(kid)!.push(rec);
-    }
     const pmRaw = rec.performance_monthly;
     if (performanceMonthlyIsNonEmpty(pmRaw)) {
       const o = pmRaw as Record<string, unknown>;
-      for (let mi = 1; mi <= 12; mi += 1) {
+      for (const mi of KPI_MONTHS) {
         const cell = o[String(mi)];
         if (!cell || typeof cell !== "object" || Array.isArray(cell)) continue;
         const c = cell as PerformanceMonthlyCell;
@@ -995,9 +1107,21 @@ export async function fetchDashboardSummaryStats(
           0
         ) / scopedDeptSummaries.length
       : 0;
+  const totalKpiCount = scopedDeptSummaries.reduce(
+    (acc, d) => acc + (d.kpiItemCount ?? 0),
+    0
+  );
+  const totalScoredKpiCount = scopedDeptSummaries.reduce(
+    (acc, d) => acc + (d.scoredKpiCount ?? 0),
+    0
+  );
+  const inputRate =
+    totalKpiCount > 0 ? (totalScoredKpiCount / totalKpiCount) * 100 : 0;
 
   return {
-    totalKpiCount: uniqueKpi.size,
+    totalKpiCount,
+    totalScoredKpiCount,
+    inputRate,
     averageAchievement,
     pendingPrimaryCount,
     pendingFinalCount,
@@ -1982,7 +2106,7 @@ export async function fetchPerformancesPendingStage(options: {
     if (performanceMonthlyIsNonEmpty(t.performance_monthly)) {
       const o = t.performance_monthly as Record<string, unknown>;
       let stagedMonthPending = false;
-      for (let mi = 1; mi <= 12; mi += 1) {
+      for (const mi of KPI_MONTHS) {
         const cell = o[String(mi)];
         if (!cell || typeof cell !== "object" || Array.isArray(cell)) continue;
         const c = cell as PerformanceMonthlyCell;
@@ -2452,6 +2576,26 @@ export type KpiExcelImportRow = {
   note: string;
 };
 
+export type CreateManualKpiInput = {
+  deptId: string;
+  mainTopic: string;
+  subTopic: string;
+  detailActivity: string;
+  baselineLabel: string;
+  owner: string;
+  weight: number;
+  indicatorType: KpiIndicatorType;
+  targetDirection: "up" | "down" | "na";
+  targetValue: number | null;
+  periodStartMonth: number;
+  periodEndMonth: number;
+  targetFinalValue: number;
+  h1TargetValue: number;
+  h2TargetValue: number | null;
+  h1TargetText: string;
+  h2TargetText: string;
+};
+
 function parseWeightOrZero(raw: string): number {
   const n = Number(String(raw ?? "").trim());
   if (Number.isFinite(n)) return n;
@@ -2464,6 +2608,116 @@ function parsePercentOrNull(raw: string): number | null {
   const n = Number(m[1]);
   if (!Number.isFinite(n)) return null;
   return Math.min(100, Math.max(0, n));
+}
+
+export async function createManualKpiItem(
+  input: CreateManualKpiInput
+): Promise<string> {
+  const supabase = createBrowserSupabase();
+  const safeWeight = Math.trunc(input.weight);
+  if (!Number.isFinite(safeWeight) || safeWeight < 1 || safeWeight > 100) {
+    throw new Error("가중치는 1~100 사이 정수로 입력해 주세요.");
+  }
+  const { data: existingItems, error: sumErr } = await supabase
+    .from("kpi_items")
+    .select("weight")
+    .eq("dept_id", input.deptId);
+  if (sumErr) {
+    throw new Error(sumErr.message);
+  }
+  const existingSum = (existingItems ?? []).reduce((sum, row) => {
+    const n = Number(String((row as Record<string, unknown>).weight ?? "").trim());
+    return Number.isFinite(n) ? sum + n : sum;
+  }, 0);
+  if (existingSum + safeWeight > 100) {
+    throw new Error(
+      `부서 가중치 합계가 100점을 초과합니다. 현재 ${existingSum}점, 추가 ${safeWeight}점으로 ${
+        existingSum + safeWeight
+      }점입니다.`
+    );
+  }
+
+  const { data: inserted, error: itemErr } = await supabase
+    .from("kpi_items")
+    .insert({
+      dept_id: input.deptId,
+      main_topic: input.mainTopic.trim(),
+      sub_topic: input.subTopic.trim(),
+      detail_activity: input.detailActivity.trim(),
+      benchmark: input.baselineLabel.trim(),
+      standard: input.baselineLabel.trim(),
+      weight: safeWeight,
+      manager_name: input.owner.trim(),
+      indicator_type: input.indicatorType,
+      target_value: input.targetValue,
+      period_start_month: input.periodStartMonth,
+      period_end_month: input.periodEndMonth,
+      target_direction: input.targetDirection,
+      target_final_value: input.targetFinalValue,
+    })
+    .select("id")
+    .single();
+  if (itemErr || !inserted?.id) {
+    throw new Error(itemErr?.message || "KPI 항목 생성에 실패했습니다.");
+  }
+
+  const hasYearColumn = await getKpiTargetsHasYearColumn();
+  const hasH1TargetPct = await getKpiTargetsHasColumn("h1_target_pct");
+  const hasH2TargetPct = await getKpiTargetsHasColumn("h2_target_pct");
+  const hasH1TargetValue = await getKpiTargetsHasColumn("h1_target_value");
+  const hasH2TargetValue = await getKpiTargetsHasColumn("h2_target_value");
+  const targetPayload: Record<string, unknown> = {
+    kpi_id: inserted.id,
+    half_type: HALF_TYPE_H1,
+    h1_target: input.h1TargetText.trim() || null,
+    h2_target: input.h2TargetText.trim() || null,
+    h1_effect: input.h1TargetText.trim() || null,
+    h2_effect: input.h2TargetText.trim() || null,
+    approval_step: PERF_STATUS_DRAFT,
+    rejection_reason: null,
+  };
+  if (hasH1TargetValue) {
+    targetPayload.h1_target_value = input.h1TargetValue;
+  }
+  if (hasH2TargetValue) {
+    targetPayload.h2_target_value = input.h2TargetValue;
+  }
+  if (hasH1TargetPct) {
+    targetPayload.h1_target_pct = input.h1TargetValue;
+    targetPayload.h1_rate = null;
+  } else {
+    targetPayload.h1_rate = input.h1TargetValue;
+  }
+  if (hasH2TargetPct) {
+    targetPayload.h2_target_pct = input.h2TargetValue;
+    targetPayload.h2_rate = null;
+  } else {
+    targetPayload.h2_rate = input.h2TargetValue;
+  }
+  if (hasYearColumn) targetPayload.year = CURRENT_KPI_YEAR;
+
+  const filtered = await filterPayloadToExistingKpiTargetColumns(targetPayload);
+  const { error: targetErr } = await supabase.from("kpi_targets").insert(filtered);
+  if (targetErr) {
+    throw new Error(targetErr.message);
+  }
+  const milestones = [
+    { target_month: 6, target_value: input.h1TargetValue, note: input.h1TargetText.trim() || null },
+    { target_month: 12, target_value: input.h2TargetValue, note: input.h2TargetText.trim() || null },
+  ].filter((m) => m.target_value !== null && Number.isFinite(m.target_value));
+  const milestoneRows = milestones
+    .filter((m) => m.target_month >= input.periodStartMonth && m.target_month <= input.periodEndMonth)
+    .map((m) => ({
+      kpi_id: inserted.id,
+      target_month: m.target_month,
+      target_value: m.target_value,
+      note: m.note,
+    }));
+  if (milestoneRows.length > 0) {
+    const { error: milestoneErr } = await supabase.from("kpi_milestones").upsert(milestoneRows);
+    if (milestoneErr) throw new Error(milestoneErr.message);
+  }
+  return inserted.id as string;
 }
 
 async function upsertKpiItemCompat(input: {

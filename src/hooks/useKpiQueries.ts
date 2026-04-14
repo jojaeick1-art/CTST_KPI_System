@@ -25,8 +25,10 @@ import {
   upsertMonthPerformance,
   upsertQuarterPerformance,
   importKpisFromExcelRows,
+  createManualKpiItem,
   updateKpiItemIndicatorSettings,
   type ApprovalWorkflowStage,
+  type CreateManualKpiInput,
   type KpiExcelImportRow,
   type KpiIndicatorType,
   type MonthKey,
@@ -453,6 +455,21 @@ export function useImportKpisByExcelMutation() {
   return useMutation({
     mutationFn: (args: { deptId: string; rows: KpiExcelImportRow[] }) =>
       importKpisFromExcelRows(args),
+    onSuccess: (_, vars) => {
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "department-kpi-detail", vars.deptId],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "department-kpi-summary"],
+      });
+    },
+  });
+}
+
+export function useCreateManualKpiMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: CreateManualKpiInput) => createManualKpiItem(args),
     onSuccess: (_, vars) => {
       void queryClient.invalidateQueries({
         queryKey: ["supabase", "department-kpi-detail", vars.deptId],

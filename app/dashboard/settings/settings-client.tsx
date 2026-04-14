@@ -23,12 +23,14 @@ import { KPI_MONTHS, type MonthKey } from "@/src/lib/kpi-queries";
 import {
   canAccessApprovalsPage,
   canAccessSystemSettings,
+  canViewAllDepartmentCards,
   roleLabelKo,
 } from "@/src/lib/rbac";
 import {
   useCreateDepartmentMutation,
   useClearAllKpiDataMutation,
   useDashboardProfile,
+  useDashboardSummaryStats,
   useDeleteDepartmentMutation,
   useDepartmentsForManagement,
   useMonthDeadlines,
@@ -61,6 +63,18 @@ export function SettingsClient() {
   const pathname = usePathname();
   const profileQuery = useDashboardProfile();
   const profileData = profileQuery.data;
+  const summaryRole = profileData?.profile.role ?? "";
+  const summaryDeptId =
+    typeof profileData?.profile.dept_id === "string" ? profileData.profile.dept_id : null;
+  const summaryStatsQuery = useDashboardSummaryStats(
+    profileQuery.isSuccess &&
+      profileData != null &&
+      canAccessApprovalsPage(summaryRole),
+    canViewAllDepartmentCards(summaryRole) ? null : summaryDeptId
+  );
+  const pendingApprovalCount =
+    (summaryStatsQuery.data?.pendingPrimaryCount ?? 0) +
+    (summaryStatsQuery.data?.pendingFinalCount ?? 0);
   const isAdmin =
     profileQuery.isSuccess &&
     profileData != null &&
@@ -265,6 +279,11 @@ export function SettingsClient() {
             <Link href="/dashboard/approvals" className={navClass("/dashboard/approvals")}>
               <CheckCircle2 className="h-4 w-4 shrink-0 text-sky-600" aria-hidden />
               실적 승인 관리
+              {pendingApprovalCount > 0 ? (
+                <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                  {pendingApprovalCount}
+                </span>
+              ) : null}
             </Link>
           ) : null}
           {canAccessSystemSettings(role) ? (

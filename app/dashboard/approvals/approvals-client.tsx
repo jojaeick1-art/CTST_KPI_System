@@ -20,6 +20,7 @@ import { ChangePasswordButton } from "../change-password-modal";
 import type { PendingPerformanceListRow } from "@/src/lib/kpi-queries";
 import {
   useDashboardProfile,
+  useDashboardSummaryStats,
   usePendingPerformances,
   useWorkflowReviewMutation,
 } from "@/src/hooks/useKpiQueries";
@@ -28,6 +29,7 @@ import {
   canAccessSystemSettings,
   canGroupLeaderApprove,
   canTeamLeaderFinalApprove,
+  canViewAllDepartmentCards,
   hrefDashboardDepartmentList,
   isAdminRole,
   roleLabelKo,
@@ -205,6 +207,13 @@ export function ApprovalsClient() {
       : null;
   const canSeeApprovals =
     resolvedRole !== undefined && canAccessApprovalsPage(resolvedRole);
+  const summaryStatsQuery = useDashboardSummaryStats(
+    profileQuery.isSuccess && profileQuery.data !== null && canSeeApprovals,
+    canViewAllDepartmentCards(resolvedRole ?? "") ? null : userDeptId
+  );
+  const pendingApprovalCount =
+    (summaryStatsQuery.data?.pendingPrimaryCount ?? 0) +
+    (summaryStatsQuery.data?.pendingFinalCount ?? 0);
   const isGroupLeader =
     resolvedRole !== undefined && canGroupLeaderApprove(resolvedRole);
   const isTeamLeader =
@@ -252,7 +261,7 @@ export function ApprovalsClient() {
     if (!toast.open) return;
     const t = setTimeout(
       () => setToast((prev) => ({ ...prev, open: false })),
-      2800
+      1000
     );
     return () => clearTimeout(t);
   }, [toast.open]);
@@ -368,6 +377,7 @@ export function ApprovalsClient() {
       <AppToast
         state={toast}
         onClose={() => setToast((prev) => ({ ...prev, open: false }))}
+        position="top-center"
       />
       <aside className="flex w-full flex-shrink-0 flex-col border-b border-sky-100 bg-white md:w-60 md:border-b-0 md:border-r md:border-sky-100">
         <div className="flex h-[95px] items-center gap-2 border-b border-sky-100 px-4">
@@ -395,6 +405,11 @@ export function ApprovalsClient() {
             <Link href="/dashboard/approvals" className={navClass("/dashboard/approvals")}>
               <CheckCircle2 className="h-4 w-4 shrink-0 text-sky-600" aria-hidden />
               실적 승인 관리
+              {pendingApprovalCount > 0 ? (
+                <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                  {pendingApprovalCount}
+                </span>
+              ) : null}
             </Link>
           ) : null}
           {canAccessSystemSettings(role) ? (

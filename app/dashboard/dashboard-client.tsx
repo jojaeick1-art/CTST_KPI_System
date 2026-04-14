@@ -74,9 +74,8 @@ function DepartmentCard({
 }) {
   const Icon = deptIcon(index);
   const hasAverage = card.averageAchievement !== null;
-  const displayPercent = hasAverage
-    ? Math.round(card.averageAchievement!)
-    : 0;
+  const displayPercent = hasAverage ? Number(card.averageAchievement!.toFixed(1)) : 0;
+  const progressWidth = Math.max(0, Math.min(100, displayPercent));
 
   return (
     <Link
@@ -84,9 +83,12 @@ function DepartmentCard({
       className="block rounded-2xl border border-sky-100 bg-white p-5 shadow-sm shadow-sky-100/40 outline-none ring-sky-300 transition hover:shadow-md hover:shadow-sky-100/60 focus-visible:ring-2"
     >
       <article>
-        <div className="mb-4 flex items-start justify-between gap-2">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-50 text-sky-600">
-            <Icon className="h-5 w-5" aria-hidden />
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-50 text-sky-600">
+              <Icon className="h-5 w-5" aria-hidden />
+            </div>
+            <h3 className="truncate text-base font-semibold text-slate-800">{card.name}</h3>
           </div>
           <span className="text-2xl font-bold tabular-nums text-slate-800">
             {hasAverage ? (
@@ -99,26 +101,36 @@ function DepartmentCard({
             )}
           </span>
         </div>
-        <h3 className="text-sm font-semibold text-slate-800">{card.name}</h3>
-        <p className="mt-0.5 text-xs text-slate-500">
-          KPI 항목 {card.kpiItemCount}건 ·{" "}
-          {hasAverage
-            ? "부서 평균 달성률 (승인된 실적만)"
-            : "승인된 실적 없음 · 승인 후 집계됩니다"}
+        <p className="mt-0.5 text-sm text-slate-600">
+          KPI 항목 {card.kpiItemCount}건 · 실적 입력 {card.scoredKpiCount}건
         </p>
+        <p className="mt-1 text-xs text-slate-500">
+          {hasAverage ? "유형 가중 종합점수(입력 기준)" : "실적 데이터 없음"}
+        </p>
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-slate-600">
+            임계치 {card.thresholdScore === null ? "—" : `${card.thresholdScore.toFixed(1)}%`}
+          </span>
+          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-slate-600">
+            진척형 {card.progressScore === null ? "—" : `${card.progressScore.toFixed(1)}%`}
+          </span>
+          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-slate-600">
+            정성형 {card.qualitativeScore === null ? "—" : `${card.qualitativeScore.toFixed(1)}%`}
+          </span>
+        </div>
         <div
           className="mt-4 h-2 overflow-hidden rounded-full bg-sky-100"
           role="progressbar"
           aria-valuenow={hasAverage ? displayPercent : 0}
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-label={`${card.name} 평균 달성률`}
+          aria-label={`${card.name} 종합점수`}
         >
           <div
             className={`h-full rounded-full bg-gradient-to-r from-sky-400 to-sky-600 transition-all duration-500 ${
               hasAverage ? "" : "opacity-40"
             }`}
-            style={{ width: `${displayPercent}%` }}
+            style={{ width: `${progressWidth}%` }}
           />
         </div>
       </article>
@@ -149,6 +161,9 @@ export function DashboardClient() {
     profileQuery.isSuccess && profileQuery.data !== null,
     canViewAllDepartmentCards(resolvedRole ?? "") ? null : userDeptId
   );
+  const pendingApprovalCount =
+    (summaryStatsQuery.data?.pendingPrimaryCount ?? 0) +
+    (summaryStatsQuery.data?.pendingFinalCount ?? 0);
 
   useEffect(() => {
     if (!profileQuery.isSuccess) return;
@@ -294,6 +309,11 @@ export function DashboardClient() {
             <Link href="/dashboard/approvals" className={navClass("/dashboard/approvals")}>
               <CheckCircle2 className="h-4 w-4 shrink-0 text-sky-600" aria-hidden />
               실적 승인 관리
+              {pendingApprovalCount > 0 ? (
+                <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                  {pendingApprovalCount}
+                </span>
+              ) : null}
             </Link>
           ) : null}
           {canAccessSystemSettings(role) ? (
@@ -364,16 +384,16 @@ export function DashboardClient() {
           <div className="mb-6 flex flex-wrap items-center gap-2 text-slate-700">
             <TrendingUp className="h-5 w-5 text-sky-600" aria-hidden />
             <h2 className="text-base font-semibold">
-              부서별 KPI 진행률 (승인된 실적만)
+              부서별 KPI 종합점수
             </h2>
             <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-sky-800 ring-1 ring-sky-100">
               Supabase 실시간 갱신(30초)
             </span>
           </div>
 
-          <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {summaryStatsQuery.isPending
-              ? [0, 1, 2, 3].map((idx) => (
+              ? [0, 1, 2].map((idx) => (
                   <div
                     key={`stats-skeleton-${idx}`}
                     className="h-[90px] animate-pulse rounded-2xl border border-sky-100 bg-sky-100/60"
@@ -385,16 +405,12 @@ export function DashboardClient() {
                     value: String(summaryStatsQuery.data?.totalKpiCount ?? 0),
                   },
                   {
-                    label: "전체 평균 달성률",
-                    value: `${Math.round(summaryStatsQuery.data?.averageAchievement ?? 0)}%`,
+                    label: "전체 종합점수",
+                    value: `${Number((summaryStatsQuery.data?.averageAchievement ?? 0).toFixed(1))}%`,
                   },
                   {
-                    label: "1차 승인 대기",
-                    value: `${summaryStatsQuery.data?.pendingPrimaryCount ?? 0}건`,
-                  },
-                  {
-                    label: "최종 승인 대기",
-                    value: `${summaryStatsQuery.data?.pendingFinalCount ?? 0}건`,
+                    label: "실적 입력률",
+                    value: `${summaryStatsQuery.data?.totalScoredKpiCount ?? 0} / ${summaryStatsQuery.data?.totalKpiCount ?? 0} (${Number((summaryStatsQuery.data?.inputRate ?? 0).toFixed(1))}%)`,
                   },
                 ].map((card) => (
                   <div
@@ -428,7 +444,7 @@ export function DashboardClient() {
           ) : null}
 
           {deptQuery.isPending ? (
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {[0, 1, 2, 3].map((i) => (
                 <div
                   key={i}
@@ -448,7 +464,7 @@ export function DashboardClient() {
                 : "등록된 부서가 없습니다. Supabase `departments` 테이블에 행을 추가해 주세요."}
             </p>
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {visibleDepartments.map((card, index) => (
                 <DepartmentCard key={card.id} card={card} index={index} />
               ))}
