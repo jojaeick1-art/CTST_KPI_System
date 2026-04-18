@@ -117,7 +117,10 @@ export function KpiCreateModal({
   const nextWeightSum = (weightNum ?? 0) + currentWeightSum;
   const supportsDirection = baseline !== "일정";
   const usesComputedTarget =
-    baseline === "ppm" || baseline === "수량(k)" || baseline === "건";
+    baseline === "ppm" ||
+    baseline === "수량(k)" ||
+    baseline === "건" ||
+    baseline === "금액";
 
   const weightStatus = useMemo(() => {
     if (nextWeightSum === 100) return "ok";
@@ -161,6 +164,7 @@ export function KpiCreateModal({
     if (baseline === "ppm") indicatorType = "ppm";
     if (baseline === "수량(k)") indicatorType = "quantity";
     if (baseline === "건") indicatorType = "count";
+    if (baseline === "금액") indicatorType = "money";
     const targetValue = parseNumberOrNull(targetValueText);
     const autoTargetValue =
       indicatorType !== "normal"
@@ -321,7 +325,8 @@ export function KpiCreateModal({
               const nextUsesComputed =
                 nextBaseline === "ppm" ||
                 nextBaseline === "수량(k)" ||
-                nextBaseline === "건";
+                nextBaseline === "건" ||
+                nextBaseline === "금액";
               if (nextUsesComputed) {
                 setTargetValueText(targetFinalValueText);
               } else {
@@ -374,7 +379,7 @@ export function KpiCreateModal({
             <>
               <label className="sm:col-span-2 text-xs font-medium text-slate-600">
                 자동계산 기준값
-                <FieldHint text="ppm/건/수량(k) 기준에서는 최종목표값과 동일하게 자동 적용됩니다." />
+                <FieldHint text="ppm/건/수량(k)/금액 기준에서는 최종목표값과 동일하게 자동 적용됩니다." />
               </label>
               <div className="sm:col-span-2">
                 <input

@@ -62,6 +62,8 @@ function indicatorBadgeClass(t: KpiIndicatorType): string {
       return "bg-emerald-50 text-emerald-800 ring-emerald-200";
     case "count":
       return "bg-amber-50 text-amber-900 ring-amber-200";
+    case "money":
+      return "bg-teal-50 text-teal-900 ring-teal-200";
     default:
       return "bg-slate-50 text-slate-700 ring-slate-200";
   }
@@ -71,7 +73,9 @@ function indicatorModeShortLabel(t: KpiIndicatorType): string {
   if (t === "normal") return "일반 (%)";
   if (t === "ppm") return "PPM";
   if (t === "quantity") return "수량(k)";
-  return "건수";
+  if (t === "count") return "건수";
+  if (t === "money") return "금액(억)";
+  return "—";
 }
 
 /** "상반기 … / 하반기 …" 형태면 슬래시 기준으로 두 줄 표시 */
@@ -324,7 +328,8 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     isAdmin ||
     (isOwnDepartment &&
       (roleCanAlwaysEdit || canSubmitMonthlyPerformance(ensuredRole)));
-  const canCreateKpi = canExcel && isOwnDepartment;
+  /** 관리자·그룹장: 엑셀 일괄 등록 후 소속 부서 또는(관리자만) 모든 부서에서 항목 추가 가능 */
+  const canCreateKpi = canExcel && (isAdmin || isOwnDepartment);
   const detailItems = detailQuery.data?.items ?? [];
   const totalWeight = detailItems.reduce((sum, item) => {
     const n = Number(String(item.weight ?? "").trim());
@@ -508,7 +513,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
           <p className="text-slate-600">해당 부서를 찾을 수 없습니다.</p>
         ) : (
           <>
-            {!isOwnDepartment ? (
+            {!isOwnDepartment && !isAdmin ? (
               <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-900">
                 타 부서 KPI는 조회만 가능합니다. 실적 등록·수정은 본인 소속 부서에서만 가능합니다.
               </div>

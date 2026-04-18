@@ -32,6 +32,10 @@ import {
   type KpiIndicatorType,
   updatePerformanceMonthlyEvidenceUrl,
   uploadEvidenceFile,
+  resolveEffectiveIndicatorTypeForUi,
+  resolveComputedTargetMetric,
+  resolveNormalMonthlyTargetMetric,
+  type NormalMonthlyTargetContext,
 } from "@/src/lib/kpi-queries";
 import {
   KPI_MONTHS,
@@ -45,7 +49,6 @@ import {
 import {
   formatKoMax2Decimals,
   formatKoPercentMax2,
-  roundToMax2DecimalPlaces,
 } from "@/src/lib/format-display-number";
 import { createBrowserSupabase } from "@/src/lib/supabase";
 import {
@@ -86,6 +89,7 @@ function computedActualLabel(t: KpiIndicatorType): string {
   if (t === "ppm") return "실적 PPM";
   if (t === "quantity") return "실적 수량(k)";
   if (t === "count") return "실적 건수";
+  if (t === "money") return "실적(억)";
   return "실적";
 }
 
@@ -93,16 +97,20 @@ function computedTargetLabel(t: KpiIndicatorType): string {
   if (t === "ppm") return "목표 PPM";
   if (t === "quantity") return "목표 수량(k)";
   if (t === "count") return "목표 건수";
+  if (t === "money") return "목표(억)";
   return "목표";
 }
 
 function computedFormulaHint(t: KpiIndicatorType): string {
   if (t === "ppm") return "Max(0, (2 − 실적/목표) × 100)";
   if (t === "quantity") {
-    return "0~100%: 실적÷목표×100 (목표 이상이면 100%). 실적·목표 숫자는 k(천) 단위로 입력합니다.";
+    return "높을수록 좋음: 실적÷목표×100. 낮을수록 좋음: 목표÷실적×100 (상한 100%). 단위 k(천).";
   }
   if (t === "count") {
-    return "0~100%: 실적÷목표×100 (목표 이상이면 100%)";
+    return "높을수록 좋음: 실적÷목표×100. 낮을수록 좋음: 목표÷실적×100 (상한 100%).";
+  }
+  if (t === "money") {
+    return "금액(억): 높을수록 좋음·낮을수록 좋음은 수량(k)과 동일 공식, 숫자는 억 단위.";
   }
   return "";
 }
@@ -111,6 +119,7 @@ function computedKindSummaryKo(t: KpiIndicatorType): string {
   if (t === "ppm") return "역지표(PPM)";
   if (t === "quantity") return "수량(k)";
   if (t === "count") return "건수";
+  if (t === "money") return "금액(억)";
   return "";
 }
 import {
@@ -138,6 +147,12 @@ function monthHasSubmittedPerformanceInput(
   rawSubmittedPercent: number | null
 ): boolean {
   if (!row) return false;
+  if (indicatorType === "normal") {
+    const av = row.actual_value;
+    if (av !== null && av !== undefined && Number.isFinite(Number(av))) {
+      return true;
+    }
+  }
   if (indicatorUsesComputedAchievement(indicatorType)) {
     const av = row.actual_value;
     if (av !== null && av !== undefined && Number.isFinite(Number(av))) {
@@ -164,6 +179,7 @@ function chartBarTopLabel(
         if (indicatorType === "ppm") return `${formatKoMax2Decimals(n)}ppm`;
         if (indicatorType === "quantity") return `${formatKoMax2Decimals(n)}k`;
         if (indicatorType === "count") return `${formatKoMax2Decimals(n)}건`;
+        if (indicatorType === "money") return `${formatKoMax2Decimals(n)}억`;
       }
     }
     if (rawSubmittedPercent !== null && rawSubmittedPercent !== undefined) {
@@ -173,6 +189,15 @@ function chartBarTopLabel(
       }
     }
     return "";
+  }
+  if (indicatorType === "normal") {
+    const avn = row?.actual_value;
+    if (avn !== null && avn !== undefined) {
+      const n = Number(avn);
+      if (Number.isFinite(n)) {
+        return `${formatKoMax2Decimals(n)}%`;
+      }
+    }
   }
   if (rawSubmittedPercent === null || rawSubmittedPercent === undefined) return "";
   const pct = Number(rawSubmittedPercent);
@@ -342,7 +367,26 @@ function chartValueLabel(indicatorType: KpiIndicatorType, value: number): string
   if (indicatorType === "ppm") return `${formatKoMax2Decimals(value)} ppm`;
   if (indicatorType === "quantity") return `${formatKoMax2Decimals(value)} k`;
   if (indicatorType === "count") return `${formatKoMax2Decimals(value)} 건`;
+  if (indicatorType === "money") return `${formatKoMax2Decimals(value)}억`;
   return formatKoPercentMax2(value);
+}
+
+/** 차트 세로축 단위 안내 — % 그래프 설명과 혼동 방지 */
+function chartVerticalAxisHint(
+  t: KpiIndicatorType,
+  opts?: { normalLinkedToTarget?: boolean }
+): string {
+  if (t === "normal") {
+    if (opts?.normalLinkedToTarget) {
+      return "세로축: 목표선·실적 막대는 같은 단위의 지표값(예 %p). 표시되는 달성률은 목표 대비 자동 계산값입니다.";
+    }
+    return "세로축: 달성률(%) 직접 입력 시 막대=달성률. 목표연동 입력 시 막대=실적 지표값.";
+  }
+  if (t === "ppm") return "세로축: PPM(목표·실적 동일 단위).";
+  if (t === "quantity") return "세로축: 수량 k(천 단위).";
+  if (t === "count") return "세로축: 건수.";
+  if (t === "money") return "세로축: 금액(억).";
+  return "";
 }
 
 function periodRangeLabel(start: number | null, end: number | null): string {
@@ -381,19 +425,29 @@ export function PerformanceModal({
     tone: "info",
   });
 
-  const isComputedItem = kpiItem
-    ? indicatorUsesComputedAchievement(kpiItem.indicatorType)
-    : false;
-  const targetPpm = kpiItem?.targetPpm ?? null;
+  const effectiveIndicatorType = useMemo(
+    () =>
+      kpiItem
+        ? resolveEffectiveIndicatorTypeForUi(kpiItem.indicatorType, kpiItem.bm)
+        : "normal",
+    [kpiItem]
+  );
 
-  const computedEditorPreviewPercent = useMemo(() => {
-    if (!isComputedItem || !kpiItem || targetPpm === null || !(targetPpm > 0)) {
-      return null;
-    }
-    const ap = parseNonNegativeDecimal(editorActualPpm);
-    if (ap === null) return null;
-    return computedAchievementPercent(kpiItem.indicatorType, ap, targetPpm);
-  }, [isComputedItem, kpiItem, targetPpm, editorActualPpm]);
+  const computedTargetMetric = useMemo(
+    () =>
+      kpiItem
+        ? resolveComputedTargetMetric(
+            effectiveIndicatorType,
+            kpiItem.targetPpm,
+            kpiItem.targetFinalValue
+          )
+        : null,
+    [kpiItem, effectiveIndicatorType]
+  );
+
+  const isComputedItem = kpiItem
+    ? indicatorUsesComputedAchievement(effectiveIndicatorType)
+    : false;
 
   const isAdmin = isAdminRole(profileRole);
   const normalizedRole = normalizeRole(profileRole);
@@ -450,6 +504,91 @@ export function PerformanceModal({
     [displayMonthList]
   );
 
+  const normalMonthlyContext = useMemo((): NormalMonthlyTargetContext | null => {
+    if (!kpiItem || activeMonthList.length === 0) return null;
+    return {
+      activeFirstMonth: activeMonthList[0]!,
+      activeLastMonth: activeMonthList[activeMonthList.length - 1]!,
+      periodStartMonth: kpiItem.periodStartMonth,
+      periodEndMonth: kpiItem.periodEndMonth,
+      firstHalfTarget: kpiItem.firstHalfTarget,
+      firstHalfRate: kpiItem.firstHalfRate,
+      secondHalfTarget: kpiItem.secondHalfTarget,
+      secondHalfRate: kpiItem.secondHalfRate,
+      targetFinalValue: kpiItem.targetFinalValue,
+      challengeTarget: kpiItem.challengeTarget,
+      targetDirection: kpiItem.targetDirection,
+    };
+  }, [kpiItem, activeMonthList]);
+
+  const normalMonthlyTargetEditor = useMemo(() => {
+    if (
+      effectiveIndicatorType !== "normal" ||
+      !normalMonthlyContext ||
+      !kpiItem ||
+      kpiItem.targetDirection === "na"
+    ) {
+      return null;
+    }
+    const t = resolveNormalMonthlyTargetMetric(editorMonth, normalMonthlyContext);
+    return t > 0 ? t : null;
+  }, [effectiveIndicatorType, normalMonthlyContext, editorMonth, kpiItem]);
+
+  const normalMetricEntryActive = Boolean(
+    effectiveIndicatorType === "normal" &&
+      kpiItem &&
+      kpiItem.targetDirection !== "na" &&
+      normalMonthlyTargetEditor !== null &&
+      normalMonthlyTargetEditor > 0
+  );
+
+  const computedEditorPreviewPercent = useMemo(() => {
+    if (
+      isComputedItem &&
+      kpiItem &&
+      computedTargetMetric !== null &&
+      computedTargetMetric > 0
+    ) {
+      const ap = parseNonNegativeDecimal(editorActualPpm);
+      if (ap === null) return null;
+      return computedAchievementPercent(
+        effectiveIndicatorType,
+        ap,
+        computedTargetMetric,
+        kpiItem.targetDirection
+      );
+    }
+    if (
+      normalMetricEntryActive &&
+      kpiItem &&
+      normalMonthlyTargetEditor !== null &&
+      normalMonthlyTargetEditor > 0
+    ) {
+      const ap = parseNonNegativeDecimal(editorRate);
+      if (ap === null) return null;
+      return computedAchievementPercent(
+        "normal",
+        ap,
+        normalMonthlyTargetEditor,
+        kpiItem.targetDirection
+      );
+    }
+    return null;
+  }, [
+    isComputedItem,
+    kpiItem,
+    computedTargetMetric,
+    editorActualPpm,
+    effectiveIndicatorType,
+    normalMetricEntryActive,
+    normalMonthlyTargetEditor,
+    editorRate,
+  ]);
+
+  const normalLinkedToTargetChart =
+    effectiveIndicatorType === "normal" &&
+    Boolean(kpiItem && kpiItem.targetDirection !== "na");
+
   const rowByMonth = useMemo(() => {
     const m = new Map<MonthKey, ItemPerformanceRow>();
     for (const r of liveRows) {
@@ -492,30 +631,6 @@ export function PerformanceModal({
 
   const chartData: ChartDatum[] = useMemo(() => {
     if (!kpiItem) return [];
-    const periodStart = activeMonthList[0] ?? 1;
-    const periodEnd = activeMonthList[activeMonthList.length - 1] ?? 12;
-    const h1vRaw = kpiItem.firstHalfTarget ?? kpiItem.firstHalfRate ?? null;
-    const h2vRaw = kpiItem.secondHalfTarget ?? kpiItem.secondHalfRate ?? null;
-    const h1v = h1vRaw ?? 0;
-    const finalTarget =
-      kpiItem.targetFinalValue !== null && kpiItem.targetFinalValue !== undefined
-        ? kpiItem.targetFinalValue
-        : h2vRaw ?? h1vRaw ?? kpiItem.challengeTarget ?? 0;
-    const h1Month = Math.max(periodStart, Math.min(periodEnd, periodStart + 5));
-    const h2Month = Math.max(h1Month + 1, Math.min(periodEnd - 1, periodEnd - 1));
-    const hasH1Kink = h1vRaw !== null;
-    const hasH2Kink = h2vRaw !== null;
-    function segmentValue(
-      month: number,
-      fromMonth: number,
-      toMonth: number,
-      fromValue: number,
-      toValue: number
-    ): number {
-      if (toMonth <= fromMonth) return toValue;
-      const ratio = (month - fromMonth) / (toMonth - fromMonth);
-      return fromValue + (toValue - fromValue) * Math.max(0, Math.min(1, ratio));
-    }
     const series: ChartDatum[] = displayMonthList.map((m) => {
       const row = rowByMonth.get(m);
       const visibleOnChart = isChartVisibleStep(row?.approval_step ?? null);
@@ -531,79 +646,52 @@ export function PerformanceModal({
         Number.isFinite(Number(row.actual_value))
           ? Number(row.actual_value)
           : null;
-      const actual = indicatorUsesComputedAchievement(kpiItem.indicatorType)
-        ? visibleOnChart && rawActualMetric !== null
-          ? rawActualMetric
-          : 0
-        : visibleOnChart && rawSubmitted !== null
-          ? rawSubmitted
+
+      const monthTargetNormal =
+        effectiveIndicatorType === "normal" && normalMonthlyContext
+          ? resolveNormalMonthlyTargetMetric(m, normalMonthlyContext)
           : 0;
+      const normalRowMetricMode =
+        effectiveIndicatorType === "normal" &&
+        kpiItem.targetDirection !== "na" &&
+        monthTargetNormal > 0;
+
+      let actual: number;
+      if (indicatorUsesComputedAchievement(effectiveIndicatorType)) {
+        actual =
+          visibleOnChart && rawActualMetric !== null ? rawActualMetric : 0;
+      } else if (normalRowMetricMode) {
+        if (rawActualMetric !== null) {
+          actual = visibleOnChart ? rawActualMetric : 0;
+        } else {
+          actual =
+            visibleOnChart && rawSubmitted !== null ? rawSubmitted : 0;
+        }
+      } else {
+        actual =
+          visibleOnChart && rawSubmitted !== null ? rawSubmitted : 0;
+      }
+
       const description = row?.description ?? null;
-      const target = indicatorUsesComputedAchievement(kpiItem.indicatorType)
-        ? kpiItem.targetPpm ?? 0
-        : (() => {
-            if (
-              kpiItem.periodStartMonth !== null &&
-              kpiItem.periodEndMonth !== null &&
-              Number.isInteger(kpiItem.periodStartMonth) &&
-              Number.isInteger(kpiItem.periodEndMonth) &&
-              kpiItem.periodStartMonth >= 1 &&
-              kpiItem.periodEndMonth <= 15 &&
-              kpiItem.periodStartMonth <= kpiItem.periodEndMonth
-            ) {
-              const start = kpiItem.periodStartMonth;
-              const end = kpiItem.periodEndMonth;
-              if (m > end) return roundToMax2DecimalPlaces(finalTarget);
-              if (m === end) return roundToMax2DecimalPlaces(finalTarget);
-              if (hasH1Kink && hasH2Kink && h2Month > h1Month) {
-                if (m <= h1Month) {
-                  if (h1Month <= start) return roundToMax2DecimalPlaces(h1vRaw ?? 0);
-                  return roundToMax2DecimalPlaces(
-                    segmentValue(m, start, h1Month, 0, h1vRaw ?? 0)
-                  );
-                }
-                if (m <= h2Month) {
-                  return roundToMax2DecimalPlaces(
-                    segmentValue(m, h1Month, h2Month, h1vRaw ?? 0, h2vRaw ?? h1vRaw ?? 0)
-                  );
-                }
-                return roundToMax2DecimalPlaces(
-                  segmentValue(m, h2Month, end, h2vRaw ?? h1vRaw ?? 0, finalTarget)
-                );
-              }
-              if (hasH1Kink) {
-                if (m <= h1Month) {
-                  if (h1Month <= start) return roundToMax2DecimalPlaces(h1vRaw ?? 0);
-                  return roundToMax2DecimalPlaces(
-                    segmentValue(m, start, h1Month, 0, h1vRaw ?? 0)
-                  );
-                }
-                return roundToMax2DecimalPlaces(
-                  segmentValue(m, h1Month, end, h1vRaw ?? 0, finalTarget)
-                );
-              }
-              const span = Math.max(1, end - start + 1);
-              const progress = (m - start + 1) / span;
-              return roundToMax2DecimalPlaces(finalTarget * Math.max(0, Math.min(1, progress)));
-            }
-            if (m > periodEnd) {
-              return roundToMax2DecimalPlaces(finalTarget);
-            }
-            const legacySpan = Math.max(1, periodEnd - periodStart + 1);
-            const legacyProgress = (m - periodStart + 1) / legacySpan;
-            return roundToMax2DecimalPlaces(
-              finalTarget * Math.max(0, Math.min(1, legacyProgress))
-            );
-          })();
+
+      let target: number;
+      if (indicatorUsesComputedAchievement(effectiveIndicatorType)) {
+        target = computedTargetMetric ?? 0;
+      } else if (normalMonthlyContext) {
+        target = resolveNormalMonthlyTargetMetric(m, normalMonthlyContext);
+      } else {
+        target = 0;
+      }
+
       const showBarTopLabel =
         visibleOnChart ||
         monthHasSubmittedPerformanceInput(
-          kpiItem.indicatorType,
+          effectiveIndicatorType,
           row,
           rawSubmitted
         );
       const topLabel = chartBarTopLabel(
-        kpiItem.indicatorType,
+        effectiveIndicatorType,
         row,
         showBarTopLabel,
         rawSubmitted
@@ -620,7 +708,14 @@ export function PerformanceModal({
       };
     });
     return series;
-  }, [kpiItem, rowByMonth, activeMonthList, displayMonthList]);
+  }, [
+    kpiItem,
+    rowByMonth,
+    displayMonthList,
+    effectiveIndicatorType,
+    computedTargetMetric,
+    normalMonthlyContext,
+  ]);
 
   const chartYDomainMax = useMemo(() => {
     if (!kpiItem) return 100;
@@ -631,11 +726,16 @@ export function PerformanceModal({
     if (!Number.isFinite(mx) || mx <= 0) return 100;
     const paddedMax = mx * 1.2;
     const unit = paddedMax <= 10 ? 1 : 10;
-    if (!indicatorUsesComputedAchievement(kpiItem.indicatorType)) {
-      return Math.max(100, Math.ceil(paddedMax / unit) * unit);
+    const roundedTop = Math.ceil(paddedMax / unit) * unit;
+    const normalMetricYAxis =
+      effectiveIndicatorType === "normal" && kpiItem.targetDirection !== "na";
+    if (!indicatorUsesComputedAchievement(effectiveIndicatorType) && !normalMetricYAxis) {
+      // 일반·측정방향 없음: 막대가 달성률(0~100)일 때 Y축 상한 100%
+      return Math.min(100, Math.max(5, roundedTop));
     }
-    return Math.max(10, Math.ceil(paddedMax / unit) * unit);
-  }, [kpiItem, chartData]);
+    // PPM·수량·건수·금액·일반(목표연동 지표값): 원값 범위
+    return Math.max(10, roundedTop);
+  }, [kpiItem, chartData, effectiveIndicatorType]);
 
   const selectedRow = rowByMonth.get(selectedMonth) ?? null;
   const selectedSubmittedPercent =
@@ -726,16 +826,26 @@ export function PerformanceModal({
     (editorRow?.evidence_path?.trim() ?? "") ||
       (editorRow?.evidence_url?.trim() ?? "")
   );
-  const editorHasEvidenceForSave = Boolean(editorFile) || editorHasStoredEvidence;
+  /** 관리자는 증빙 없이 저장 가능 */
+  const editorHasEvidenceForSave =
+    isAdmin || Boolean(editorFile) || editorHasStoredEvidence;
 
   const syncEditorFromMonth = useCallback(
     (mo: MonthKey) => {
       const row = findRowByMonth(liveRows, mo);
-      setEditorRate(
-        row?.achievement_rate !== null && row?.achievement_rate !== undefined
-          ? String(row.achievement_rate)
-          : ""
-      );
+      if (normalMetricEntryActive) {
+        setEditorRate(
+          row?.actual_value !== null && row?.actual_value !== undefined
+            ? String(row.actual_value)
+            : ""
+        );
+      } else {
+        setEditorRate(
+          row?.achievement_rate !== null && row?.achievement_rate !== undefined
+            ? String(row.achievement_rate)
+            : ""
+        );
+      }
       setEditorActualPpm(
         row?.actual_value !== null && row?.actual_value !== undefined
           ? String(row.actual_value)
@@ -744,7 +854,7 @@ export function PerformanceModal({
       setEditorDescription(row?.description ?? "");
       setEditorFile(null);
     },
-    [liveRows]
+    [liveRows, normalMetricEntryActive]
   );
 
   useEffect(() => {
@@ -767,27 +877,48 @@ export function PerformanceModal({
       );
       return;
     }
-    const isComputed = indicatorUsesComputedAchievement(item.indicatorType);
+    const isComputed = indicatorUsesComputedAchievement(effectiveIndicatorType);
     let rateNum: number;
     let actualMetricSave: number | undefined;
     if (isComputed) {
-      if (item.targetPpm === null || !(item.targetPpm > 0)) {
+      if (computedTargetMetric === null || !(computedTargetMetric > 0)) {
         notify(
           "error",
-          `${computedKindSummaryKo(item.indicatorType)} 항목에는 목표값(kpi_items.target_value)이 필요합니다. 부서 목록에서 그룹장·관리자가 설정해 주세요.`
+          `${computedKindSummaryKo(effectiveIndicatorType)} 항목에는 자동계산용 목표값이 필요합니다. (kpi_items.target_value 또는 금액인 경우 최종목표값) 관리자·그룹장에게 요청해 주세요.`
         );
         return;
       }
       const ap = parseNonNegativeDecimal(editorActualPpm);
       if (ap === null) {
-        notify("error", `${computedActualLabel(item.indicatorType)}을(를) 입력해 주세요.`);
+        notify(
+          "error",
+          `${computedActualLabel(effectiveIndicatorType)}을(를) 입력해 주세요.`
+        );
         return;
       }
       actualMetricSave = ap;
       rateNum = computedAchievementPercent(
-        item.indicatorType,
+        effectiveIndicatorType,
         ap,
-        item.targetPpm
+        computedTargetMetric,
+        item.targetDirection
+      );
+    } else if (
+      normalMetricEntryActive &&
+      normalMonthlyTargetEditor !== null &&
+      normalMonthlyTargetEditor > 0
+    ) {
+      const metric = parseNonNegativeDecimal(editorRate);
+      if (metric === null) {
+        notify("error", "해당 월의 실적 지표값을 입력해 주세요.");
+        return;
+      }
+      actualMetricSave = metric;
+      rateNum = computedAchievementPercent(
+        "normal",
+        metric,
+        normalMonthlyTargetEditor,
+        item.targetDirection
       );
     } else {
       if (!editorRate.trim()) {
@@ -811,8 +942,8 @@ export function PerformanceModal({
         month: editorMonth,
         achievement_rate: rateNum,
         description: editorDescription,
-        indicatorMode: isComputed ? item.indicatorType : "normal",
-        ...(isComputed && actualMetricSave !== undefined
+        indicatorMode: isComputed ? effectiveIndicatorType : "normal",
+        ...(actualMetricSave !== undefined
           ? { actualValue: actualMetricSave }
           : {}),
         ...(isAdmin ? { adminBypassApprovalLock: true } : {}),
@@ -1041,17 +1172,15 @@ export function PerformanceModal({
                 <p className="text-[11px] font-semibold text-slate-500">최종 목표값</p>
                 <p className="mt-0.5 text-sm font-semibold text-slate-800">
                   {item.targetFinalValue !== null && item.targetFinalValue !== undefined
-                    ? chartValueLabel(item.indicatorType, item.targetFinalValue)
+                    ? chartValueLabel(effectiveIndicatorType, item.targetFinalValue)
                     : "—"}
                 </p>
               </div>
               <div className="rounded-lg bg-slate-50 px-3 py-2">
                 <p className="text-[11px] font-semibold text-slate-500">자동계산 기준값</p>
                 <p className="mt-0.5 text-sm font-semibold text-slate-800">
-                  {indicatorUsesComputedAchievement(item.indicatorType) &&
-                  item.targetPpm !== null &&
-                  item.targetPpm > 0
-                    ? chartValueLabel(item.indicatorType, item.targetPpm)
+                  {computedTargetMetric !== null && computedTargetMetric > 0
+                    ? chartValueLabel(effectiveIndicatorType, computedTargetMetric)
                     : "해당 없음"}
                 </p>
               </div>
@@ -1090,13 +1219,13 @@ export function PerformanceModal({
                   domain={[0, chartYDomainMax]}
                   tickFormatter={(v) =>
                     chartValueLabel(
-                      kpiItem.indicatorType,
+                      effectiveIndicatorType,
                       typeof v === "number" ? v : Number(v)
                     )
                   }
                   tick={{ fontSize: 11 }}
                 />
-                <Tooltip content={<KpiChartTooltip indicatorType={kpiItem.indicatorType} />} />
+                <Tooltip content={<KpiChartTooltip indicatorType={effectiveIndicatorType} />} />
                 <Legend content={KpiComposedLegend} />
                 <Bar
                   dataKey="actual"
@@ -1152,7 +1281,17 @@ export function PerformanceModal({
             </ResponsiveContainer>
             <p className="mt-2 px-1 text-[11px] leading-snug text-slate-500">
               목표는 <span className="font-medium text-red-600">점선</span>, 실적은{" "}
-              <span className="font-medium text-sky-700">막대</span>로 표시됩니다. 실적 막대는 승인 반영값 기준입니다.
+              <span className="font-medium text-sky-700">막대</span>로 표시됩니다. 실적 막대는 승인 반영값 기준입니다.{" "}
+              {chartVerticalAxisHint(effectiveIndicatorType, {
+                normalLinkedToTarget: normalLinkedToTargetChart,
+              })}
+              {!indicatorUsesComputedAchievement(effectiveIndicatorType) &&
+              !normalLinkedToTargetChart ? (
+                <>
+                  {" "}
+                  세로축 범위는 해당 항목 목표·실적 최대치에 맞춰 0~100% 안에서 자동 조정됩니다.
+                </>
+              ) : null}
             </p>
           </div>
 
@@ -1186,16 +1325,34 @@ export function PerformanceModal({
               {formatAxisLabel(selectedMonth)} 상세
             </h4>
             <div className="grid gap-3 sm:grid-cols-3">
-              {indicatorUsesComputedAchievement(item.indicatorType) ? (
+              {indicatorUsesComputedAchievement(effectiveIndicatorType) ? (
                 <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                   <p className="text-[11px] font-semibold text-slate-500">
-                    {computedActualLabel(item.indicatorType)}
+                    {computedActualLabel(effectiveIndicatorType)}
                   </p>
                   <p className="mt-0.5 text-base font-bold text-slate-900">
                     {selectedRow?.actual_value !== null &&
                     selectedRow?.actual_value !== undefined
-                      ? chartValueLabel(item.indicatorType, Number(selectedRow.actual_value))
+                      ? chartValueLabel(
+                          effectiveIndicatorType,
+                          Number(selectedRow.actual_value)
+                        )
                       : "—"}
+                  </p>
+                </div>
+              ) : null}
+              {effectiveIndicatorType === "normal" &&
+              selectedRow?.actual_value !== null &&
+              selectedRow?.actual_value !== undefined ? (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                  <p className="text-[11px] font-semibold text-slate-500">
+                    실적 지표값
+                  </p>
+                  <p className="mt-0.5 text-base font-bold text-slate-900">
+                    {chartValueLabel(
+                      "normal",
+                      Number(selectedRow.actual_value)
+                    )}
                   </p>
                 </div>
               ) : null}
@@ -1344,37 +1501,63 @@ export function PerformanceModal({
                 ) : null}
               </div>
 
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-600">
-                  달성률 (%)
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
-                  step={0.1}
-                  value={editorRate}
-                  onChange={(e) => setEditorRate(e.target.value)}
-                  disabled={
-                    indicatorUsesComputedAchievement(item.indicatorType) ||
-                    !activeSet.has(editorMonth) ||
-                    editorMonthLocked
-                  }
-                  className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-[#1a1a1a] outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200 disabled:bg-slate-100"
-                  placeholder="0–100"
-                />
-                {indicatorUsesComputedAchievement(item.indicatorType) ? (
-                  <p className="mt-1 text-[11px] text-slate-500">
-                    {computedKindSummaryKo(item.indicatorType)}는 달성률을 직접 쓰지 않고 아래{" "}
-                    {computedActualLabel(item.indicatorType)}으로부터 계산합니다.
-                  </p>
-                ) : null}
-              </div>
-
-              {indicatorUsesComputedAchievement(item.indicatorType) ? (
+              {!isComputedItem && !normalMetricEntryActive ? (
                 <div>
                   <label className="mb-1 block text-xs font-medium text-slate-600">
-                    {computedActualLabel(item.indicatorType)}
+                    달성률 (%)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={0.1}
+                    value={editorRate}
+                    onChange={(e) => setEditorRate(e.target.value)}
+                    disabled={
+                      !activeSet.has(editorMonth) || editorMonthLocked
+                    }
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-[#1a1a1a] outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200 disabled:bg-slate-100"
+                    placeholder="0–100"
+                  />
+                </div>
+              ) : null}
+
+              {!isComputedItem && normalMetricEntryActive ? (
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-600">
+                    실적 지표값 (목표와 동일 단위)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="any"
+                    value={editorRate}
+                    onChange={(e) => setEditorRate(e.target.value)}
+                    disabled={!activeSet.has(editorMonth) || editorMonthLocked}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-[#1a1a1a] outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200 disabled:bg-slate-100"
+                    placeholder={
+                      item.targetDirection === "down"
+                        ? "예: 불량율 등 (낮을수록 좋음 지표값)"
+                        : "예: 달성 지표값 (높을수록 좋음)"
+                    }
+                  />
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    이번 달 목표 지표:{" "}
+                    {normalMonthlyTargetEditor !== null && normalMonthlyTargetEditor > 0
+                      ? chartValueLabel("normal", normalMonthlyTargetEditor)
+                      : "—"}
+                    . 계산 달성률:{" "}
+                    {computedEditorPreviewPercent !== null
+                      ? formatKoPercentMax2(computedEditorPreviewPercent)
+                      : "지표값 입력 시 표시 (목표 대비 비율, 상한 100%)"}
+                  </p>
+                </div>
+              ) : null}
+
+              {isComputedItem ? (
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-600">
+                    {computedActualLabel(effectiveIndicatorType)}
                   </label>
                   <input
                     type="number"
@@ -1385,20 +1568,23 @@ export function PerformanceModal({
                     disabled={!activeSet.has(editorMonth) || editorMonthLocked}
                     className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-[#1a1a1a] outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200 disabled:bg-slate-100"
                     placeholder={
-                      item.indicatorType === "quantity"
+                      effectiveIndicatorType === "quantity"
                         ? "k(천) 단위 숫자"
-                        : "0 이상"
+                        : effectiveIndicatorType === "money"
+                          ? "억 단위 숫자"
+                          : "0 이상"
                     }
                   />
                   <p className="mt-1 text-[11px] text-slate-500">
-                    {computedTargetLabel(item.indicatorType)}:{" "}
-                    {item.targetPpm !== null && item.targetPpm > 0
-                      ? formatKoMax2Decimals(item.targetPpm)
+                    {computedKindSummaryKo(effectiveIndicatorType)}는 아래 원값으로부터 달성률을 자동 계산합니다.{" "}
+                    {computedTargetLabel(effectiveIndicatorType)}:{" "}
+                    {computedTargetMetric !== null && computedTargetMetric > 0
+                      ? chartValueLabel(effectiveIndicatorType, computedTargetMetric)
                       : "미설정"}
                     . 계산 달성률:{" "}
                     {computedEditorPreviewPercent !== null
                       ? formatKoPercentMax2(computedEditorPreviewPercent)
-                      : `${computedActualLabel(item.indicatorType)} 입력 시 표시 (${computedFormulaHint(item.indicatorType)})`}
+                      : `${computedActualLabel(effectiveIndicatorType)} 입력 시 표시 (${computedFormulaHint(effectiveIndicatorType)})`}
                   </p>
                 </div>
               ) : null}
@@ -1419,7 +1605,12 @@ export function PerformanceModal({
 
               <div>
                 <label className="mb-1 block text-xs font-medium text-slate-600">
-                  이 월 전용 보고서 파일 <span className="text-red-600">(필수)</span>
+                  이 월 전용 보고서 파일{" "}
+                  {isAdmin ? (
+                    <span className="text-slate-500">(관리자: 선택)</span>
+                  ) : (
+                    <span className="text-red-600">(필수)</span>
+                  )}
                 </label>
                 <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-sky-200 bg-sky-50/60 px-3 py-2 text-sm text-slate-700 hover:bg-sky-50">
                   <Upload className="h-4 w-4 text-sky-600" />
@@ -1434,8 +1625,9 @@ export function PerformanceModal({
                   />
                 </label>
                 <p className="mt-1 text-[11px] text-slate-500">
-                  최초 등록 시 파일 첨부가 필요합니다. 이미 첨부된 증빙이 있는 월은 달성률·코멘트만
-                  바꿀 수 있으며, 파일을 다시 선택하면 교체됩니다.
+                  {isAdmin
+                    ? "관리자 계정은 증빙 없이 저장할 수 있습니다. 파일을 선택하면 해당 월 증빙으로 저장됩니다."
+                    : "최초 등록 시 파일 첨부가 필요합니다. 이미 첨부된 증빙이 있는 월은 달성률·코멘트만 바꿀 수 있으며, 파일을 다시 선택하면 교체됩니다."}
                 </p>
               </div>
             </div>
@@ -1457,9 +1649,12 @@ export function PerformanceModal({
                   !activeSet.has(editorMonth) ||
                   editorMonthLocked ||
                   !editorHasEvidenceForSave ||
-                  (indicatorUsesComputedAchievement(item.indicatorType) &&
+                  (isComputedItem &&
                     parseNonNegativeDecimal(editorActualPpm) === null) ||
-                  (!indicatorUsesComputedAchievement(item.indicatorType) &&
+                  (normalMetricEntryActive &&
+                    parseNonNegativeDecimal(editorRate) === null) ||
+                  (!isComputedItem &&
+                    !normalMetricEntryActive &&
                     !editorRate.trim())
                 }
                 className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-60"

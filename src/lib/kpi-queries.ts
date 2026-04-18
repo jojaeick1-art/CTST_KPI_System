@@ -1,5 +1,6 @@
 import { createBrowserSupabase } from "@/src/lib/supabase";
 import { normalizeRole } from "@/src/lib/rbac";
+import { roundToMax2DecimalPlaces } from "@/src/lib/format-display-number";
 import type {
   DepartmentKpiSummary,
   KpiItemWithPerformances,
@@ -215,38 +216,179 @@ export function reversePpmAchievementPercent(
 }
 
 /** DB·UI 공통 — `kpi_items.indicator_type` */
-export type KpiIndicatorType = "normal" | "ppm" | "quantity" | "count";
+export type KpiIndicatorType = "normal" | "ppm" | "quantity" | "count" | "money";
 
 export function indicatorUsesComputedAchievement(
   t: KpiIndicatorType
-): t is "ppm" | "quantity" | "count" {
+): t is "ppm" | "quantity" | "count" | "money" {
   return t !== "normal";
 }
 
 /**
- * 수량(k)·건수: 목표 대비 실적 (실적/목표×100), 0~100%로 표시.
- * 실적이 목표를 넘으면 100%로 캡.
+ * 수량(k)·건수·금액(억): 목표 대비 달성률 0~100%.
+ * - 높을수록 좋음: 실적÷목표×100 (목표 이상이면 100% 캡)
+ * - 낮을수록 좋음: 목표÷실적×100 (실적이 목표 이하면 100%에 가깝게)
  */
-export function quantityCountAchievementPercent(
+export function quantityLikeAchievementPercent(
   actual: number,
-  target: number
+  target: number,
+  higherIsBetter: boolean
 ): number {
   if (!Number.isFinite(actual) || !Number.isFinite(target) || target <= 0) {
     return 0;
   }
-  return clampPercent100((actual / target) * 100);
+  if (higherIsBetter) {
+    return clampPercent100((actual / target) * 100);
+  }
+  return clampPercent100((target / Math.max(actual, 1e-12)) * 100);
+}
+
+/** @deprecated {@link quantityLikeAchievementPercent} 사용 */
+export function quantityCountAchievementPercent(
+  actual: number,
+  target: number
+): number {
+  return quantityLikeAchievementPercent(actual, target, true);
 }
 
 export function computedAchievementPercent(
   indicator: KpiIndicatorType,
   actual: number,
-  target: number
+  target: number,
+  targetDirection: "up" | "down" | "na" = "up"
 ): number {
   if (indicator === "ppm") return reversePpmAchievementPercent(actual, target);
-  if (indicator === "quantity" || indicator === "count") {
-    return quantityCountAchievementPercent(actual, target);
+  if (
+    indicator === "quantity" ||
+    indicator === "count" ||
+    indicator === "money"
+  ) {
+    const higher = targetDirection !== "down";
+    return quantityLikeAchievementPercent(actual, target, higher);
+  }
+  /**
+   * 일반(%) KPI
+   * - 측정방향이 `na`이거나, 유효한 목표값이 없으면: 입력값을 그대로 달성률로 간주(레거시).
+   * - 그 외(높을수록/낮을수록): `actual`은 실적 지표값, `target`은 해당 월 목표 지표값 — 수량형과 동일 비율식.
+   */
+  if (indicator === "normal") {
+    if (targetDirection === "na" || !Number.isFinite(target) || target <= 0) {
+      return clampPercent100(actual);
+    }
+    const higher = targetDirection !== "down";
+    return quantityLikeAchievementPercent(actual, target, higher);
   }
   return clampPercent100(actual);
+}
+
+/** 차트·실적 등록용 — `PerformanceModal` 목표선과 동일 규칙의 월별 목표 지표값 */
+export type NormalMonthlyTargetContext = {
+  activeFirstMonth: number;
+  activeLastMonth: number;
+  periodStartMonth: number | null;
+  periodEndMonth: number | null;
+  firstHalfTarget: number | null;
+  firstHalfRate: number | null;
+  secondHalfTarget: number | null;
+  secondHalfRate: number | null;
+  targetFinalValue: number | null;
+  challengeTarget: number | null;
+  targetDirection: "up" | "down" | "na";
+};
+
+export function resolveNormalMonthlyTargetMetric(
+  month: MonthKey,
+  ctx: NormalMonthlyTargetContext
+): number {
+  const periodStart = ctx.activeFirstMonth;
+  const periodEnd = ctx.activeLastMonth;
+  const h1vRaw = ctx.firstHalfTarget ?? ctx.firstHalfRate ?? null;
+  const h2vRaw = ctx.secondHalfTarget ?? ctx.secondHalfRate ?? null;
+  const finalTarget =
+    ctx.targetFinalValue !== null && ctx.targetFinalValue !== undefined
+      ? ctx.targetFinalValue
+      : h2vRaw ?? h1vRaw ?? ctx.challengeTarget ?? 0;
+  const h1Month = Math.max(periodStart, Math.min(periodEnd, periodStart + 5));
+  const h2Month = Math.max(h1Month + 1, Math.min(periodEnd - 1, periodEnd - 1));
+  const hasH1Kink = h1vRaw !== null;
+  const hasH2Kink = h2vRaw !== null;
+  const downBetter = ctx.targetDirection === "down";
+  function segmentValue(
+    m: number,
+    fromMonth: number,
+    toMonth: number,
+    fromValue: number,
+    toValue: number
+  ): number {
+    if (toMonth <= fromMonth) return toValue;
+    const ratio = (m - fromMonth) / (toMonth - fromMonth);
+    return fromValue + (toValue - fromValue) * Math.max(0, Math.min(1, ratio));
+  }
+  const m = month;
+  if (
+    ctx.periodStartMonth !== null &&
+    ctx.periodEndMonth !== null &&
+    Number.isInteger(ctx.periodStartMonth) &&
+    Number.isInteger(ctx.periodEndMonth) &&
+    ctx.periodStartMonth >= 1 &&
+    ctx.periodEndMonth <= 15 &&
+    ctx.periodStartMonth <= ctx.periodEndMonth
+  ) {
+    const start = ctx.periodStartMonth;
+    const end = ctx.periodEndMonth;
+    if (m > end) return roundToMax2DecimalPlaces(finalTarget);
+    if (m === end) return roundToMax2DecimalPlaces(finalTarget);
+    if (hasH1Kink && hasH2Kink && h2Month > h1Month) {
+      if (m <= h1Month) {
+        if (h1Month <= start) return roundToMax2DecimalPlaces(h1vRaw ?? 0);
+        const v0 = downBetter ? (h1vRaw ?? 0) : 0;
+        const v1 = h1vRaw ?? 0;
+        return roundToMax2DecimalPlaces(segmentValue(m, start, h1Month, v0, v1));
+      }
+      if (m <= h2Month) {
+        return roundToMax2DecimalPlaces(
+          segmentValue(m, h1Month, h2Month, h1vRaw ?? 0, h2vRaw ?? h1vRaw ?? 0)
+        );
+      }
+      return roundToMax2DecimalPlaces(
+        segmentValue(m, h2Month, end, h2vRaw ?? h1vRaw ?? 0, finalTarget)
+      );
+    }
+    if (hasH1Kink) {
+      if (m <= h1Month) {
+        if (h1Month <= start) return roundToMax2DecimalPlaces(h1vRaw ?? 0);
+        const v0b = downBetter ? (h1vRaw ?? 0) : 0;
+        const v1b = h1vRaw ?? 0;
+        return roundToMax2DecimalPlaces(segmentValue(m, start, h1Month, v0b, v1b));
+      }
+      return roundToMax2DecimalPlaces(
+        segmentValue(m, h1Month, end, h1vRaw ?? 0, finalTarget)
+      );
+    }
+    const span = Math.max(1, end - start + 1);
+    const progress = (m - start + 1) / span;
+    if (downBetter && hasH1Kink && h1vRaw !== null && h1vRaw !== undefined) {
+      const h1 = Number(h1vRaw);
+      return roundToMax2DecimalPlaces(
+        h1 + (finalTarget - h1) * Math.max(0, Math.min(1, progress))
+      );
+    }
+    return roundToMax2DecimalPlaces(finalTarget * Math.max(0, Math.min(1, progress)));
+  }
+  if (m > periodEnd) {
+    return roundToMax2DecimalPlaces(finalTarget);
+  }
+  const legacySpan = Math.max(1, periodEnd - periodStart + 1);
+  const legacyProgress = (m - periodStart + 1) / legacySpan;
+  if (downBetter && hasH1Kink && h1vRaw !== null && h1vRaw !== undefined) {
+    const h1 = Number(h1vRaw);
+    return roundToMax2DecimalPlaces(
+      h1 + (finalTarget - h1) * Math.max(0, Math.min(1, legacyProgress))
+    );
+  }
+  return roundToMax2DecimalPlaces(
+    finalTarget * Math.max(0, Math.min(1, legacyProgress))
+  );
 }
 
 function parseKpiIndicatorTypeFromDb(raw: unknown): KpiIndicatorType {
@@ -254,7 +396,51 @@ function parseKpiIndicatorTypeFromDb(raw: unknown): KpiIndicatorType {
   if (s === "ppm" || s === "reverse" || s === "역지표") return "ppm";
   if (s === "quantity" || s === "수량" || s === "qty") return "quantity";
   if (s === "count" || s === "건수" || s === "cnt") return "count";
+  if (s === "money" || s === "금액" || s === "억") return "money";
   return "normal";
+}
+
+/**
+ * DB에 `normal`만 저장된 레거시 금액 KPI — 측정기준(bm)에 「금액」이 있으면 UI·저장은 money로 맞춤.
+ * (장기적으로는 `kpi_items.indicator_type = money` + 마이그레이션 권장)
+ */
+export function resolveEffectiveIndicatorTypeForUi(
+  indicatorType: KpiIndicatorType,
+  bm: string | null | undefined
+): KpiIndicatorType {
+  if (indicatorType !== "normal") return indicatorType;
+  if (String(bm ?? "").toLowerCase().includes("금액")) return "money";
+  return "normal";
+}
+
+/**
+ * 자동계산 항목의 목표 원값: `target_value` 우선.
+ * 금액 레거시에서 `target_value`가 비어 있으면 `target_final_value`(억)를 목표로 사용.
+ */
+export function resolveComputedTargetMetric(
+  effectiveType: KpiIndicatorType,
+  targetPpm: number | null | undefined,
+  targetFinalValue: number | null | undefined
+): number | null {
+  if (!indicatorUsesComputedAchievement(effectiveType)) return null;
+  if (
+    targetPpm !== null &&
+    targetPpm !== undefined &&
+    Number.isFinite(targetPpm) &&
+    targetPpm > 0
+  ) {
+    return targetPpm;
+  }
+  if (
+    effectiveType === "money" &&
+    targetFinalValue !== null &&
+    targetFinalValue !== undefined &&
+    Number.isFinite(targetFinalValue) &&
+    targetFinalValue > 0
+  ) {
+    return targetFinalValue;
+  }
+  return null;
 }
 
 function pctRoughlyEqual(a: number, b: number): boolean {
@@ -311,25 +497,31 @@ function performanceMonthlyIsNonEmpty(raw: unknown): boolean {
 }
 
 /**
- * `performance_monthly`: 월별 달성률을 모두 집계
- * (항목 종합 달성률 계산용).
+ * `performance_monthly`: **실적이 등록된 가장 늦은 평가월** 하나의 달성률만 사용
+ * (%·수량·건·금액 등 공통 — 종합/부서 점수의 항목 대표값).
  */
-function pushMonthlyAchievements(
-  t: Record<string, unknown>,
-  list: number[]
-): void {
+function monthlyAchievementRatesLatestRegisteredMonth(
+  t: Record<string, unknown>
+): number[] {
   const raw = t.performance_monthly;
-  if (!performanceMonthlyIsNonEmpty(raw)) return;
+  if (!performanceMonthlyIsNonEmpty(raw)) return [];
   const o = raw as Record<string, unknown>;
+  let bestMonth = -1;
+  let bestRate: number | null = null;
   for (const mi of KPI_MONTHS) {
     const cell = o[String(mi)];
     if (!cell || typeof cell !== "object" || Array.isArray(cell)) continue;
     const rec = cell as PerformanceMonthlyCell;
     const rate = toNum(rec.achievement_rate as number | string | null | undefined);
-    if (rate !== null) {
-      list.push(rate);
+    if (rate === null || !Number.isFinite(rate)) continue;
+    const miNum = Number(mi);
+    if (miNum > bestMonth) {
+      bestMonth = miNum;
+      bestRate = clampPercent100(rate);
     }
   }
+  if (bestMonth < 0 || bestRate === null) return [];
+  return [bestRate];
 }
 
 function pushApprovedHalfAchievements(
@@ -396,7 +588,7 @@ function collectApprovedAchievementRatesForItemTargets(
     performanceMonthlyIsNonEmpty(t.performance_monthly)
   );
   if (primaryMonthly) {
-    pushMonthlyAchievements(primaryMonthly, rates);
+    rates.push(...monthlyAchievementRatesLatestRegisteredMonth(primaryMonthly));
     return rates;
   }
   for (const t of targets) {
@@ -407,8 +599,8 @@ function collectApprovedAchievementRatesForItemTargets(
 
 /**
  * 목록·집계에서 KPI 항목 1건의 대표 달성률.
- * - 월별 JSON(`performance_monthly`)은 저장된 월 값을 평균 집계.
- * - 레거시 분기·반기도 수집된 값 평균으로 집계.
+ * - 월별 JSON: **마지막 등록 월** 기준 1값(위 함수 참고).
+ * - 레거시 분기·반기: 수집된 값 평균.
  */
 function representativeAchievementPercentForRates(
   rates: number[]
@@ -1768,8 +1960,9 @@ export async function upsertMonthPerformance(
     description: string;
     evidenceUrl?: string | null;
     /**
-     * `normal`: 달성률만. 그 외: 공식으로 산출한 달성률 + `actual_value`에 실적 원값.
-     * ppm은 달성률 상한 없음(0 이상), quantity·count는 0~100.
+     * `normal`: 기본은 달성률만. 목표연동 입력 시에만 `actual_value`에 실적 지표값(%p 등).
+     * 그 외 타입: 공식으로 산출한 달성률 + `actual_value`에 실적 원값.
+     * ppm은 달성률 상한 없음(0 이상), quantity·count·normal 계산 결과는 0~100.
      */
     indicatorMode?: KpiIndicatorType;
     actualValue?: number | null;
@@ -1863,6 +2056,13 @@ export async function upsertMonthPerformance(
     ) {
       nextCell.actual_value = input.actualValue;
     }
+  } else if (
+    mode === "normal" &&
+    input.actualValue !== null &&
+    input.actualValue !== undefined &&
+    Number.isFinite(input.actualValue)
+  ) {
+    nextCell.actual_value = input.actualValue;
   } else {
     delete nextCell.actual_value;
   }
