@@ -32,7 +32,7 @@ function showError(
   message: string,
   setError: (s: string) => void
 ) {
-  console.error("[CTST 로그인]", message);
+  console.error("[C-ONE 로그인]", message);
   setError(message);
   window.alert(`로그인 오류\n\n${message}`);
 }
@@ -145,7 +145,7 @@ export function LoginForm() {
     })().catch((err: unknown) => {
       const message =
         err instanceof Error ? err.message : "처리 중 예기치 않은 오류가 발생했습니다.";
-      console.error("[CTST 로그인] 미처리 오류", err);
+      console.error("[C-ONE 로그인] 미처리 오류", err);
       setLoading(false);
       showError(message, setError);
     });
@@ -157,11 +157,11 @@ export function LoginForm() {
       className="flex w-full max-w-md flex-col gap-5 rounded-2xl border border-sky-100/80 bg-white/90 p-8 shadow-lg shadow-sky-100/50 backdrop-blur-sm"
     >
       <div className="space-y-1 text-center">
-        <h1 className="text-xl font-semibold tracking-tight text-slate-800">
-          CTST KPI
+        <h1 className="text-lg font-semibold tracking-tight text-slate-800">
+          통합 계정 로그인
         </h1>
         <p className="text-sm text-slate-500">
-          계정 ID와 비밀번호로 로그인하세요
+          통합 계정 아이디와 비밀번호를 입력해 주세요
         </p>
       </div>
 

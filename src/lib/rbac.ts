@@ -103,6 +103,12 @@ export function canAccessSystemSettings(role: string | null | undefined): boolea
   return normalizeRole(role) === "admin";
 }
 
+/** CAPA 레시피(모델·공정·설비) CUD — 관리자·대표·그룹장 */
+export function canManageCapaRecipe(role: string | null | undefined): boolean {
+  const n = normalizeRole(role);
+  return n === "admin" || n === "ceo" || n === "group_leader";
+}
+
 /** KPI 엑셀 일괄 등록 — 관리자, 그룹장 */
 export function canBulkUploadKpiExcel(role: string | null | undefined): boolean {
   const n = normalizeRole(role);

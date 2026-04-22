@@ -55,6 +55,9 @@ function approvalStepAfterPerformanceSubmit(
   actorRole: string | null | undefined
 ): string {
   const actor = normalizeRole(actorRole);
+  if (actor === "team_leader") {
+    return PERF_STATUS_APPROVED;
+  }
   if (actor === "group_leader") return PERF_STATUS_PENDING_FINAL;
   return PERF_STATUS_PENDING_PRIMARY;
 }
@@ -216,16 +219,23 @@ export function reversePpmAchievementPercent(
 }
 
 /** DB·UI 공통 — `kpi_items.indicator_type` */
-export type KpiIndicatorType = "normal" | "ppm" | "quantity" | "count" | "money";
+export type KpiIndicatorType =
+  | "normal"
+  | "ppm"
+  | "quantity"
+  | "count"
+  | "money"
+  | "time"
+  | "uph";
 
 export function indicatorUsesComputedAchievement(
   t: KpiIndicatorType
-): t is "ppm" | "quantity" | "count" | "money" {
+): t is "ppm" | "quantity" | "count" | "money" | "time" | "uph" {
   return t !== "normal";
 }
 
 /**
- * 수량(k)·건수·금액(억): 목표 대비 달성률 0~100%.
+ * 수량(k)·건수·금액(억)·시간·UPH: 목표 대비 달성률 0~100%.
  * - 높을수록 좋음: 실적÷목표×100 (목표 이상이면 100% 캡)
  * - 낮을수록 좋음: 목표÷실적×100 (실적이 목표 이하면 100%에 가깝게)
  */
@@ -261,7 +271,9 @@ export function computedAchievementPercent(
   if (
     indicator === "quantity" ||
     indicator === "count" ||
-    indicator === "money"
+    indicator === "money" ||
+    indicator === "time" ||
+    indicator === "uph"
   ) {
     const higher = targetDirection !== "down";
     return quantityLikeAchievementPercent(actual, target, higher);
@@ -397,6 +409,10 @@ function parseKpiIndicatorTypeFromDb(raw: unknown): KpiIndicatorType {
   if (s === "quantity" || s === "수량" || s === "qty") return "quantity";
   if (s === "count" || s === "건수" || s === "cnt") return "count";
   if (s === "money" || s === "금액" || s === "억") return "money";
+  if (s === "time" || s === "시간" || s === "hr" || s === "hour" || s === "hours") {
+    return "time";
+  }
+  if (s === "uph" || s === "생산성" || s === "생산성(uph)") return "uph";
   return "normal";
 }
 
@@ -791,6 +807,7 @@ export type DepartmentKpiDetailItem = {
   periodEndMonth: number | null;
   targetDirection: "up" | "down" | "na";
   targetFinalValue: number | null;
+  monthlyTargets: Partial<Record<number, number>>;
   scheduleRaw: string | null;
   /** 일반(%) / PPM / 수량 / 건수 */
   indicatorType: KpiIndicatorType;
@@ -1017,7 +1034,7 @@ export async function fetchDepartmentKpiDetail(
 
   const { data: items, error: itemErr } = await supabase
     .from("kpi_items")
-    .select("*, kpi_targets(*)")
+    .select("*, kpi_targets(*), kpi_milestones(target_month, target_value, note)")
     .eq("dept_id", departmentId);
 
   if (itemErr) {
@@ -1126,6 +1143,23 @@ export async function fetchDepartmentKpiDetail(
     const h1TargetDate = h1TargetDateRaw === "-" ? null : h1TargetDateRaw;
     const h2TargetDate = h2TargetDateRaw === "-" ? null : h2TargetDateRaw;
     const targetRows = targets;
+    const milestoneRows = Array.isArray(item.kpi_milestones)
+      ? item.kpi_milestones.map(asRecord)
+      : [];
+    const monthlyTargets = milestoneRows.reduce<Partial<Record<number, number>>>((acc, row) => {
+      const month = toNum(row.target_month as number | string | null | undefined);
+      const value = toNum(row.target_value as number | string | null | undefined);
+      if (
+        month !== null &&
+        value !== null &&
+        Number.isInteger(month) &&
+        month >= 1 &&
+        month <= 15
+      ) {
+        acc[month] = value;
+      }
+      return acc;
+    }, {});
     const firstDraftRow = targetRows.find(
       (t) => String(t.approval_step ?? "").trim().toLowerCase() === PERF_STATUS_DRAFT
     );
@@ -1194,6 +1228,7 @@ export async function fetchDepartmentKpiDetail(
       periodEndMonth,
       targetDirection,
       targetFinalValue,
+      monthlyTargets,
       scheduleRaw,
       indicatorType,
       targetPpm,
@@ -2665,7 +2700,7 @@ export async function updateKpiItemIndicatorSettings(input: {
   const t = input.targetPpm;
   if (t === null || !Number.isFinite(t) || t <= 0) {
     throw new Error(
-      "PPM·수량(k)·건수 방식은 목표값을 0보다 큰 숫자로 입력해 주세요. 수량(k)은 k(천) 단위입니다."
+      "PPM·수량(k)·건수·금액(억)·시간(h)·UPH 방식은 목표값을 0보다 큰 숫자로 입력해 주세요."
     );
   }
   const { error } = await supabase
@@ -2695,6 +2730,130 @@ export type MonthDeadlineRow = {
   month: MonthKey;
   input_deadline: string | null;
 };
+
+export const CAPA_SIMULATOR_SETTING_KEY = "CAPA_SIMULATOR_ENABLED";
+export const VOC_SETTING_KEY = "VOC_ENABLED";
+export const KPI_SETTING_KEY = "KPI_ENABLED";
+export type AppFeatureKey = "capa" | "voc" | "kpi";
+
+const APP_FEATURE_SETTING_BY_KEY: Record<AppFeatureKey, string> = {
+  capa: CAPA_SIMULATOR_SETTING_KEY,
+  voc: VOC_SETTING_KEY,
+  kpi: KPI_SETTING_KEY,
+};
+
+const FEATURE_ENABLED_DATE = "2099-12-31";
+const FEATURE_DISABLED_DATE = "1970-01-01";
+
+function parseEnabledText(value: string | null | undefined): boolean {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === FEATURE_ENABLED_DATE) return true;
+  if (normalized === FEATURE_DISABLED_DATE) return false;
+  return (
+    normalized === "1" ||
+    normalized === "true" ||
+    normalized === "yes" ||
+    normalized === "y" ||
+    normalized === "on" ||
+    normalized === "enabled" ||
+    normalized === "open"
+  );
+}
+
+export async function fetchCapaSimulatorEnabled(): Promise<boolean> {
+  const supabase = createBrowserSupabase();
+  const { data, error } = await supabase
+    .from("system_settings")
+    .select("input_deadline")
+    .eq("quarter", CAPA_SIMULATOR_SETTING_KEY)
+    .maybeSingle();
+  if (error) {
+    throw new Error(
+      `${error.message} (system_settings 테이블이 없다면 schema-kpi.sql의 생성 SQL을 실행해 주세요.)`
+    );
+  }
+  const raw =
+    data && typeof (data as { input_deadline?: unknown }).input_deadline === "string"
+      ? ((data as { input_deadline: string }).input_deadline ?? null)
+      : null;
+  return parseEnabledText(raw);
+}
+
+async function fetchFeatureEnabledBySettingKey(settingKey: string): Promise<boolean> {
+  const supabase = createBrowserSupabase();
+  const { data, error } = await supabase
+    .from("system_settings")
+    .select("input_deadline")
+    .eq("quarter", settingKey)
+    .maybeSingle();
+  if (error) {
+    throw new Error(
+      `${error.message} (system_settings 테이블이 없다면 schema-kpi.sql의 생성 SQL을 실행해 주세요.)`
+    );
+  }
+  const raw =
+    data && typeof (data as { input_deadline?: unknown }).input_deadline === "string"
+      ? ((data as { input_deadline: string }).input_deadline ?? null)
+      : null;
+  return parseEnabledText(raw);
+}
+
+export async function saveCapaSimulatorEnabled(enabled: boolean): Promise<void> {
+  const supabase = createBrowserSupabase();
+  const value = enabled ? FEATURE_ENABLED_DATE : FEATURE_DISABLED_DATE;
+  const { data: updated, error: updateErr } = await supabase
+    .from("system_settings")
+    .update({ input_deadline: value })
+    .eq("quarter", CAPA_SIMULATOR_SETTING_KEY)
+    .select("quarter");
+  if (updateErr) {
+    throw new Error(
+      `${updateErr.message} (system_settings 테이블이 없다면 schema-kpi.sql의 생성 SQL을 실행해 주세요.)`
+    );
+  }
+  if (updated && updated.length > 0) {
+    return;
+  }
+  const { error } = await supabase.from("system_settings").insert({
+    quarter: CAPA_SIMULATOR_SETTING_KEY,
+    input_deadline: value,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function fetchAppFeatureAvailability(): Promise<Record<AppFeatureKey, boolean>> {
+  const [capa, voc, kpi] = await Promise.all([
+    fetchFeatureEnabledBySettingKey(APP_FEATURE_SETTING_BY_KEY.capa),
+    fetchFeatureEnabledBySettingKey(APP_FEATURE_SETTING_BY_KEY.voc),
+    fetchFeatureEnabledBySettingKey(APP_FEATURE_SETTING_BY_KEY.kpi),
+  ]);
+  return { capa, voc, kpi };
+}
+
+export async function saveAppFeatureAvailability(
+  feature: AppFeatureKey,
+  enabled: boolean
+): Promise<void> {
+  const settingKey = APP_FEATURE_SETTING_BY_KEY[feature];
+  const supabase = createBrowserSupabase();
+  const value = enabled ? FEATURE_ENABLED_DATE : FEATURE_DISABLED_DATE;
+  const { data: updated, error: updateErr } = await supabase
+    .from("system_settings")
+    .update({ input_deadline: value })
+    .eq("quarter", settingKey)
+    .select("quarter");
+  if (updateErr) {
+    throw new Error(
+      `${updateErr.message} (system_settings 테이블이 없다면 schema-kpi.sql의 생성 SQL을 실행해 주세요.)`
+    );
+  }
+  if (updated && updated.length > 0) return;
+  const { error } = await supabase.from("system_settings").insert({
+    quarter: settingKey,
+    input_deadline: value,
+  });
+  if (error) throw new Error(error.message);
+}
 
 export async function fetchMonthDeadlines(): Promise<MonthDeadlineRow[]> {
   const supabase = createBrowserSupabase();
@@ -2789,11 +2948,11 @@ export type CreateManualKpiInput = {
   targetValue: number | null;
   periodStartMonth: number;
   periodEndMonth: number;
-  targetFinalValue: number;
-  h1TargetValue: number;
-  h2TargetValue: number | null;
-  h1TargetText: string;
-  h2TargetText: string;
+  monthlyTargets: Array<{ month: number; targetValue: number }>;
+};
+
+export type UpdateManualKpiInput = CreateManualKpiInput & {
+  kpiId: string;
 };
 
 function parseWeightOrZero(raw: string): number {
@@ -2837,6 +2996,35 @@ export async function createManualKpiItem(
     );
   }
 
+  const normalizedMonthlyTargets = [...input.monthlyTargets]
+    .filter(
+      (row) =>
+        Number.isFinite(row.month) &&
+        row.month >= input.periodStartMonth &&
+        row.month <= input.periodEndMonth &&
+        Number.isFinite(row.targetValue) &&
+        row.targetValue >= 0
+    )
+    .sort((a, b) => a.month - b.month);
+  if (normalizedMonthlyTargets.length === 0) {
+    throw new Error("월별 목표값을 최소 1개 이상 입력해 주세요.");
+  }
+  const finalTarget = normalizedMonthlyTargets[normalizedMonthlyTargets.length - 1]!.targetValue;
+  const h1RefMonth = Math.min(
+    input.periodEndMonth,
+    Math.max(input.periodStartMonth, 6)
+  );
+  const h2RefMonth = Math.min(
+    input.periodEndMonth,
+    Math.max(input.periodStartMonth, 12)
+  );
+  const h1FromMonthly =
+    normalizedMonthlyTargets.find((row) => row.month === h1RefMonth)?.targetValue ??
+    normalizedMonthlyTargets[0]!.targetValue;
+  const h2FromMonthly =
+    normalizedMonthlyTargets.find((row) => row.month === h2RefMonth)?.targetValue ??
+    finalTarget;
+
   const { data: inserted, error: itemErr } = await supabase
     .from("kpi_items")
     .insert({
@@ -2853,7 +3041,7 @@ export async function createManualKpiItem(
       period_start_month: input.periodStartMonth,
       period_end_month: input.periodEndMonth,
       target_direction: input.targetDirection,
-      target_final_value: input.targetFinalValue,
+      target_final_value: finalTarget,
     })
     .select("id")
     .single();
@@ -2869,30 +3057,30 @@ export async function createManualKpiItem(
   const targetPayload: Record<string, unknown> = {
     kpi_id: inserted.id,
     half_type: HALF_TYPE_H1,
-    h1_target: input.h1TargetText.trim() || null,
-    h2_target: input.h2TargetText.trim() || null,
-    h1_effect: input.h1TargetText.trim() || null,
-    h2_effect: input.h2TargetText.trim() || null,
+    h1_target: `${h1RefMonth}월 목표`,
+    h2_target: `${h2RefMonth}월 목표`,
+    h1_effect: `${h1RefMonth}월 목표`,
+    h2_effect: `${h2RefMonth}월 목표`,
     approval_step: PERF_STATUS_DRAFT,
     rejection_reason: null,
   };
   if (hasH1TargetValue) {
-    targetPayload.h1_target_value = input.h1TargetValue;
+    targetPayload.h1_target_value = h1FromMonthly;
   }
   if (hasH2TargetValue) {
-    targetPayload.h2_target_value = input.h2TargetValue;
+    targetPayload.h2_target_value = h2FromMonthly;
   }
   if (hasH1TargetPct) {
-    targetPayload.h1_target_pct = input.h1TargetValue;
+    targetPayload.h1_target_pct = h1FromMonthly;
     targetPayload.h1_rate = null;
   } else {
-    targetPayload.h1_rate = input.h1TargetValue;
+    targetPayload.h1_rate = h1FromMonthly;
   }
   if (hasH2TargetPct) {
-    targetPayload.h2_target_pct = input.h2TargetValue;
+    targetPayload.h2_target_pct = h2FromMonthly;
     targetPayload.h2_rate = null;
   } else {
-    targetPayload.h2_rate = input.h2TargetValue;
+    targetPayload.h2_rate = h2FromMonthly;
   }
   if (hasYearColumn) targetPayload.year = CURRENT_KPI_YEAR;
 
@@ -2901,23 +3089,152 @@ export async function createManualKpiItem(
   if (targetErr) {
     throw new Error(targetErr.message);
   }
-  const milestones = [
-    { target_month: 6, target_value: input.h1TargetValue, note: input.h1TargetText.trim() || null },
-    { target_month: 12, target_value: input.h2TargetValue, note: input.h2TargetText.trim() || null },
-  ].filter((m) => m.target_value !== null && Number.isFinite(m.target_value));
-  const milestoneRows = milestones
-    .filter((m) => m.target_month >= input.periodStartMonth && m.target_month <= input.periodEndMonth)
-    .map((m) => ({
-      kpi_id: inserted.id,
-      target_month: m.target_month,
-      target_value: m.target_value,
-      note: m.note,
-    }));
+  const milestoneRows = normalizedMonthlyTargets.map((m) => ({
+    kpi_id: inserted.id,
+    target_month: m.month,
+    target_value: m.targetValue,
+    note: `${m.month}월 목표`,
+  }));
   if (milestoneRows.length > 0) {
     const { error: milestoneErr } = await supabase.from("kpi_milestones").upsert(milestoneRows);
     if (milestoneErr) throw new Error(milestoneErr.message);
   }
   return inserted.id as string;
+}
+
+export async function updateManualKpiItem(
+  input: UpdateManualKpiInput
+): Promise<void> {
+  const supabase = createBrowserSupabase();
+  const safeWeight = Math.trunc(input.weight);
+  if (!Number.isFinite(safeWeight) || safeWeight < 1 || safeWeight > 100) {
+    throw new Error("가중치는 1~100 사이 정수로 입력해 주세요.");
+  }
+  const cleanKpiId = input.kpiId.trim();
+  if (!cleanKpiId) {
+    throw new Error("수정할 KPI 항목 ID가 없습니다.");
+  }
+
+  const { data: existingItems, error: sumErr } = await supabase
+    .from("kpi_items")
+    .select("id, weight")
+    .eq("dept_id", input.deptId);
+  if (sumErr) throw new Error(sumErr.message);
+  const existingSumExcludingCurrent = (existingItems ?? []).reduce((sum, row) => {
+    const rowId = String((row as Record<string, unknown>).id ?? "");
+    if (rowId === cleanKpiId) return sum;
+    const n = Number(String((row as Record<string, unknown>).weight ?? "").trim());
+    return Number.isFinite(n) ? sum + n : sum;
+  }, 0);
+  if (existingSumExcludingCurrent + safeWeight > 100) {
+    throw new Error(
+      `부서 가중치 합계가 100점을 초과합니다. 현재(수정 대상 제외) ${existingSumExcludingCurrent}점, 적용 ${safeWeight}점으로 ${
+        existingSumExcludingCurrent + safeWeight
+      }점입니다.`
+    );
+  }
+
+  const normalizedMonthlyTargets = [...input.monthlyTargets]
+    .filter(
+      (row) =>
+        Number.isFinite(row.month) &&
+        row.month >= input.periodStartMonth &&
+        row.month <= input.periodEndMonth &&
+        Number.isFinite(row.targetValue) &&
+        row.targetValue >= 0
+    )
+    .sort((a, b) => a.month - b.month);
+  if (normalizedMonthlyTargets.length === 0) {
+    throw new Error("월별 목표값을 최소 1개 이상 입력해 주세요.");
+  }
+  const finalTarget = normalizedMonthlyTargets[normalizedMonthlyTargets.length - 1]!.targetValue;
+  const h1RefMonth = Math.min(
+    input.periodEndMonth,
+    Math.max(input.periodStartMonth, 6)
+  );
+  const h2RefMonth = Math.min(
+    input.periodEndMonth,
+    Math.max(input.periodStartMonth, 12)
+  );
+  const h1FromMonthly =
+    normalizedMonthlyTargets.find((row) => row.month === h1RefMonth)?.targetValue ??
+    normalizedMonthlyTargets[0]!.targetValue;
+  const h2FromMonthly =
+    normalizedMonthlyTargets.find((row) => row.month === h2RefMonth)?.targetValue ??
+    finalTarget;
+
+  const { error: itemErr } = await supabase
+    .from("kpi_items")
+    .update({
+      main_topic: input.mainTopic.trim(),
+      sub_topic: input.subTopic.trim(),
+      detail_activity: input.detailActivity.trim(),
+      benchmark: input.baselineLabel.trim(),
+      standard: input.baselineLabel.trim(),
+      weight: safeWeight,
+      manager_name: input.owner.trim(),
+      indicator_type: input.indicatorType,
+      target_value: input.targetValue,
+      period_start_month: input.periodStartMonth,
+      period_end_month: input.periodEndMonth,
+      target_direction: input.targetDirection,
+      target_final_value: finalTarget,
+    })
+    .eq("id", cleanKpiId);
+  if (itemErr) throw new Error(itemErr.message);
+
+  const hasYearColumn = await getKpiTargetsHasYearColumn();
+  const hasHalfType = await getKpiTargetsHasHalfTypeColumn();
+  const hasH1TargetPct = await getKpiTargetsHasColumn("h1_target_pct");
+  const hasH2TargetPct = await getKpiTargetsHasColumn("h2_target_pct");
+  const hasH1TargetValue = await getKpiTargetsHasColumn("h1_target_value");
+  const hasH2TargetValue = await getKpiTargetsHasColumn("h2_target_value");
+  const targetId = await findOrCreateKpiTargetRowIdForYear(
+    supabase,
+    cleanKpiId,
+    hasHalfType ? HALF_TYPE_H1 : undefined
+  );
+  const targetPayload: Record<string, unknown> = {
+    id: targetId,
+    kpi_id: cleanKpiId,
+    h1_target: `${h1RefMonth}월 목표`,
+    h2_target: `${h2RefMonth}월 목표`,
+    h1_effect: `${h1RefMonth}월 목표`,
+    h2_effect: `${h2RefMonth}월 목표`,
+  };
+  if (hasH1TargetValue) targetPayload.h1_target_value = h1FromMonthly;
+  if (hasH2TargetValue) targetPayload.h2_target_value = h2FromMonthly;
+  if (hasH1TargetPct) {
+    targetPayload.h1_target_pct = h1FromMonthly;
+    targetPayload.h1_rate = null;
+  } else {
+    targetPayload.h1_rate = h1FromMonthly;
+  }
+  if (hasH2TargetPct) {
+    targetPayload.h2_target_pct = h2FromMonthly;
+    targetPayload.h2_rate = null;
+  } else {
+    targetPayload.h2_rate = h2FromMonthly;
+  }
+  if (hasYearColumn) targetPayload.year = CURRENT_KPI_YEAR;
+  if (hasHalfType) targetPayload.half_type = HALF_TYPE_H1;
+  const filteredTarget = await filterPayloadToExistingKpiTargetColumns(targetPayload);
+  const { error: targetErr } = await supabase.from("kpi_targets").upsert(filteredTarget);
+  if (targetErr) throw new Error(targetErr.message);
+
+  const { error: deleteMilestoneErr } = await supabase
+    .from("kpi_milestones")
+    .delete()
+    .eq("kpi_id", cleanKpiId);
+  if (deleteMilestoneErr) throw new Error(deleteMilestoneErr.message);
+  const milestoneRows = normalizedMonthlyTargets.map((m) => ({
+    kpi_id: cleanKpiId,
+    target_month: m.month,
+    target_value: m.targetValue,
+    note: `${m.month}월 목표`,
+  }));
+  const { error: milestoneErr } = await supabase.from("kpi_milestones").upsert(milestoneRows);
+  if (milestoneErr) throw new Error(milestoneErr.message);
 }
 
 async function upsertKpiItemCompat(input: {

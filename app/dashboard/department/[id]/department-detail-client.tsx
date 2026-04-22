@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -9,12 +9,9 @@ import {
   ClipboardList,
   FileUp,
   Loader2,
-  BarChart3,
-  CheckCircle2,
-  Settings,
-  LogOut,
   Target,
 } from "lucide-react";
+import { CtstAppSidebar } from "@/src/components/ctst-app-sidebar";
 import { createBrowserSupabase } from "@/src/lib/supabase";
 import {
   CURRENT_KPI_YEAR,
@@ -29,7 +26,6 @@ import {
 } from "@/src/lib/format-display-number";
 import {
   canAccessApprovalsPage,
-  canAccessSystemSettings,
   canBulkUploadKpiExcel,
   canConfigureKpiIndicatorType,
   canSubmitMonthlyPerformance,
@@ -40,12 +36,14 @@ import {
   normalizeRole,
 } from "@/src/lib/rbac";
 import {
+  useAppFeatureAvailability,
   useDashboardProfile,
   useDashboardSummaryStats,
   useCreateManualKpiMutation,
   useDeleteKpiItemMutation,
   useDepartmentKpiDetail,
   useImportKpisByExcelMutation,
+  useUpdateManualKpiMutation,
   useUpdateKpiItemIndicatorMutation,
 } from "@/src/hooks/useKpiQueries";
 import { PerformanceModal } from "./performance-modal";
@@ -64,6 +62,10 @@ function indicatorBadgeClass(t: KpiIndicatorType): string {
       return "bg-amber-50 text-amber-900 ring-amber-200";
     case "money":
       return "bg-teal-50 text-teal-900 ring-teal-200";
+    case "time":
+      return "bg-orange-50 text-orange-800 ring-orange-200";
+    case "uph":
+      return "bg-cyan-50 text-cyan-800 ring-cyan-200";
     default:
       return "bg-slate-50 text-slate-700 ring-slate-200";
   }
@@ -75,23 +77,24 @@ function indicatorModeShortLabel(t: KpiIndicatorType): string {
   if (t === "quantity") return "수량(k)";
   if (t === "count") return "건수";
   if (t === "money") return "금액(억)";
+  if (t === "time") return "시간(h)";
+  if (t === "uph") return "생산성(UPH)";
   return "—";
 }
 
-/** "상반기 … / 하반기 …" 형태면 슬래시 기준으로 두 줄 표시 */
-function halfYearSummaryTwoLines(text: string | null | undefined): ReactNode {
-  const raw = (text ?? "").trim();
-  if (!raw) return <span className="text-slate-400">—</span>;
-  const m = raw.match(/^(.+?)\s*\/\s*(하반기[\s\S]*)$/);
-  if (m?.[1]?.trim() && m?.[2]?.trim()) {
-    return (
-      <span className="inline-block min-w-0 max-w-full text-left align-top">
-        <span className="block break-words leading-snug">{m[1].trim()}</span>
-        <span className="mt-0.5 block break-words leading-snug">{m[2].trim()}</span>
-      </span>
-    );
-  }
-  return <span className="break-words leading-snug">{raw}</span>;
+function monthLabel(month: number): string {
+  return month <= 12 ? `${month}월` : `익년 ${month - 12}월`;
+}
+
+function periodRangeLabel(
+  periodStartMonth: number | null | undefined,
+  periodEndMonth: number | null | undefined
+): string {
+  const start = Number(periodStartMonth);
+  const end = Number(periodEndMonth);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start <= 0 || end <= 0) return "—";
+  if (start === end) return monthLabel(start);
+  return `${monthLabel(start)} ~ ${monthLabel(end)}`;
 }
 
 export function DepartmentDetailClient({ departmentId }: Props) {
@@ -107,8 +110,12 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     profileQuery.isSuccess && !!profile && canAccessApprovalsPage(role),
     canViewAllDepartmentCards(role) ? null : userDeptId
   );
+  const featureQuery = useAppFeatureAvailability(
+    profileQuery.isSuccess && profileQuery.data !== null
+  );
   const importMutation = useImportKpisByExcelMutation();
   const createManualKpiMutation = useCreateManualKpiMutation();
+  const updateManualKpiMutation = useUpdateManualKpiMutation();
   const deleteKpiItemMutation = useDeleteKpiItemMutation();
   const updateIndicatorMutation = useUpdateKpiItemIndicatorMutation();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -132,6 +139,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     periodEndMonth: number | null;
     targetDirection: "up" | "down" | "na";
     targetFinalValue: number | null;
+    monthlyTargets: Partial<Record<number, number>>;
     scheduleRaw: string | null;
     indicatorType: KpiIndicatorType;
     targetPpm: number | null;
@@ -139,7 +147,8 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   const [modalMode, setModalMode] = useState<"viewer" | "editor">("viewer");
   const [exportingExcel, setExportingExcel] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  /** 목표값이 없는 상태에서 PPM·수량(k)·건수로 바꿀 때만 표시 */
+  const [editingKpiItem, setEditingKpiItem] = useState<DepartmentKpiDetailItem | null>(null);
+  /** 목표값이 없는 상태에서 자동계산형 지표로 바꿀 때만 표시 */
   const [pendingIndicator, setPendingIndicator] = useState<{
     kpiId: string;
     indicatorType: KpiIndicatorType;
@@ -314,6 +323,12 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     (summaryStatsQuery.data?.pendingPrimaryCount ?? 0) +
     (summaryStatsQuery.data?.pendingFinalCount ?? 0);
   const isAdmin = isAdminRole(ensuredRole);
+  const featureRaw = featureQuery.data ?? { capa: false, voc: false, kpi: false };
+  const featureAccess = {
+    capa: isAdmin || featureRaw.capa,
+    voc: isAdmin || featureRaw.voc,
+    kpi: isAdmin || featureRaw.kpi,
+  };
   const normalizedRole = normalizeRole(ensuredRole);
   const roleCanAlwaysEdit =
     isAdmin ||
@@ -328,6 +343,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     isAdmin ||
     (isOwnDepartment &&
       (roleCanAlwaysEdit || canSubmitMonthlyPerformance(ensuredRole)));
+  const canManageKpiItems = roleCanAlwaysEdit && (isAdmin || isOwnDepartment);
   /** 관리자·그룹장: 엑셀 일괄 등록 후 소속 부서 또는(관리자만) 모든 부서에서 항목 추가 가능 */
   const canCreateKpi = canExcel && (isAdmin || isOwnDepartment);
   const detailItems = detailQuery.data?.items ?? [];
@@ -406,8 +422,8 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   }
 
   async function handleDeleteKpiItem(kpiItemId: string): Promise<void> {
-    if (!isAdmin) {
-      window.alert("KPI 항목 삭제는 관리자만 가능합니다.");
+    if (!canManageKpiItems) {
+      window.alert("KPI 항목 삭제는 관리자·팀장·그룹장만 가능합니다.");
       return;
     }
     const ok = window.confirm(
@@ -425,71 +441,42 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     }
   }
 
-  const navClass = (href: string) => {
-    const active =
-      href === "/dashboard"
-        ? pathname === "/dashboard" ||
-          pathname.startsWith("/dashboard/department/")
-        : pathname === href;
-    return active
-      ? "flex items-center gap-2.5 rounded-lg bg-sky-50 px-3 py-2.5 text-sm font-medium text-sky-800 ring-1 ring-sky-100"
-      : "flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm text-slate-600 hover:bg-sky-50/80";
-  };
-
   return (
     <div className="flex min-h-screen flex-col bg-gradient-to-b from-sky-50/90 via-white to-white md:flex-row">
-      <aside className="flex w-full flex-shrink-0 flex-col border-b border-sky-100 bg-white md:w-60 md:border-b-0 md:border-r md:border-sky-100">
-        <div className="flex h-[95px] items-center gap-2 border-b border-sky-100 px-4">
-          <div className="flex h-[114px] w-[120px] items-center justify-center overflow-hidden rounded-xl">
-            <img
-              src="/logo_ctst.png"
-              alt="CTST 로고"
-              className="h-full w-full object-contain"
-            />
-          </div>
-          <div>
-            <p className="whitespace-nowrap text-xs font-semibold uppercase tracking-wide text-sky-700/90">
-              KPI 관리 시스템
-            </p>
-            <p className="text-[11px] text-slate-500">내부 성과 관리</p>
-          </div>
-        </div>
-        <nav className="flex flex-1 flex-col gap-0.5 p-3" aria-label="주 메뉴">
-          <Link href={dashboardListHref} className={navClass("/dashboard")}>
-            <BarChart3 className="h-4 w-4 shrink-0 text-sky-600" aria-hidden />
-            부서별 KPI
-          </Link>
-          {canAccessApprovalsPage(ensuredRole) ? (
-            <Link href="/dashboard/approvals" className={navClass("/dashboard/approvals")}>
-              <CheckCircle2 className="h-4 w-4 shrink-0 text-sky-600" aria-hidden />
-              실적 승인 관리
-              {pendingApprovalCount > 0 ? (
-                <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
-                  {pendingApprovalCount}
-                </span>
-              ) : null}
-            </Link>
-          ) : null}
-          {canAccessSystemSettings(ensuredRole) ? (
-            <Link href="/dashboard/settings" className={navClass("/dashboard/settings")}>
-              <Settings className="h-4 w-4 shrink-0 text-sky-600" aria-hidden />
-              시스템 설정
-            </Link>
-          ) : null}
-        </nav>
-        <div className="border-t border-sky-100 p-3">
-          <button
-            type="button"
-            onClick={() => void handleSignOut()}
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-600 hover:bg-red-50 hover:text-red-700"
-          >
-            <LogOut className="h-4 w-4" aria-hidden />
-            로그아웃
-          </button>
-        </div>
-      </aside>
+      <CtstAppSidebar
+        pathname={pathname}
+        role={ensuredRole}
+        userDeptId={
+          typeof ensuredProfile.dept_id === "string"
+            ? ensuredProfile.dept_id
+            : null
+        }
+        pendingApprovalCount={pendingApprovalCount}
+        featureAccess={featureAccess}
+        onSignOut={handleSignOut}
+      />
 
       <main className="min-w-0 flex-1 px-4 py-6 sm:p-8">
+        {!featureAccess.kpi ? (
+          <div className="flex min-h-full flex-col items-center justify-center px-4 py-16">
+            <div className="w-full max-w-md rounded-2xl border border-sky-100 bg-white p-8 text-center shadow-lg shadow-sky-100/50">
+              <img
+                src="/c-one%20logo.png?v=4"
+                alt="C-ONE 로고"
+                className="mx-auto h-auto max-h-[72px] w-auto max-w-[min(100%,240px)] object-contain"
+              />
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-700/90">
+                CTST 통합 시스템
+              </p>
+              <h1 className="mt-2 text-xl font-bold text-slate-800">부서별 KPI</h1>
+              <p className="mt-3 text-sm text-slate-600">관리자 잠금 상태입니다.</p>
+              <p className="mt-1 text-sm text-slate-600">
+                관리자 설정에서 공개되면 이 메뉴를 이용할 수 있습니다.
+              </p>
+            </div>
+          </div>
+        ) : (
+        <>
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <Link
             href={dashboardListHref}
@@ -578,10 +565,13 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                   <div className="flex flex-wrap items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => setShowCreateModal(true)}
+                      onClick={() => {
+                        setEditingKpiItem(null);
+                        setShowCreateModal(true);
+                      }}
                       className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
                     >
-                      항목 추가
+                      KPI 항목 추가
                     </button>
                   </div>
                 ) : null}
@@ -633,12 +623,11 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                         <th className="min-w-[5.5rem] whitespace-nowrap px-4 py-3 text-left font-semibold">
                           담당자
                         </th>
-                        <th className="w-[14.5rem] min-w-[14.5rem] max-w-[14.5rem] whitespace-nowrap px-3 py-3 text-left font-semibold">
-                          목표 요약
+                        <th className="w-[10rem] min-w-[10rem] max-w-[10rem] whitespace-nowrap px-3 py-3 text-left font-semibold">
+                          평가 구간
                         </th>
                         <th className="min-w-[7rem] whitespace-nowrap px-4 py-3 text-left font-semibold">
                           달성률
-                          <span className="ml-1 font-normal text-slate-400">(승인)</span>
                         </th>
                         <th className="min-w-[9.5rem] whitespace-nowrap py-3 pl-2.5 pr-4 text-left font-semibold">
                           관리
@@ -676,6 +665,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                                 periodEndMonth: item.periodEndMonth,
                                 targetDirection: item.targetDirection,
                                 targetFinalValue: item.targetFinalValue,
+                                monthlyTargets: item.monthlyTargets,
                                 scheduleRaw: item.scheduleRaw,
                                 indicatorType: item.indicatorType,
                                 targetPpm: item.targetPpm,
@@ -717,8 +707,8 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                             <td className="align-middle px-4 py-2">{item.bm}</td>
                             <td className="align-middle px-4 py-2">{item.weight}</td>
                             <td className="align-middle px-4 py-2">{item.owner}</td>
-                            <td className="align-top w-[14.5rem] max-w-[14.5rem] px-3 py-2 text-xs leading-5 text-slate-600">
-                              {halfYearSummaryTwoLines(item.halfYearSummary)}
+                            <td className="align-middle w-[10rem] max-w-[10rem] px-3 py-2 text-xs font-medium leading-5 text-slate-700">
+                              {periodRangeLabel(item.periodStartMonth, item.periodEndMonth)}
                             </td>
                             <td className="align-middle px-4 py-2">
                               <span className="inline-flex flex-col items-start gap-0.5 rounded-full bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700 ring-1 ring-sky-100">
@@ -740,9 +730,14 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                               <div className="flex flex-wrap items-center gap-2">
                                 <button
                                   type="button"
-                                  disabled={!canEditPerformance}
+                                  disabled={!(canEditPerformance || canManageKpiItems)}
                                   onClick={(e) => {
                                     e.stopPropagation();
+                                    if (canManageKpiItems) {
+                                      setEditingKpiItem(item);
+                                      setShowCreateModal(true);
+                                      return;
+                                    }
                                     setModalMode("editor");
                                     setSelectedKpi({
                                       id: item.id,
@@ -764,6 +759,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                                       periodEndMonth: item.periodEndMonth,
                                       targetDirection: item.targetDirection,
                                       targetFinalValue: item.targetFinalValue,
+                                      monthlyTargets: item.monthlyTargets,
                                       scheduleRaw: item.scheduleRaw,
                                       indicatorType: item.indicatorType,
                                       targetPpm: item.targetPpm,
@@ -771,9 +767,9 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                                   }}
                                   className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
-                                  {roleCanAlwaysEdit ? "수정" : "실적 등록"}
+                                  {canManageKpiItems ? "KPI 수정" : "실적 등록"}
                                 </button>
-                                {isAdmin ? (
+                                {canManageKpiItems ? (
                                   <button
                                     type="button"
                                     disabled={deleteKpiItemMutation.isPending}
@@ -799,6 +795,8 @@ export function DepartmentDetailClient({ departmentId }: Props) {
             )}
           </>
         )}
+        </>
+        )}
       </main>
       <PerformanceModal
         isOpen={selectedKpi !== null}
@@ -806,26 +804,63 @@ export function DepartmentDetailClient({ departmentId }: Props) {
         startMode={modalMode}
         canEditPerformance={canEditPerformance}
         profileRole={ensuredRole}
-        canDeleteKpiItem={isAdmin}
+        canDeleteKpiItem={canManageKpiItems}
         onDeleteKpiItem={(kpiId) => handleDeleteKpiItem(kpiId)}
         onClose={() => setSelectedKpi(null)}
       />
       <KpiCreateModal
         isOpen={showCreateModal}
-        onClose={() => setShowCreateModal(false)}
+        onClose={() => {
+          setShowCreateModal(false);
+          setEditingKpiItem(null);
+        }}
         deptId={departmentId}
         deptName={detailQuery.data?.department?.name ?? "해당 부서"}
-        currentWeightSum={totalWeight}
+        currentWeightSum={
+          editingKpiItem
+            ? Math.max(0, totalWeight - Number(editingKpiItem.weight || 0))
+            : totalWeight
+        }
         mainTopicOptions={mainTopicOptions}
         subTopicOptions={subTopicOptions}
-        submitting={createManualKpiMutation.isPending}
-        onSubmit={async (payload) => {
+        editingItem={
+          editingKpiItem
+            ? {
+                id: editingKpiItem.id,
+                mainTopic: editingKpiItem.mainTopic,
+                subTopic: editingKpiItem.subTopic,
+                detailActivity: editingKpiItem.detailActivity,
+                bm: editingKpiItem.bm,
+                owner: editingKpiItem.owner,
+                weight: editingKpiItem.weight,
+                indicatorType: editingKpiItem.indicatorType,
+                targetDirection: editingKpiItem.targetDirection,
+                periodStartMonth: editingKpiItem.periodStartMonth,
+                periodEndMonth: editingKpiItem.periodEndMonth,
+                targetPpm: editingKpiItem.targetPpm,
+                monthlyTargets: editingKpiItem.monthlyTargets,
+              }
+            : null
+        }
+        submitting={createManualKpiMutation.isPending || updateManualKpiMutation.isPending}
+        onSubmit={async (payload, options) => {
           try {
-            await createManualKpiMutation.mutateAsync(payload);
+            if (options?.kpiId) {
+              await updateManualKpiMutation.mutateAsync({ ...payload, kpiId: options.kpiId });
+            } else {
+              await createManualKpiMutation.mutateAsync(payload);
+            }
             await detailQuery.refetch();
-            window.alert("KPI 항목이 등록되었습니다.");
+            setEditingKpiItem(null);
+            window.alert(options?.kpiId ? "KPI 항목이 수정되었습니다." : "KPI 항목이 등록되었습니다.");
           } catch (e) {
-            window.alert(e instanceof Error ? e.message : "KPI 항목 등록에 실패했습니다.");
+            window.alert(
+              e instanceof Error
+                ? e.message
+                : options?.kpiId
+                  ? "KPI 항목 수정에 실패했습니다."
+                  : "KPI 항목 등록에 실패했습니다."
+            );
             throw e;
           }
         }}

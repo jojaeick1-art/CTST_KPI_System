@@ -8,6 +8,7 @@ import type { ProfileRow } from "@/src/types/profile";
 import { normalizeRole } from "@/src/lib/rbac";
 import { logProfileRoleSync } from "@/src/lib/profile-role-debug";
 import {
+  fetchAppFeatureAvailability,
   createDepartment,
   fetchDepartmentsForManagement,
   fetchKpiPerformancesByItem,
@@ -26,9 +27,15 @@ import {
   upsertQuarterPerformance,
   importKpisFromExcelRows,
   createManualKpiItem,
+  updateManualKpiItem,
+  fetchCapaSimulatorEnabled,
+  saveAppFeatureAvailability,
   updateKpiItemIndicatorSettings,
+  saveCapaSimulatorEnabled,
   type ApprovalWorkflowStage,
+  type AppFeatureKey,
   type CreateManualKpiInput,
+  type UpdateManualKpiInput,
   type KpiExcelImportRow,
   type KpiIndicatorType,
   type MonthKey,
@@ -437,6 +444,52 @@ export function useMonthDeadlines(enabled: boolean) {
   });
 }
 
+export function useCapaSimulatorAvailability(enabled: boolean) {
+  return useQuery({
+    queryKey: ["supabase", "capa-simulator-availability"],
+    queryFn: fetchCapaSimulatorEnabled,
+    enabled,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useAppFeatureAvailability(enabled: boolean) {
+  return useQuery({
+    queryKey: ["supabase", "app-feature-availability"],
+    queryFn: fetchAppFeatureAvailability,
+    enabled,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useSetCapaSimulatorAvailabilityMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (enabled: boolean) => saveCapaSimulatorEnabled(enabled),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "capa-simulator-availability"],
+      });
+    },
+  });
+}
+
+export function useSetAppFeatureAvailabilityMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { feature: AppFeatureKey; enabled: boolean }) =>
+      saveAppFeatureAvailability(args.feature, args.enabled),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "app-feature-availability"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "capa-simulator-availability"],
+      });
+    },
+  });
+}
+
 export function useSaveMonthDeadlineMutation() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -476,6 +529,24 @@ export function useCreateManualKpiMutation() {
       });
       void queryClient.invalidateQueries({
         queryKey: ["supabase", "department-kpi-summary"],
+      });
+    },
+  });
+}
+
+export function useUpdateManualKpiMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: UpdateManualKpiInput) => updateManualKpiItem(args),
+    onSuccess: (_, vars) => {
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "department-kpi-detail", vars.deptId],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "department-kpi-summary"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "kpi-performances"],
       });
     },
   });

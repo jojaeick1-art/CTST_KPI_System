@@ -3,7 +3,7 @@ import { LoginForm } from "./login-form";
 
 export const metadata: Metadata = {
   title: "로그인",
-  description: "CTST KPI 관리 시스템 로그인",
+  description: "CTST 통합 시스템 로그인",
 };
 
 export default function LoginPage() {
@@ -19,23 +19,18 @@ export default function LoginPage() {
       />
 
       <div className="relative z-10 flex w-full flex-col items-center gap-8">
-        <div className="flex flex-col items-center gap-3 text-center">
-          <div className="flex h-24 w-56 items-center justify-center rounded-2xl bg-white/0">
-            <img
-              src="/logo_ctst.png"
-              alt="CTST 로고"
-              className="h-full w-full object-contain"
-            />
-          </div>
+        <div className="flex flex-col items-center gap-5 text-center">
+          <img
+            src="/c-one%20logo.png?v=4"
+            alt="C-ONE 로고"
+            className="h-auto max-h-[120px] w-auto max-w-[min(100%,420px)] object-contain"
+          />
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-600/90">
-              
-            </p>
-            <h2 className="mt-1 text-2xl font-bold tracking-tight text-slate-800">
-              KPI 관리 시스템
+            <h2 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
+              CTST 통합 시스템
             </h2>
-            <p className="mt-1 max-w-sm text-sm text-slate-500">
-              반도체 품질·성과 지표를 한곳에서 관리합니다
+            <p className="mt-2 max-w-md text-sm leading-relaxed text-slate-600">
+              CTST 사내 업무를 하나의 계정으로 연결하는 통합 포털
             </p>
           </div>
         </div>
@@ -43,7 +38,7 @@ export default function LoginPage() {
         <LoginForm />
 
         <p className="text-center text-xs text-slate-400">
-          관리자 · 리더 · 직원 역할은 프로필에 따라 자동 적용됩니다
+          표시되는 메뉴와 접근 범위는 역할·권한에 따라 달라질 수 있습니다
         </p>
       </div>
     </div>

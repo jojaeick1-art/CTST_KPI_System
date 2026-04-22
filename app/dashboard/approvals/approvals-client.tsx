@@ -4,21 +4,19 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  BarChart3,
-  CheckCircle2,
   ExternalLink,
   Loader2,
-  LogOut,
   Paperclip,
-  Settings,
   Shield,
   User,
   X,
 } from "lucide-react";
+import { CtstAppSidebar } from "@/src/components/ctst-app-sidebar";
 import { createBrowserSupabase } from "@/src/lib/supabase";
 import { ChangePasswordButton } from "../change-password-modal";
 import type { PendingPerformanceListRow } from "@/src/lib/kpi-queries";
 import {
+  useAppFeatureAvailability,
   useDashboardProfile,
   useDashboardSummaryStats,
   usePendingPerformances,
@@ -26,7 +24,6 @@ import {
 } from "@/src/hooks/useKpiQueries";
 import {
   canAccessApprovalsPage,
-  canAccessSystemSettings,
   canGroupLeaderApprove,
   canTeamLeaderFinalApprove,
   canViewAllDepartmentCards,
@@ -211,6 +208,9 @@ export function ApprovalsClient() {
     profileQuery.isSuccess && profileQuery.data !== null && canSeeApprovals,
     canViewAllDepartmentCards(resolvedRole ?? "") ? null : userDeptId
   );
+  const featureQuery = useAppFeatureAvailability(
+    profileQuery.isSuccess && profileQuery.data !== null
+  );
   const pendingApprovalCount =
     (summaryStatsQuery.data?.pendingPrimaryCount ?? 0) +
     (summaryStatsQuery.data?.pendingFinalCount ?? 0);
@@ -354,17 +354,19 @@ export function ApprovalsClient() {
   if (!ctx) return null;
 
   const role = ctx.profile.role;
+  const isAdmin = isAdminRole(role);
+  const featureRaw = featureQuery.data ?? { capa: false, voc: false, kpi: false };
+  const featureAccess = {
+    capa: isAdmin || featureRaw.capa,
+    voc: isAdmin || featureRaw.voc,
+    kpi: isAdmin || featureRaw.kpi,
+  };
 
   const displayName = displayNameFromSession(
     ctx.profile.full_name,
     ctx.profile.username,
     ctx.session.user.user_metadata as Record<string, unknown> | undefined
   );
-
-  const navClass = (href: string) =>
-    pathname === href
-      ? "flex items-center gap-2.5 rounded-lg bg-sky-50 px-3 py-2.5 text-sm font-medium text-sky-800 ring-1 ring-sky-100"
-      : "flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm text-slate-600 transition hover:bg-sky-50/80 hover:text-slate-900";
 
   const listError =
     (isGroupLeader && primaryQuery.isError && primaryQuery.error) ||
@@ -379,60 +381,36 @@ export function ApprovalsClient() {
         onClose={() => setToast((prev) => ({ ...prev, open: false }))}
         position="top-center"
       />
-      <aside className="flex w-full flex-shrink-0 flex-col border-b border-sky-100 bg-white md:w-60 md:border-b-0 md:border-r md:border-sky-100">
-        <div className="flex h-[95px] items-center gap-2 border-b border-sky-100 px-4">
-          <div className="flex h-[114px] w-[120px] items-center justify-center overflow-hidden rounded-xl">
-            <img
-              src="/logo_ctst.png"
-              alt="CTST 로고"
-              className="h-full w-full object-contain"
-            />
-          </div>
-          <div>
-            <p className="whitespace-nowrap text-xs font-semibold uppercase tracking-wide text-sky-700/90">
-              KPI 관리 시스템
-            </p>
-            <p className="text-[11px] text-slate-500">내부 성과 관리</p>
-          </div>
-        </div>
-
-        <nav className="flex flex-1 flex-col gap-0.5 p-3" aria-label="주 메뉴">
-          <Link href={dashboardListHref} className={navClass("/dashboard")}>
-            <BarChart3 className="h-4 w-4 shrink-0 text-sky-600" aria-hidden />
-            부서별 KPI
-          </Link>
-          {canAccessApprovalsPage(role) ? (
-            <Link href="/dashboard/approvals" className={navClass("/dashboard/approvals")}>
-              <CheckCircle2 className="h-4 w-4 shrink-0 text-sky-600" aria-hidden />
-              실적 승인 관리
-              {pendingApprovalCount > 0 ? (
-                <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
-                  {pendingApprovalCount}
-                </span>
-              ) : null}
-            </Link>
-          ) : null}
-          {canAccessSystemSettings(role) ? (
-            <Link href="/dashboard/settings" className={navClass("/dashboard/settings")}>
-              <Settings className="h-4 w-4 shrink-0 text-sky-600" aria-hidden />
-              시스템 설정
-            </Link>
-          ) : null}
-        </nav>
-
-        <div className="border-t border-sky-100 p-3">
-          <button
-            type="button"
-            onClick={() => void handleSignOut()}
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-600 transition hover:bg-red-50 hover:text-red-700"
-          >
-            <LogOut className="h-4 w-4 shrink-0" aria-hidden />
-            로그아웃
-          </button>
-        </div>
-      </aside>
+      <CtstAppSidebar
+        pathname={pathname}
+        role={role}
+        userDeptId={userDeptId}
+        pendingApprovalCount={pendingApprovalCount}
+        featureAccess={featureAccess}
+        onSignOut={handleSignOut}
+      />
 
       <main className="min-w-0 flex-1">
+        {!featureAccess.kpi ? (
+          <div className="flex min-h-full flex-col items-center justify-center px-4 py-16">
+            <div className="w-full max-w-md rounded-2xl border border-sky-100 bg-white p-8 text-center shadow-lg shadow-sky-100/50">
+              <img
+                src="/c-one%20logo.png?v=4"
+                alt="C-ONE 로고"
+                className="mx-auto h-auto max-h-[72px] w-auto max-w-[min(100%,240px)] object-contain"
+              />
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-700/90">
+                CTST 통합 시스템
+              </p>
+              <h1 className="mt-2 text-xl font-bold text-slate-800">KPI 승인</h1>
+              <p className="mt-3 text-sm text-slate-600">관리자 잠금 상태입니다.</p>
+              <p className="mt-1 text-sm text-slate-600">
+                관리자 설정에서 공개되면 이 메뉴를 이용할 수 있습니다.
+              </p>
+            </div>
+          </div>
+        ) : (
+        <>
         <header className="border-b border-sky-100 bg-white/80 px-4 py-4 backdrop-blur-sm sm:px-8">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -445,20 +423,23 @@ export function ApprovalsClient() {
                 제출 전(draft)으로 돌아갑니다.
               </p>
             </div>
-            <div className="flex items-center gap-3 rounded-xl border border-sky-100 bg-white px-4 py-2.5 shadow-sm shadow-sky-100/50">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-100 text-sky-700">
-                <User className="h-5 w-5" aria-hidden />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-slate-800">
-                  {displayName}
-                  <span className="font-normal text-slate-400"> 님</span>
-                </p>
-                <div className="mt-0.5 flex items-center gap-1.5">
-                  <Shield className="h-3.5 w-3.5 text-sky-600" aria-hidden />
-                  <span className="text-xs font-medium text-sky-700">
-                    {roleLabelKo(ctx.profile.role)}
-                  </span>
+            <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:gap-3">
+              <ChangePasswordButton profileUsername={ctx.profile.username} />
+              <div className="flex items-center gap-3 rounded-xl border border-sky-100 bg-white px-4 py-2.5 shadow-sm shadow-sky-100/50">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-100 text-sky-700">
+                  <User className="h-5 w-5" aria-hidden />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">
+                    {displayName}
+                    <span className="font-normal text-slate-400"> 님</span>
+                  </p>
+                  <div className="mt-0.5 flex items-center gap-1.5">
+                    <Shield className="h-3.5 w-3.5 text-sky-600" aria-hidden />
+                    <span className="text-xs font-medium text-sky-700">
+                      {roleLabelKo(ctx.profile.role)}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -519,6 +500,8 @@ export function ApprovalsClient() {
             </>
           )}
         </div>
+        </>
+        )}
       </main>
 
       {rejectForId ? (

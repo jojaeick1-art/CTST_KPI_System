@@ -1,14 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  BarChart3,
   Building2,
-  CheckCircle2,
   Loader2,
-  LogOut,
   Plus,
   Save,
   Settings,
@@ -17,6 +13,7 @@ import {
   User,
   Users,
 } from "lucide-react";
+import { CtstAppSidebar } from "@/src/components/ctst-app-sidebar";
 import { createBrowserSupabase } from "@/src/lib/supabase";
 import { ChangePasswordButton } from "../change-password-modal";
 import { KPI_MONTHS, type MonthKey } from "@/src/lib/kpi-queries";
@@ -24,6 +21,7 @@ import {
   canAccessApprovalsPage,
   canAccessSystemSettings,
   canViewAllDepartmentCards,
+  isAdminRole,
   roleLabelKo,
 } from "@/src/lib/rbac";
 import {
@@ -35,6 +33,8 @@ import {
   useDepartmentsForManagement,
   useMonthDeadlines,
   useRenameDepartmentMutation,
+  useAppFeatureAvailability,
+  useSetAppFeatureAvailabilityMutation,
   useSaveMonthDeadlineMutation,
 } from "@/src/hooks/useKpiQueries";
 
@@ -85,12 +85,16 @@ export function SettingsClient() {
   const deadlineQuery = useMonthDeadlines(
     profileQuery.isSuccess && profileQuery.data !== null && isAdmin
   );
+  const appFeatureQuery = useAppFeatureAvailability(
+    profileQuery.isSuccess && profileQuery.data !== null && isAdmin
+  );
 
   const createDeptMut = useCreateDepartmentMutation();
   const renameDeptMut = useRenameDepartmentMutation();
   const deleteDeptMut = useDeleteDepartmentMutation();
   const saveDeadlineMut = useSaveMonthDeadlineMutation();
   const clearAllDataMut = useClearAllKpiDataMutation();
+  const setAppFeatureMut = useSetAppFeatureAvailabilityMutation();
 
   const [newDeptName, setNewDeptName] = useState("");
   const [editingDeptId, setEditingDeptId] = useState<string | null>(null);
@@ -223,11 +227,6 @@ export function SettingsClient() {
     }
   }
 
-  const navClass = (href: string) =>
-    pathname === href
-      ? "flex items-center gap-2.5 rounded-lg bg-sky-50 px-3 py-2.5 text-sm font-medium text-sky-800 ring-1 ring-sky-100"
-      : "flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm text-slate-600 transition hover:bg-sky-50/80 hover:text-slate-900";
-
   const isBusyDept =
     createDeptMut.isPending || renameDeptMut.isPending || deleteDeptMut.isPending;
 
@@ -251,59 +250,26 @@ export function SettingsClient() {
   if (!ctx) return null;
 
   const role = ctx.profile.role;
+  const userDeptId =
+    typeof ctx.profile.dept_id === "string" ? ctx.profile.dept_id : null;
+  const isAdminUser = isAdminRole(role);
+  const appFeatureRaw = appFeatureQuery.data ?? { capa: false, voc: false, kpi: false };
+  const featureAccess = {
+    capa: isAdminUser || appFeatureRaw.capa,
+    voc: isAdminUser || appFeatureRaw.voc,
+    kpi: isAdminUser || appFeatureRaw.kpi,
+  };
 
   return (
     <div className="flex min-h-screen flex-col bg-gradient-to-b from-sky-50/90 via-white to-white md:flex-row">
-      <aside className="flex w-full flex-shrink-0 flex-col border-b border-sky-100 bg-white md:w-60 md:border-b-0 md:border-r md:border-sky-100">
-        <div className="flex h-[95px] items-center gap-2 border-b border-sky-100 px-4">
-          <div className="flex h-[114px] w-[120px] items-center justify-center overflow-hidden rounded-xl">
-            <img
-              src="/logo_ctst.png"
-              alt="CTST 로고"
-              className="h-full w-full object-contain"
-            />
-          </div>
-          <div>
-            <p className="whitespace-nowrap text-xs font-semibold uppercase tracking-wide text-sky-700/90">
-              KPI 관리 시스템
-            </p>
-            <p className="text-[11px] text-slate-500">내부 성과 관리</p>
-          </div>
-        </div>
-        <nav className="flex flex-1 flex-col gap-0.5 p-3" aria-label="주 메뉴">
-          <Link href="/dashboard" className={navClass("/dashboard")}>
-            <BarChart3 className="h-4 w-4 shrink-0 text-sky-600" aria-hidden />
-            부서별 KPI
-          </Link>
-          {canAccessApprovalsPage(role) ? (
-            <Link href="/dashboard/approvals" className={navClass("/dashboard/approvals")}>
-              <CheckCircle2 className="h-4 w-4 shrink-0 text-sky-600" aria-hidden />
-              실적 승인 관리
-              {pendingApprovalCount > 0 ? (
-                <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
-                  {pendingApprovalCount}
-                </span>
-              ) : null}
-            </Link>
-          ) : null}
-          {canAccessSystemSettings(role) ? (
-            <Link href="/dashboard/settings" className={navClass("/dashboard/settings")}>
-              <Settings className="h-4 w-4 shrink-0 text-sky-600" aria-hidden />
-              시스템 설정
-            </Link>
-          ) : null}
-        </nav>
-        <div className="border-t border-sky-100 p-3">
-          <button
-            type="button"
-            onClick={() => void handleSignOut()}
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-600 transition hover:bg-red-50 hover:text-red-700"
-          >
-            <LogOut className="h-4 w-4 shrink-0" aria-hidden />
-            로그아웃
-          </button>
-        </div>
-      </aside>
+      <CtstAppSidebar
+        pathname={pathname}
+        role={role}
+        userDeptId={userDeptId}
+        pendingApprovalCount={pendingApprovalCount}
+        featureAccess={featureAccess}
+        onSignOut={handleSignOut}
+      />
 
       <main className="min-w-0 flex-1">
         <header className="border-b border-sky-100 bg-white/80 px-4 py-4 backdrop-blur-sm sm:px-8">
@@ -491,6 +457,76 @@ export function SettingsClient() {
                     </button>
                   </div>
                 ))}
+              </div>
+            )}
+          </section>
+
+          <section className="rounded-2xl border border-sky-100 bg-white p-4 shadow-sm shadow-sky-100/40">
+            <h2 className="mb-3 flex items-center gap-2 text-base font-semibold text-slate-800">
+              <Settings className="h-4 w-4 text-sky-600" />
+              앱 메뉴 공개 설정
+            </h2>
+            {!isAdmin ? (
+              <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                관리자만 변경할 수 있습니다.
+              </p>
+            ) : appFeatureQuery.isPending ? (
+              <div className="flex items-center gap-2 text-sm text-slate-600">
+                <Loader2 className="h-4 w-4 animate-spin text-sky-600" />
+                설정을 불러오는 중...
+              </div>
+            ) : appFeatureQuery.isError ? (
+              <p className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {appFeatureQuery.error instanceof Error
+                  ? appFeatureQuery.error.message
+                  : "앱 메뉴 공개 설정 조회 실패"}
+              </p>
+            ) : (
+              <div className="space-y-3 text-sm">
+                {([
+                  { key: "kpi", label: "KPI 메뉴", enabled: appFeatureRaw.kpi },
+                  { key: "capa", label: "CAPA Simulator", enabled: appFeatureRaw.capa },
+                  { key: "voc", label: "VOC 메뉴", enabled: appFeatureRaw.voc },
+                ] as const).map((feature) => (
+                  <div
+                    key={feature.key}
+                    className="flex items-center justify-between rounded-lg border border-sky-100 bg-sky-50/40 px-3 py-2.5"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-slate-700">{feature.label}</span>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                          feature.enabled
+                            ? "bg-emerald-100 text-emerald-700"
+                            : "bg-amber-100 text-amber-700"
+                        }`}
+                      >
+                        {feature.enabled ? "공개" : "잠금"}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={setAppFeatureMut.isPending}
+                      onClick={() =>
+                        void setAppFeatureMut.mutateAsync({
+                          feature: feature.key,
+                          enabled: !feature.enabled,
+                        })
+                      }
+                      className="inline-flex items-center gap-1.5 rounded-md border border-sky-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-sky-800 hover:bg-sky-50 disabled:opacity-60"
+                    >
+                      {setAppFeatureMut.isPending ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Settings className="h-3.5 w-3.5" />
+                      )}
+                      {feature.enabled ? "잠금" : "공개"}
+                    </button>
+                  </div>
+                ))}
+                <p className="text-xs text-slate-500">
+                  한눈에 현재 상태를 보고 바로 공개/잠금 전환할 수 있습니다. (관리자는 잠금 상태여도 접근 가능)
+                </p>
               </div>
             )}
           </section>

@@ -4,12 +4,8 @@ import { useEffect, useMemo } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
-  BarChart3,
-  CheckCircle2,
-  Settings,
   Shield,
   User,
-  LogOut,
   Loader2,
   TrendingUp,
   Building2,
@@ -18,20 +14,21 @@ import {
   ClipboardCheck,
   type LucideIcon,
 } from "lucide-react";
+import { CtstAppSidebar } from "@/src/components/ctst-app-sidebar";
 import { createBrowserSupabase } from "@/src/lib/supabase";
 import type { DepartmentKpiSummary } from "@/src/types/kpi";
 import {
   canAccessApprovalsPage,
-  canAccessSystemSettings,
   canViewAllDepartmentCards,
   DASHBOARD_MAIN_QUERY,
   DASHBOARD_MAIN_QUERY_VALUE,
   DASHBOARD_SHOW_MAIN_SESSION_KEY,
-  hrefDashboardDepartmentList,
+  isAdminRole,
   mayAutoRedirectDashboardToAssignedDepartment,
   roleLabelKo,
 } from "@/src/lib/rbac";
 import {
+  useAppFeatureAvailability,
   useDashboardProfile,
   useDashboardSummaryStats,
   useDepartmentKpiSummary,
@@ -161,6 +158,9 @@ export function DashboardClient() {
     profileQuery.isSuccess && profileQuery.data !== null,
     canViewAllDepartmentCards(resolvedRole ?? "") ? null : userDeptId
   );
+  const featureQuery = useAppFeatureAvailability(
+    profileQuery.isSuccess && profileQuery.data !== null
+  );
   const pendingApprovalCount =
     (summaryStatsQuery.data?.pendingPrimaryCount ?? 0) +
     (summaryStatsQuery.data?.pendingFinalCount ?? 0);
@@ -266,6 +266,13 @@ export function DashboardClient() {
   }
 
   const role = ctx.profile.role;
+  const isAdmin = isAdminRole(role);
+  const featureRaw = featureQuery.data ?? { capa: false, voc: false, kpi: false };
+  const featureAccess = {
+    capa: isAdmin || featureRaw.capa,
+    voc: isAdmin || featureRaw.voc,
+    kpi: isAdmin || featureRaw.kpi,
+  };
 
   const displayName = displayNameFromSession(
     ctx.profile.full_name,
@@ -273,70 +280,38 @@ export function DashboardClient() {
     ctx.session.user.user_metadata as Record<string, unknown> | undefined
   );
 
-  const navClass = (href: string) =>
-    pathname === href
-      ? "flex items-center gap-2.5 rounded-lg bg-sky-50 px-3 py-2.5 text-sm font-medium text-sky-800 ring-1 ring-sky-100"
-      : "flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm text-slate-600 transition hover:bg-sky-50/80 hover:text-slate-900";
-
   return (
     <div className="flex min-h-screen flex-col bg-gradient-to-b from-sky-50/90 via-white to-white md:flex-row">
-      <aside className="flex w-full flex-shrink-0 flex-col border-b border-sky-100 bg-white md:w-60 md:border-b-0 md:border-r md:border-sky-100">
-        <div className="flex h-[95px] items-center gap-2 border-b border-sky-100 px-4">
-          <div className="flex h-[114px] w-[130px] items-center justify-center overflow-hidden rounded-xl">
-            <img
-              src="/logo_ctst.png"
-              alt="CTST 로고"
-              className="h-full w-full object-contain"
-            />
-          </div>
-          <div>
-            <p className="whitespace-nowrap text-xs font-semibold uppercase tracking-wide text-sky-700/90">
-              KPI 관리 시스템
-            </p>
-            <p className="text-[11px] text-slate-500">내부 성과 관리</p>
-          </div>
-        </div>
-
-        <nav className="flex flex-1 flex-col gap-0.5 p-3" aria-label="주 메뉴">
-          <Link
-            href={hrefDashboardDepartmentList(role, userDeptId)}
-            className={navClass("/dashboard")}
-          >
-            <BarChart3 className="h-4 w-4 shrink-0 text-sky-600" aria-hidden />
-            부서별 KPI
-          </Link>
-          {canAccessApprovalsPage(role) ? (
-            <Link href="/dashboard/approvals" className={navClass("/dashboard/approvals")}>
-              <CheckCircle2 className="h-4 w-4 shrink-0 text-sky-600" aria-hidden />
-              실적 승인 관리
-              {pendingApprovalCount > 0 ? (
-                <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
-                  {pendingApprovalCount}
-                </span>
-              ) : null}
-            </Link>
-          ) : null}
-          {canAccessSystemSettings(role) ? (
-            <Link href="/dashboard/settings" className={navClass("/dashboard/settings")}>
-              <Settings className="h-4 w-4 shrink-0 text-sky-600" aria-hidden />
-              시스템 설정
-            </Link>
-          ) : null}
-        </nav>
-
-        <div className="border-t border-sky-100 p-3">
-          <button
-            type="button"
-            onClick={() => void handleSignOut()}
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-600 transition hover:bg-red-50 hover:text-red-700"
-          >
-            <LogOut className="h-4 w-4 shrink-0" aria-hidden />
-            로그아웃
-          </button>
-        </div>
-      </aside>
+      <CtstAppSidebar
+        pathname={pathname}
+        role={role}
+        userDeptId={userDeptId}
+        pendingApprovalCount={pendingApprovalCount}
+        featureAccess={featureAccess}
+        onSignOut={handleSignOut}
+      />
 
       <main className="min-w-0 flex-1">
+        {!featureAccess.kpi ? (
+          <div className="flex min-h-full flex-col items-center justify-center px-4 py-16">
+            <div className="w-full max-w-md rounded-2xl border border-sky-100 bg-white p-8 text-center shadow-lg shadow-sky-100/50">
+              <img
+                src="/c-one%20logo.png?v=4"
+                alt="C-ONE 로고"
+                className="mx-auto h-auto max-h-[72px] w-auto max-w-[min(100%,240px)] object-contain"
+              />
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-700/90">
+                CTST 통합 시스템
+              </p>
+              <h1 className="mt-2 text-xl font-bold text-slate-800">KPI</h1>
+              <p className="mt-3 text-sm text-slate-600">관리자 잠금 상태입니다.</p>
+              <p className="mt-1 text-sm text-slate-600">
+                관리자 설정에서 공개되면 이 메뉴를 이용할 수 있습니다.
+              </p>
+            </div>
+          </div>
+        ) : (
+        <>
         <header className="h-[95px] border-b border-sky-100 bg-white/80 px-4 backdrop-blur-sm sm:px-8">
           <div className="flex h-full items-center justify-between gap-3">
             <div className="min-w-0">
@@ -471,6 +446,8 @@ export function DashboardClient() {
             </div>
           )}
         </div>
+        </>
+        )}
       </main>
     </div>
   );

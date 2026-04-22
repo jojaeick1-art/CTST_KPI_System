@@ -15,10 +15,10 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "CTST KPI",
-    template: "%s | CTST KPI",
+    default: "C-ONE 통합 시스템",
+    template: "%s | C-ONE",
   },
-  description: "CTST 반도체 KPI 관리 시스템",
+  description: "C-ONE 통합 시스템 — 사내 통합 업무 포털",
 };
 
 export default function RootLayout({
