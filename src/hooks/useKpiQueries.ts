@@ -19,6 +19,7 @@ import {
   fetchPerformancesPendingStage,
   clearAllKpiData,
   removeKpiItemCascade,
+  updateKpiItemFinalCompletion,
   removeDepartment,
   renameDepartment,
   reviewPerformanceWorkflow,
@@ -28,6 +29,7 @@ import {
   importKpisFromExcelRows,
   createManualKpiItem,
   updateManualKpiItem,
+  type KpiAchievementCap,
   fetchCapaSimulatorEnabled,
   saveAppFeatureAvailability,
   updateKpiItemIndicatorSettings,
@@ -231,6 +233,7 @@ export function useUpsertMonthPerformance() {
       evidenceUrl?: string | null;
       indicatorMode?: KpiIndicatorType;
       actualValue?: number | null;
+      achievementCap?: KpiAchievementCap;
       adminBypassApprovalLock?: boolean;
       actorRole?: string | null;
     }) =>
@@ -243,6 +246,7 @@ export function useUpsertMonthPerformance() {
           evidenceUrl: args.evidenceUrl,
           indicatorMode: args.indicatorMode,
           actualValue: args.actualValue,
+          achievementCap: args.achievementCap,
         },
         {
           ...(args.adminBypassApprovalLock
@@ -333,6 +337,25 @@ export function useWorkflowReviewMutation() {
       });
       void queryClient.invalidateQueries({
         queryKey: ["supabase", "kpi-performances"],
+      });
+    },
+  });
+}
+
+export function useUpdateKpiItemFinalCompletionMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { kpiItemId: string; completed: boolean }) =>
+      updateKpiItemFinalCompletion(args),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "department-kpi-detail"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "department-kpi-summary"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "dashboard-summary-stats"],
       });
     },
   });

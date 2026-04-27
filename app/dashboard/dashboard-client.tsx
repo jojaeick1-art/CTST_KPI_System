@@ -18,6 +18,8 @@ import { CtstAppSidebar } from "@/src/components/ctst-app-sidebar";
 import { createBrowserSupabase } from "@/src/lib/supabase";
 import type { DepartmentKpiSummary } from "@/src/types/kpi";
 import {
+  approvalNotificationCount,
+  approvalNotificationDeptFilter,
   canAccessApprovalsPage,
   canViewAllDepartmentCards,
   DASHBOARD_MAIN_QUERY,
@@ -37,10 +39,6 @@ import { CURRENT_KPI_YEAR } from "@/src/lib/kpi-queries";
 import { ChangePasswordButton } from "./change-password-modal";
 
 const DEPT_ICONS: LucideIcon[] = [Building2, Cpu, Factory, ClipboardCheck];
-
-function deptIcon(index: number): LucideIcon {
-  return DEPT_ICONS[index % DEPT_ICONS.length]!;
-}
 
 function displayNameFromSession(
   profileFullName: string | null | undefined,
@@ -62,6 +60,10 @@ function displayNameFromSession(
   return username;
 }
 
+function currentMonthLabel(): string {
+  return `${new Date().getMonth() + 1}월`;
+}
+
 function DepartmentCard({
   card,
   index,
@@ -69,10 +71,14 @@ function DepartmentCard({
   card: DepartmentKpiSummary;
   index: number;
 }) {
-  const Icon = deptIcon(index);
+  const Icon = DEPT_ICONS[index % DEPT_ICONS.length]!;
   const hasAverage = card.averageAchievement !== null;
   const displayPercent = hasAverage ? Number(card.averageAchievement!.toFixed(1)) : 0;
   const progressWidth = Math.max(0, Math.min(100, displayPercent));
+  const hasCurrentMonth = card.currentMonthAchievement !== null;
+  const currentMonthPercent = hasCurrentMonth
+    ? Number(card.currentMonthAchievement!.toFixed(1))
+    : null;
 
   return (
     <Link
@@ -101,27 +107,17 @@ function DepartmentCard({
         <p className="mt-0.5 text-sm text-slate-600">
           KPI 항목 {card.kpiItemCount}건 · 실적 입력 {card.scoredKpiCount}건
         </p>
-        <p className="mt-1 text-xs text-slate-500">
-          {hasAverage ? "유형 가중 종합점수(입력 기준)" : "실적 데이터 없음"}
+        <p className="mt-2 rounded-lg bg-sky-50 px-2.5 py-1.5 text-xs font-semibold text-sky-800 ring-1 ring-sky-100">
+          {currentMonthLabel()} 달성률:{" "}
+          {currentMonthPercent === null ? "평가 대상 없음" : `${currentMonthPercent}%`}
         </p>
-        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
-          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-slate-600">
-            임계치 {card.thresholdScore === null ? "—" : `${card.thresholdScore.toFixed(1)}%`}
-          </span>
-          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-slate-600">
-            진척형 {card.progressScore === null ? "—" : `${card.progressScore.toFixed(1)}%`}
-          </span>
-          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-slate-600">
-            정성형 {card.qualitativeScore === null ? "—" : `${card.qualitativeScore.toFixed(1)}%`}
-          </span>
-        </div>
         <div
           className="mt-4 h-2 overflow-hidden rounded-full bg-sky-100"
           role="progressbar"
           aria-valuenow={hasAverage ? displayPercent : 0}
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-label={`${card.name} 종합점수`}
+          aria-label={`${card.name} 전체보기 평균`}
         >
           <div
             className={`h-full rounded-full bg-gradient-to-r from-sky-400 to-sky-600 transition-all duration-500 ${
@@ -156,14 +152,17 @@ export function DashboardClient() {
       : null;
   const summaryStatsQuery = useDashboardSummaryStats(
     profileQuery.isSuccess && profileQuery.data !== null,
-    canViewAllDepartmentCards(resolvedRole ?? "") ? null : userDeptId
+    approvalNotificationDeptFilter(resolvedRole, userDeptId)
   );
   const featureQuery = useAppFeatureAvailability(
     profileQuery.isSuccess && profileQuery.data !== null
   );
   const pendingApprovalCount =
-    (summaryStatsQuery.data?.pendingPrimaryCount ?? 0) +
-    (summaryStatsQuery.data?.pendingFinalCount ?? 0);
+    approvalNotificationCount(
+      resolvedRole,
+      summaryStatsQuery.data?.pendingPrimaryCount ?? 0,
+      summaryStatsQuery.data?.pendingFinalCount ?? 0
+    );
 
   useEffect(() => {
     if (!profileQuery.isSuccess) return;
@@ -380,12 +379,12 @@ export function DashboardClient() {
                     value: String(summaryStatsQuery.data?.totalKpiCount ?? 0),
                   },
                   {
-                    label: "전체 종합점수",
+                    label: "전체 평균 달성률",
                     value: `${Number((summaryStatsQuery.data?.averageAchievement ?? 0).toFixed(1))}%`,
                   },
                   {
-                    label: "실적 입력률",
-                    value: `${summaryStatsQuery.data?.totalScoredKpiCount ?? 0} / ${summaryStatsQuery.data?.totalKpiCount ?? 0} (${Number((summaryStatsQuery.data?.inputRate ?? 0).toFixed(1))}%)`,
+                    label: "최종 완료 KPI",
+                    value: `${summaryStatsQuery.data?.finalCompletedKpiCount ?? 0} / ${summaryStatsQuery.data?.totalKpiCount ?? 0} (${Number((((summaryStatsQuery.data?.finalCompletedKpiCount ?? 0) / Math.max(summaryStatsQuery.data?.totalKpiCount ?? 0, 1)) * 100).toFixed(1))}%)`,
                   },
                 ].map((card) => (
                   <div

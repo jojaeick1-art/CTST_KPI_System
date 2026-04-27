@@ -226,12 +226,26 @@ export type KpiIndicatorType =
   | "count"
   | "money"
   | "time"
-  | "uph";
+  | "uph"
+  | "headcount";
+
+export type KpiEvaluationType = "quantitative" | "qualitative";
+export type KpiQualitativeCalcType = "progress" | "completion";
+export type KpiAggregationType = "monthly" | "cumulative";
+export type KpiTargetFillPolicy = "exclude" | "carry_forward";
+export type KpiAchievementCap = 100 | 120 | null;
 
 export function indicatorUsesComputedAchievement(
   t: KpiIndicatorType
-): t is "ppm" | "quantity" | "count" | "money" | "time" | "uph" {
+): t is "ppm" | "quantity" | "count" | "money" | "time" | "uph" | "headcount" {
   return t !== "normal";
+}
+
+function applyAchievementCap(n: number, cap: KpiAchievementCap = 100): number {
+  if (!Number.isFinite(n)) return 0;
+  const lowerBounded = Math.max(0, n);
+  if (cap === null) return lowerBounded;
+  return Math.min(cap, lowerBounded);
 }
 
 /**
@@ -242,15 +256,17 @@ export function indicatorUsesComputedAchievement(
 export function quantityLikeAchievementPercent(
   actual: number,
   target: number,
-  higherIsBetter: boolean
+  higherIsBetter: boolean,
+  cap: KpiAchievementCap = 100
 ): number {
   if (!Number.isFinite(actual) || !Number.isFinite(target) || target <= 0) {
     return 0;
   }
   if (higherIsBetter) {
-    return clampPercent100((actual / target) * 100);
+    return applyAchievementCap((actual / target) * 100, cap);
   }
-  return clampPercent100((target / Math.max(actual, 1e-12)) * 100);
+  if (actual <= 0) return applyAchievementCap(100, cap);
+  return applyAchievementCap((target / actual) * 100, cap);
 }
 
 /** @deprecated {@link quantityLikeAchievementPercent} 사용 */
@@ -265,18 +281,23 @@ export function computedAchievementPercent(
   indicator: KpiIndicatorType,
   actual: number,
   target: number,
-  targetDirection: "up" | "down" | "na" = "up"
+  targetDirection: "up" | "down" | "na" = "up",
+  cap: KpiAchievementCap = 100
 ): number {
-  if (indicator === "ppm") return reversePpmAchievementPercent(actual, target);
+  if (indicator === "ppm") {
+    const higher = targetDirection === "up";
+    return quantityLikeAchievementPercent(actual, target, higher, cap);
+  }
   if (
     indicator === "quantity" ||
     indicator === "count" ||
     indicator === "money" ||
     indicator === "time" ||
-    indicator === "uph"
+    indicator === "uph" ||
+    indicator === "headcount"
   ) {
     const higher = targetDirection !== "down";
-    return quantityLikeAchievementPercent(actual, target, higher);
+    return quantityLikeAchievementPercent(actual, target, higher, cap);
   }
   /**
    * 일반(%) KPI
@@ -285,12 +306,25 @@ export function computedAchievementPercent(
    */
   if (indicator === "normal") {
     if (targetDirection === "na" || !Number.isFinite(target) || target <= 0) {
-      return clampPercent100(actual);
+      return applyAchievementCap(actual, cap);
     }
     const higher = targetDirection !== "down";
-    return quantityLikeAchievementPercent(actual, target, higher);
+    return quantityLikeAchievementPercent(actual, target, higher, cap);
   }
-  return clampPercent100(actual);
+  return applyAchievementCap(actual, cap);
+}
+
+export function qualitativeAchievementPercent(
+  actualProgressPercent: number,
+  targetProgressPercent: number,
+  calcType: KpiQualitativeCalcType,
+  cap: KpiAchievementCap = 100
+): number {
+  if (calcType === "completion") {
+    return actualProgressPercent >= 100 ? applyAchievementCap(100, cap) : 0;
+  }
+  const target = targetProgressPercent > 0 ? targetProgressPercent : 100;
+  return quantityLikeAchievementPercent(actualProgressPercent, target, true, cap);
 }
 
 /** 차트·실적 등록용 — `PerformanceModal` 목표선과 동일 규칙의 월별 목표 지표값 */
@@ -409,6 +443,7 @@ function parseKpiIndicatorTypeFromDb(raw: unknown): KpiIndicatorType {
   if (s === "quantity" || s === "수량" || s === "qty") return "quantity";
   if (s === "count" || s === "건수" || s === "cnt") return "count";
   if (s === "money" || s === "금액" || s === "억") return "money";
+  if (s === "headcount" || s === "명" || s === "인원") return "headcount";
   if (s === "time" || s === "시간" || s === "hr" || s === "hour" || s === "hours") {
     return "time";
   }
@@ -426,6 +461,7 @@ export function resolveEffectiveIndicatorTypeForUi(
 ): KpiIndicatorType {
   if (indicatorType !== "normal") return indicatorType;
   if (String(bm ?? "").toLowerCase().includes("금액")) return "money";
+  if (String(bm ?? "").includes("명")) return "headcount";
   return "normal";
 }
 
@@ -538,6 +574,56 @@ function monthlyAchievementRatesLatestRegisteredMonth(
   }
   if (bestMonth < 0 || bestRate === null) return [];
   return [bestRate];
+}
+
+function monthlyAchievementRatesByMonth(
+  targets: Record<string, unknown>[]
+): Partial<Record<number, number>> {
+  const out: Partial<Record<number, number>> = {};
+  const primaryMonthly = targets.find((t) =>
+    performanceMonthlyIsNonEmpty(t.performance_monthly)
+  );
+  if (!primaryMonthly) return out;
+  const raw = primaryMonthly.performance_monthly;
+  if (!performanceMonthlyIsNonEmpty(raw)) return out;
+  const o = raw as Record<string, unknown>;
+  for (const mi of KPI_MONTHS) {
+    const cell = o[String(mi)];
+    if (!cell || typeof cell !== "object" || Array.isArray(cell)) continue;
+    const rec = cell as PerformanceMonthlyCell;
+    const rate = toNum(rec.achievement_rate as number | string | null | undefined);
+    if (rate === null || !Number.isFinite(rate)) continue;
+    out[mi] = clampPercent100(rate);
+  }
+  return out;
+}
+
+function currentCalendarKpiMonth(): MonthKey {
+  const m = new Date().getMonth() + 1;
+  return (m >= 1 && m <= 12 ? m : 1) as MonthKey;
+}
+
+function itemIsEvaluatedInMonthRecord(
+  item: Record<string, unknown>,
+  monthlyTargets: Partial<Record<number, number>>,
+  month: MonthKey
+): boolean {
+  const start = toNum(item.period_start_month as number | string | null | undefined) ?? 1;
+  const end = toNum(item.period_end_month as number | string | null | undefined) ?? 12;
+  if (month < start || month > end) return false;
+
+  const exactTarget = monthlyTargets[month];
+  if (typeof exactTarget === "number" && Number.isFinite(exactTarget)) return true;
+
+  const fillPolicy = String(item.target_fill_policy ?? "").trim().toLowerCase();
+  if (fillPolicy === "carry_forward") {
+    for (let m = month - 1; m >= start; m -= 1) {
+      const priorTarget = monthlyTargets[m];
+      if (typeof priorTarget === "number" && Number.isFinite(priorTarget)) return true;
+    }
+  }
+
+  return Object.keys(monthlyTargets).length === 0;
 }
 
 function pushApprovedHalfAchievements(
@@ -673,7 +759,8 @@ export async function fetchDepartmentKpiSummary(): Promise<
     .select(
       `
       *,
-      kpi_targets (*)
+      kpi_targets (*),
+      kpi_milestones(target_month, target_value)
     `
     );
 
@@ -682,6 +769,7 @@ export async function fetchDepartmentKpiSummary(): Promise<
     name: d.name,
     averageAchievement: null as number | null,
     kpiItemCount: 0,
+    currentMonthAchievement: null as number | null,
     scoredKpiCount: 0,
     thresholdScore: null as number | null,
     progressScore: null as number | null,
@@ -698,6 +786,8 @@ export async function fetchDepartmentKpiSummary(): Promise<
   const thresholdByDept = new Map<string, Array<{ score: number; weight: number }>>();
   const progressByDept = new Map<string, Array<{ score: number; weight: number }>>();
   const qualitativeByDept = new Map<string, Array<{ score: number; weight: number }>>();
+  const currentMonthByDept = new Map<string, number[]>();
+  const currentMonth = currentCalendarKpiMonth();
 
   for (const d of departments ?? []) {
     ratesByDept.set(d.id, []);
@@ -706,6 +796,7 @@ export async function fetchDepartmentKpiSummary(): Promise<
     thresholdByDept.set(d.id, []);
     progressByDept.set(d.id, []);
     qualitativeByDept.set(d.id, []);
+    currentMonthByDept.set(d.id, []);
   }
 
   const typedItems = (items ?? []) as KpiItemWithPerformances[];
@@ -737,8 +828,31 @@ export async function fetchDepartmentKpiSummary(): Promise<
     // 승인 실적이 없는 항목은 0%로 간주해 평균에 포함한다.
     list.push(rep ?? 0);
 
-    const indicator = parseKpiIndicatorTypeFromDb((item as unknown as Record<string, unknown>).indicator_type);
-    const bmRaw = pickText(item as unknown as Record<string, unknown>, ["bm", "benchmark", "standard"]);
+    const itemRecord = item as unknown as Record<string, unknown>;
+    const milestoneRows = Array.isArray(itemRecord.kpi_milestones)
+      ? itemRecord.kpi_milestones.map(asRecord)
+      : [];
+    const monthlyTargets = milestoneRows.reduce<Partial<Record<number, number>>>((acc, row) => {
+      const month = toNum(row.target_month as number | string | null | undefined);
+      const value = toNum(row.target_value as number | string | null | undefined);
+      if (
+        month !== null &&
+        value !== null &&
+        Number.isInteger(month) &&
+        month >= 1 &&
+        month <= 15
+      ) {
+        acc[month] = value;
+      }
+      return acc;
+    }, {});
+    if (itemIsEvaluatedInMonthRecord(itemRecord, monthlyTargets, currentMonth)) {
+      const byMonth = monthlyAchievementRatesByMonth(targets);
+      currentMonthByDept.get(deptId)!.push(byMonth[currentMonth] ?? 0);
+    }
+
+    const indicator = parseKpiIndicatorTypeFromDb(itemRecord.indicator_type);
+    const bmRaw = pickText(itemRecord, ["bm", "benchmark", "standard"]);
     const weightRaw = Number(
       String((item as unknown as Record<string, unknown>).weight ?? "").trim()
     );
@@ -766,18 +880,20 @@ export async function fetchDepartmentKpiSummary(): Promise<
     const thresholdScore = weightedAverage(thresholdByDept.get(d.id) ?? []);
     const progressScore = weightedAverage(progressByDept.get(d.id) ?? []);
     const qualitativeScore = weightedAverage(qualitativeByDept.get(d.id) ?? []);
-    const compositeComponents: Array<{ score: number; weight: number }> = [];
-    if (thresholdScore !== null) compositeComponents.push({ score: thresholdScore, weight: 30 });
-    if (progressScore !== null) compositeComponents.push({ score: progressScore, weight: 50 });
-    if (qualitativeScore !== null) compositeComponents.push({ score: qualitativeScore, weight: 20 });
-    const compositeScore = weightedAverage(compositeComponents);
-    const averageAchievement = compositeScore ?? (rates.length > 0
-      ? rates.reduce((a, b) => a + b, 0) / rates.length
-      : null);
+    // 대시보드 부서 카드의 우측 상단 값은 부서 상세 "전체보기"와 동일하게
+    // KPI 전체 항목 평균(실적 없음은 0%)을 사용한다.
+    const averageAchievement =
+      rates.length > 0 ? rates.reduce((a, b) => a + b, 0) / rates.length : null;
+    const currentMonthRates = currentMonthByDept.get(d.id) ?? [];
+    const currentMonthAchievement =
+      currentMonthRates.length > 0
+        ? currentMonthRates.reduce((a, b) => a + b, 0) / currentMonthRates.length
+        : null;
     return {
       id: d.id,
       name: d.name,
       averageAchievement,
+      currentMonthAchievement,
       kpiItemCount: itemCountByDept.get(d.id) ?? 0,
       scoredKpiCount: scoredCountByDept.get(d.id) ?? 0,
       thresholdScore,
@@ -808,11 +924,22 @@ export type DepartmentKpiDetailItem = {
   targetDirection: "up" | "down" | "na";
   targetFinalValue: number | null;
   monthlyTargets: Partial<Record<number, number>>;
+  monthlyAchievementRates: Partial<Record<number, number>>;
   scheduleRaw: string | null;
   /** 일반(%) / PPM / 수량 / 건수 */
   indicatorType: KpiIndicatorType;
   /** ppm·quantity·count일 때 목표값 (`kpi_items.target_value`) */
   targetPpm: number | null;
+  status: string;
+  isFinalCompleted: boolean;
+  evaluationType: KpiEvaluationType | null;
+  unit: string | null;
+  qualitativeCalcType: KpiQualitativeCalcType | null;
+  aggregationType: KpiAggregationType | null;
+  targetFillPolicy: KpiTargetFillPolicy | null;
+  achievementCap: KpiAchievementCap;
+  structureVersion: number;
+  needsStructureReview: boolean;
   /** 목록·부서 평균용 대표 달성률. 월별 입력 시 가장 늦은 월 기준. 없으면 null */
   averageAchievement: number | null;
   targetCount: number;
@@ -827,6 +954,7 @@ type ScoreTrack = "threshold" | "progress" | "qualitative";
 export type DashboardSummaryStats = {
   totalKpiCount: number;
   totalScoredKpiCount: number;
+  finalCompletedKpiCount: number;
   inputRate: number;
   averageAchievement: number;
   pendingPrimaryCount: number;
@@ -997,6 +1125,45 @@ function pickNumber(
   return null;
 }
 
+function pickNullableText(obj: Record<string, unknown>, key: string): string | null {
+  const value = obj[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function parseEvaluationType(raw: unknown): KpiEvaluationType | null {
+  const s = String(raw ?? "").trim().toLowerCase();
+  if (s === "quantitative") return "quantitative";
+  if (s === "qualitative") return "qualitative";
+  return null;
+}
+
+function parseQualitativeCalcType(raw: unknown): KpiQualitativeCalcType | null {
+  const s = String(raw ?? "").trim().toLowerCase();
+  if (s === "completion") return "completion";
+  if (s === "progress") return "progress";
+  return null;
+}
+
+function parseAggregationType(raw: unknown): KpiAggregationType | null {
+  const s = String(raw ?? "").trim().toLowerCase();
+  if (s === "cumulative") return "cumulative";
+  if (s === "monthly") return "monthly";
+  return null;
+}
+
+function parseTargetFillPolicy(raw: unknown): KpiTargetFillPolicy | null {
+  const s = String(raw ?? "").trim().toLowerCase();
+  if (s === "carry_forward") return "carry_forward";
+  if (s === "exclude") return "exclude";
+  return null;
+}
+
+function parseAchievementCap(raw: unknown): KpiAchievementCap {
+  const n = toNum(raw as number | string | null | undefined);
+  if (n === null || !Number.isFinite(n)) return null;
+  return n >= 120 ? 120 : 100;
+}
+
 export async function fetchDepartmentKpiDetail(
   departmentId: string
 ): Promise<{
@@ -1160,6 +1327,7 @@ export async function fetchDepartmentKpiDetail(
       }
       return acc;
     }, {});
+    const monthlyAchievementRates = monthlyAchievementRatesByMonth(targets);
     const firstDraftRow = targetRows.find(
       (t) => String(t.approval_step ?? "").trim().toLowerCase() === PERF_STATUS_DRAFT
     );
@@ -1191,9 +1359,27 @@ export async function fetchDepartmentKpiDetail(
         : "unknown";
     const indicatorType = parseKpiIndicatorTypeFromDb(item.indicator_type);
     const targetPpm = pickNumber(item, ["target_value", "target_ppm"]);
+    const statusRaw = String(item.status ?? "").trim().toLowerCase();
+    const status = statusRaw || "active";
     const periodStartMonth = pickNumber(item, ["period_start_month"]);
     const periodEndMonth = pickNumber(item, ["period_end_month"]);
     const targetFinalValue = pickNumber(item, ["target_final_value"]);
+    const evaluationType = parseEvaluationType(item.evaluation_type);
+    const unit = pickNullableText(item, "unit");
+    const qualitativeCalcType = parseQualitativeCalcType(item.qualitative_calc_type);
+    const aggregationType = parseAggregationType(item.aggregation_type);
+    const targetFillPolicy = parseTargetFillPolicy(item.target_fill_policy);
+    const achievementCap = parseAchievementCap(item.achievement_cap);
+    const structureVersion =
+      pickNumber(item, ["kpi_structure_version"]) !== null
+        ? Number(pickNumber(item, ["kpi_structure_version"]))
+        : 1;
+    const needsStructureReview =
+      structureVersion < 2 ||
+      evaluationType === null ||
+      unit === null ||
+      aggregationType === null ||
+      targetFillPolicy === null;
     const directionRaw = String(item.target_direction ?? "").trim().toLowerCase();
     const targetDirection: "up" | "down" | "na" =
       directionRaw === "down" ? "down" : directionRaw === "na" ? "na" : "up";
@@ -1229,9 +1415,20 @@ export async function fetchDepartmentKpiDetail(
       targetDirection,
       targetFinalValue,
       monthlyTargets,
+      monthlyAchievementRates,
       scheduleRaw,
       indicatorType,
       targetPpm,
+      status,
+      isFinalCompleted: status === "closed",
+      evaluationType,
+      unit,
+      qualitativeCalcType,
+      aggregationType,
+      targetFillPolicy,
+      achievementCap,
+      structureVersion,
+      needsStructureReview,
       averageAchievement,
       targetCount: targets.length,
       hasRejectionNotice: targetsHaveRejectionReason(targets),
@@ -1342,12 +1539,24 @@ export async function fetchDashboardSummaryStats(
     (acc, d) => acc + (d.scoredKpiCount ?? 0),
     0
   );
+  let finalCompletedKpiCount = 0;
+  {
+    let itemQuery = supabase.from("kpi_items").select("id, dept_id, status");
+    if (filterDeptId) itemQuery = itemQuery.eq("dept_id", filterDeptId);
+    const { data: itemRows, error: itemStatusErr } = await itemQuery;
+    if (itemStatusErr) throw new Error(itemStatusErr.message);
+    finalCompletedKpiCount = (itemRows ?? []).filter((row) => {
+      const status = String((row as Record<string, unknown>).status ?? "").trim().toLowerCase();
+      return status === "closed";
+    }).length;
+  }
   const inputRate =
     totalKpiCount > 0 ? (totalScoredKpiCount / totalKpiCount) * 100 : 0;
 
   return {
     totalKpiCount,
     totalScoredKpiCount,
+    finalCompletedKpiCount,
     inputRate,
     averageAchievement,
     pendingPrimaryCount,
@@ -2001,6 +2210,7 @@ export async function upsertMonthPerformance(
      */
     indicatorMode?: KpiIndicatorType;
     actualValue?: number | null;
+    achievementCap?: KpiAchievementCap;
   },
   options?: {
     adminBypassApprovalLock?: boolean;
@@ -2072,10 +2282,7 @@ export async function upsertMonthPerformance(
   }
 
   const mode: KpiIndicatorType = input.indicatorMode ?? "normal";
-  const r =
-    mode === "ppm"
-      ? Math.max(0, input.achievement_rate)
-      : clampPercent100(input.achievement_rate);
+  const r = applyAchievementCap(input.achievement_rate, input.achievementCap ?? 100);
   const nextCell: PerformanceMonthlyCell = {
     ...prevCell,
     achievement_rate: r,
@@ -2676,6 +2883,25 @@ export async function removeKpiItemCascade(kpiItemId: string): Promise<void> {
   }
 }
 
+export async function updateKpiItemFinalCompletion(input: {
+  kpiItemId: string;
+  completed: boolean;
+}): Promise<void> {
+  const supabase = createBrowserSupabase();
+  const id = input.kpiItemId.trim();
+  if (!id) throw new Error("KPI 항목 ID가 없습니다.");
+
+  const { error } = await supabase
+    .from("kpi_items")
+    .update({ status: input.completed ? "closed" : "active" })
+    .eq("id", id);
+  if (error) {
+    throw new Error(
+      `${error.message} (kpi_items.status 컬럼·RLS 정책을 확인해 주세요.)`
+    );
+  }
+}
+
 /** 그룹장·관리자 UI: 항목별 실적 방식 및 목표값(`target_value`) */
 export async function updateKpiItemIndicatorSettings(input: {
   kpiItemId: string;
@@ -2940,12 +3166,19 @@ export type CreateManualKpiInput = {
   mainTopic: string;
   subTopic: string;
   detailActivity: string;
+  bmValue: string;
   baselineLabel: string;
   owner: string;
   weight: number;
+  evaluationType: KpiEvaluationType;
+  unit: string;
   indicatorType: KpiIndicatorType;
   targetDirection: "up" | "down" | "na";
   targetValue: number | null;
+  qualitativeCalcType: KpiQualitativeCalcType | null;
+  aggregationType: KpiAggregationType;
+  targetFillPolicy: KpiTargetFillPolicy;
+  achievementCap: KpiAchievementCap;
   periodStartMonth: number;
   periodEndMonth: number;
   monthlyTargets: Array<{ month: number; targetValue: number }>;
@@ -3032,12 +3265,19 @@ export async function createManualKpiItem(
       main_topic: input.mainTopic.trim(),
       sub_topic: input.subTopic.trim(),
       detail_activity: input.detailActivity.trim(),
-      benchmark: input.baselineLabel.trim(),
+      benchmark: input.bmValue.trim(),
       standard: input.baselineLabel.trim(),
       weight: safeWeight,
       manager_name: input.owner.trim(),
+      evaluation_type: input.evaluationType,
+      unit: input.unit,
       indicator_type: input.indicatorType,
       target_value: input.targetValue,
+      qualitative_calc_type: input.qualitativeCalcType,
+      aggregation_type: input.aggregationType,
+      target_fill_policy: input.targetFillPolicy,
+      achievement_cap: input.achievementCap,
+      kpi_structure_version: 2,
       period_start_month: input.periodStartMonth,
       period_end_month: input.periodEndMonth,
       target_direction: input.targetDirection,
@@ -3169,12 +3409,19 @@ export async function updateManualKpiItem(
       main_topic: input.mainTopic.trim(),
       sub_topic: input.subTopic.trim(),
       detail_activity: input.detailActivity.trim(),
-      benchmark: input.baselineLabel.trim(),
+      benchmark: input.bmValue.trim(),
       standard: input.baselineLabel.trim(),
       weight: safeWeight,
       manager_name: input.owner.trim(),
+      evaluation_type: input.evaluationType,
+      unit: input.unit,
       indicator_type: input.indicatorType,
       target_value: input.targetValue,
+      qualitative_calc_type: input.qualitativeCalcType,
+      aggregation_type: input.aggregationType,
+      target_fill_policy: input.targetFillPolicy,
+      achievement_cap: input.achievementCap,
+      kpi_structure_version: 2,
       period_start_month: input.periodStartMonth,
       period_end_month: input.periodEndMonth,
       target_direction: input.targetDirection,

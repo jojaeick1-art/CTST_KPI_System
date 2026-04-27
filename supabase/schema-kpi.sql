@@ -12,7 +12,15 @@
 --   main_topic text,
 --   sub_topic text,  -- KPI 항목명 등
 --   indicator_type text not null default 'normal' check (indicator_type in ('normal', 'ppm', 'quantity', 'count')),
---   target_value double precision null  -- ppm일 때 목표 PPM
+--   target_value double precision null,  -- 자동 계산 지표의 목표값
+--   evaluation_type text, -- quantitative | qualitative
+--   unit text, -- %, PPM, ea, 건, 명, k, 억, 시간, UPH
+--   target_direction text, -- up | down | na
+--   qualitative_calc_type text, -- progress | completion
+--   aggregation_type text, -- monthly | cumulative
+--   target_fill_policy text, -- exclude | carry_forward
+--   achievement_cap numeric, -- null | 100 | 120 등
+--   kpi_structure_version int not null default 1
 -- );
 
 -- 실적(달성률·증빙·설명)·승인은 모두 kpi_targets 한 행에 저장합니다. kpi_performances 테이블은 사용하지 않습니다.

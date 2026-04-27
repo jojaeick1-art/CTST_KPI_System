@@ -39,6 +39,8 @@ export type DepartmentKpiSummary = {
   name: string;
   /** KPI 항목별 대표 달성률(승인 실적 중 최고값)의 부서 평균(%). 없으면 null */
   averageAchievement: number | null;
+  /** 현재월 평가 대상 KPI의 평균 달성률. 평가 대상 항목이 없으면 null */
+  currentMonthAchievement: number | null;
   kpiItemCount: number;
   /** 실적 입력(월별/반기)이 1건 이상 존재하는 KPI 항목 수 */
   scoredKpiCount: number;

@@ -23,10 +23,11 @@ import {
   useWorkflowReviewMutation,
 } from "@/src/hooks/useKpiQueries";
 import {
+  approvalNotificationCount,
+  approvalNotificationDeptFilter,
   canAccessApprovalsPage,
   canGroupLeaderApprove,
   canTeamLeaderFinalApprove,
-  canViewAllDepartmentCards,
   hrefDashboardDepartmentList,
   isAdminRole,
   roleLabelKo,
@@ -206,14 +207,17 @@ export function ApprovalsClient() {
     resolvedRole !== undefined && canAccessApprovalsPage(resolvedRole);
   const summaryStatsQuery = useDashboardSummaryStats(
     profileQuery.isSuccess && profileQuery.data !== null && canSeeApprovals,
-    canViewAllDepartmentCards(resolvedRole ?? "") ? null : userDeptId
+    approvalNotificationDeptFilter(resolvedRole, userDeptId)
   );
   const featureQuery = useAppFeatureAvailability(
     profileQuery.isSuccess && profileQuery.data !== null
   );
   const pendingApprovalCount =
-    (summaryStatsQuery.data?.pendingPrimaryCount ?? 0) +
-    (summaryStatsQuery.data?.pendingFinalCount ?? 0);
+    approvalNotificationCount(
+      resolvedRole,
+      summaryStatsQuery.data?.pendingPrimaryCount ?? 0,
+      summaryStatsQuery.data?.pendingFinalCount ?? 0
+    );
   const isGroupLeader =
     resolvedRole !== undefined && canGroupLeaderApprove(resolvedRole);
   const isTeamLeader =

@@ -9,15 +9,16 @@ import {
   ClipboardList,
   FileUp,
   Loader2,
-  Target,
 } from "lucide-react";
 import { CtstAppSidebar } from "@/src/components/ctst-app-sidebar";
 import { createBrowserSupabase } from "@/src/lib/supabase";
 import {
   CURRENT_KPI_YEAR,
+  KPI_MONTHS,
   indicatorUsesComputedAchievement,
   type DepartmentKpiDetailItem,
   type KpiIndicatorType,
+  type MonthKey,
 } from "@/src/lib/kpi-queries";
 import {
   formatKoMax2Decimals,
@@ -25,11 +26,12 @@ import {
   roundToMax2DecimalPlaces,
 } from "@/src/lib/format-display-number";
 import {
+  approvalNotificationCount,
+  approvalNotificationDeptFilter,
   canAccessApprovalsPage,
   canBulkUploadKpiExcel,
   canConfigureKpiIndicatorType,
   canSubmitMonthlyPerformance,
-  canViewAllDepartmentCards,
   DASHBOARD_SHOW_MAIN_SESSION_KEY,
   hrefDashboardDepartmentList,
   isAdminRole,
@@ -45,6 +47,7 @@ import {
   useImportKpisByExcelMutation,
   useUpdateManualKpiMutation,
   useUpdateKpiItemIndicatorMutation,
+  useUpdateKpiItemFinalCompletionMutation,
 } from "@/src/hooks/useKpiQueries";
 import { PerformanceModal } from "./performance-modal";
 import { KpiCreateModal } from "./kpi-create-modal";
@@ -66,6 +69,8 @@ function indicatorBadgeClass(t: KpiIndicatorType): string {
       return "bg-orange-50 text-orange-800 ring-orange-200";
     case "uph":
       return "bg-cyan-50 text-cyan-800 ring-cyan-200";
+    case "headcount":
+      return "bg-fuchsia-50 text-fuchsia-800 ring-fuchsia-200";
     default:
       return "bg-slate-50 text-slate-700 ring-slate-200";
   }
@@ -79,11 +84,42 @@ function indicatorModeShortLabel(t: KpiIndicatorType): string {
   if (t === "money") return "금액(억)";
   if (t === "time") return "시간(h)";
   if (t === "uph") return "생산성(UPH)";
+  if (t === "headcount") return "인원(명)";
   return "—";
 }
 
 function monthLabel(month: number): string {
   return month <= 12 ? `${month}월` : `익년 ${month - 12}월`;
+}
+
+function defaultKpiMonth(): MonthKey {
+  const m = new Date().getMonth() + 1;
+  if (m >= 1 && m <= 12) return m as MonthKey;
+  return 1;
+}
+
+type AchievementMonthSelection = MonthKey | "all";
+
+function itemIsEvaluatedInMonth(item: DepartmentKpiDetailItem, month: MonthKey): boolean {
+  const start = item.periodStartMonth ?? 1;
+  const end = item.periodEndMonth ?? 12;
+  if (month < start || month > end) return false;
+
+  const exactTarget = item.monthlyTargets[month];
+  if (typeof exactTarget === "number" && Number.isFinite(exactTarget)) {
+    return true;
+  }
+
+  if (item.targetFillPolicy === "carry_forward") {
+    for (let m = month - 1; m >= start; m -= 1) {
+      const priorTarget = item.monthlyTargets[m];
+      if (typeof priorTarget === "number" && Number.isFinite(priorTarget)) {
+        return true;
+      }
+    }
+  }
+
+  return Object.keys(item.monthlyTargets).length === 0;
 }
 
 function periodRangeLabel(
@@ -108,7 +144,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   const role = profile?.role ?? "";
   const summaryStatsQuery = useDashboardSummaryStats(
     profileQuery.isSuccess && !!profile && canAccessApprovalsPage(role),
-    canViewAllDepartmentCards(role) ? null : userDeptId
+    approvalNotificationDeptFilter(role, userDeptId)
   );
   const featureQuery = useAppFeatureAvailability(
     profileQuery.isSuccess && profileQuery.data !== null
@@ -118,36 +154,15 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   const updateManualKpiMutation = useUpdateManualKpiMutation();
   const deleteKpiItemMutation = useDeleteKpiItemMutation();
   const updateIndicatorMutation = useUpdateKpiItemIndicatorMutation();
+  const updateFinalCompletionMutation = useUpdateKpiItemFinalCompletionMutation();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [selectedKpi, setSelectedKpi] = useState<{
-    id: string;
-    mainTopic: string;
-    subTopic: string;
-    detailActivity: string;
-    bm: string;
-    weight: string;
-    owner: string;
-    halfYearSummary: string;
-    challengeTarget: number | null;
-    firstHalfRate: number | null;
-    secondHalfRate: number | null;
-    firstHalfTarget: number | null;
-    secondHalfTarget: number | null;
-    h1TargetDate: string | null;
-    h2TargetDate: string | null;
-    periodStartMonth: number | null;
-    periodEndMonth: number | null;
-    targetDirection: "up" | "down" | "na";
-    targetFinalValue: number | null;
-    monthlyTargets: Partial<Record<number, number>>;
-    scheduleRaw: string | null;
-    indicatorType: KpiIndicatorType;
-    targetPpm: number | null;
-  } | null>(null);
+  const [selectedKpi, setSelectedKpi] = useState<DepartmentKpiDetailItem | null>(null);
   const [modalMode, setModalMode] = useState<"viewer" | "editor">("viewer");
   const [exportingExcel, setExportingExcel] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingKpiItem, setEditingKpiItem] = useState<DepartmentKpiDetailItem | null>(null);
+  const [selectedAchievementMonth, setSelectedAchievementMonth] =
+    useState<AchievementMonthSelection>(() => defaultKpiMonth());
   /** 목표값이 없는 상태에서 자동계산형 지표로 바꿀 때만 표시 */
   const [pendingIndicator, setPendingIndicator] = useState<{
     kpiId: string;
@@ -320,8 +335,11 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     typeof ensuredProfile.dept_id === "string" ? ensuredProfile.dept_id : null;
   const ensuredRole = ensuredProfile.role;
   const pendingApprovalCount =
-    (summaryStatsQuery.data?.pendingPrimaryCount ?? 0) +
-    (summaryStatsQuery.data?.pendingFinalCount ?? 0);
+    approvalNotificationCount(
+      ensuredRole,
+      summaryStatsQuery.data?.pendingPrimaryCount ?? 0,
+      summaryStatsQuery.data?.pendingFinalCount ?? 0
+    );
   const isAdmin = isAdminRole(ensuredRole);
   const featureRaw = featureQuery.data ?? { capa: false, voc: false, kpi: false };
   const featureAccess = {
@@ -344,6 +362,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     (isOwnDepartment &&
       (roleCanAlwaysEdit || canSubmitMonthlyPerformance(ensuredRole)));
   const canManageKpiItems = roleCanAlwaysEdit && (isAdmin || isOwnDepartment);
+  const canFinalizeKpiItems = roleCanAlwaysEdit && (isAdmin || isOwnDepartment);
   /** 관리자·그룹장: 엑셀 일괄 등록 후 소속 부서 또는(관리자만) 모든 부서에서 항목 추가 가능 */
   const canCreateKpi = canExcel && (isAdmin || isOwnDepartment);
   const detailItems = detailQuery.data?.items ?? [];
@@ -358,6 +377,22 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     if (s !== 0) return s;
     return a.detailActivity.localeCompare(b.detailActivity, "ko");
   });
+  const monthSelectableItems =
+    selectedAchievementMonth === "all"
+      ? detailItems
+      : detailItems.filter((item) =>
+          itemIsEvaluatedInMonth(item, selectedAchievementMonth)
+        );
+  const selectedMonthRates = monthSelectableItems.map((item) => {
+    if (selectedAchievementMonth === "all") {
+      return item.averageAchievement ?? 0;
+    }
+    return item.monthlyAchievementRates[selectedAchievementMonth] ?? 0;
+  });
+  const selectedMonthAverage =
+    selectedMonthRates.length > 0
+      ? selectedMonthRates.reduce((sum, rate) => sum + rate, 0) / selectedMonthRates.length
+      : null;
   const mainTopicOptions = Array.from(
     new Set(detailItems.map((item) => item.mainTopic.trim()).filter(Boolean))
   ).sort((a, b) => a.localeCompare(b, "ko"));
@@ -441,6 +476,34 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     }
   }
 
+  async function handleFinalizeKpiItem(kpiItemId: string): Promise<void> {
+    if (!canFinalizeKpiItems) {
+      window.alert("최종 완료 처리는 관리자·팀장·그룹장만 가능합니다.");
+      return;
+    }
+    const ok = window.confirm(
+      "이 KPI 항목을 최종 완료로 표시하시겠습니까? 대시보드의 '최종 완료 KPI'에 반영됩니다."
+    );
+    if (!ok) return;
+    try {
+      await updateFinalCompletionMutation.mutateAsync({
+        kpiItemId,
+        completed: true,
+      });
+      await detailQuery.refetch();
+      setSelectedKpi((prev) =>
+        prev && prev.id === kpiItemId
+          ? { ...prev, status: "closed", isFinalCompleted: true }
+          : prev
+      );
+      window.alert("KPI 항목이 최종 완료 처리되었습니다.");
+    } catch (e) {
+      window.alert(
+        e instanceof Error ? e.message : "최종 완료 처리 중 오류가 발생했습니다."
+      );
+    }
+  }
+
   return (
     <div className="flex min-h-screen flex-col bg-gradient-to-b from-sky-50/90 via-white to-white md:flex-row">
       <CtstAppSidebar
@@ -519,47 +582,6 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                       연도 선택(준비중)
                     </span>
                   </div>
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <div className="inline-flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 shadow-sm shadow-sky-100/50">
-                      <Target className="h-4 w-4 text-sky-600" aria-hidden />
-                      <p className="text-sm font-medium text-slate-700">
-                        종합 점수{" "}
-                        <span className="text-xs font-normal text-slate-500">(메인)</span>
-                        :{" "}
-                        <span className="text-base font-bold text-sky-700">
-                          {detailQuery.data.compositeScore === null
-                            ? "—"
-                            : formatKoPercentMax2(detailQuery.data.compositeScore)}
-                        </span>
-                      </p>
-                    </div>
-                    <div className="ml-0 flex flex-wrap items-center gap-2 sm:ml-3">
-                      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-                        <p className="text-[11px] font-semibold text-slate-500">임계치형 점수</p>
-                        <p className="text-sm font-bold text-slate-800">
-                          {detailQuery.data.thresholdScore === null
-                            ? "—"
-                            : formatKoPercentMax2(detailQuery.data.thresholdScore)}
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-                        <p className="text-[11px] font-semibold text-slate-500">진척형 점수</p>
-                        <p className="text-sm font-bold text-slate-800">
-                          {detailQuery.data.progressScore === null
-                            ? "—"
-                            : formatKoPercentMax2(detailQuery.data.progressScore)}
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-                        <p className="text-[11px] font-semibold text-slate-500">정성형 점수</p>
-                        <p className="text-sm font-bold text-slate-800">
-                          {detailQuery.data.qualitativeScore === null
-                            ? "—"
-                            : formatKoPercentMax2(detailQuery.data.qualitativeScore)}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
                 </div>
                 {canCreateKpi ? (
                   <div className="flex flex-wrap items-center gap-2">
@@ -594,6 +616,57 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                 </span>
                 <p className="mt-1 text-xs text-slate-500">
                   {detailQuery.data.department.name} 기준 합계입니다. 100점 초과 시 신규 항목 저장이 차단됩니다.
+                </p>
+              </div>
+              <div className="mt-4 rounded-2xl border border-sky-100 bg-white p-3 shadow-sm shadow-sky-100/40">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold text-slate-500">월별 달성률 보기</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-800">
+                      {selectedAchievementMonth === "all"
+                        ? "전체보기"
+                        : `${monthLabel(selectedAchievementMonth)} 평가 대상`}{" "}
+                      평균:{" "}
+                      <span className="text-sky-700">
+                        {selectedMonthAverage === null
+                          ? "데이터 없음"
+                          : formatKoPercentMax2(selectedMonthAverage)}
+                      </span>
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedAchievementMonth("all")}
+                      className={`rounded-full px-2.5 py-1 text-xs font-semibold transition ${
+                        selectedAchievementMonth === "all"
+                          ? "bg-sky-600 text-white shadow-sm"
+                          : "bg-sky-50 text-sky-700 ring-1 ring-sky-100 hover:bg-sky-100"
+                      }`}
+                    >
+                      전체보기
+                    </button>
+                    {KPI_MONTHS.filter((month) => month <= 12).map((month) => {
+                      const active = month === selectedAchievementMonth;
+                      return (
+                        <button
+                          key={`achievement-month-${month}`}
+                          type="button"
+                          onClick={() => setSelectedAchievementMonth(month)}
+                          className={`rounded-full px-2.5 py-1 text-xs font-semibold transition ${
+                            active
+                              ? "bg-sky-600 text-white shadow-sm"
+                              : "bg-sky-50 text-sky-700 ring-1 ring-sky-100 hover:bg-sky-100"
+                          }`}
+                        >
+                          {monthLabel(month)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <p className="mt-2 text-[11px] text-slate-500">
+                  월별 평균은 해당 월 평가 대상 KPI를 분모로 계산합니다. 평가 대상인데 실적이 없으면 0%로 포함하고, 전체보기는 기존 대표 달성률 기준입니다.
                 </p>
               </div>
             </header>
@@ -636,7 +709,15 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                     </thead>
                     <tbody>
                       {sortedItems.map((item, index) => {
-                        const has = item.averageAchievement !== null;
+                        const isAllView = selectedAchievementMonth === "all";
+                        const isEvaluatedMonth =
+                          !isAllView && itemIsEvaluatedInMonth(item, selectedAchievementMonth);
+                        const selectedMonthRate = isAllView
+                          ? item.averageAchievement
+                          : isEvaluatedMonth
+                            ? item.monthlyAchievementRates[selectedAchievementMonth] ?? 0
+                            : null;
+                        const has = selectedMonthRate !== null;
                         const prev = index > 0 ? sortedItems[index - 1] : null;
                         const showMainGroup = !prev || prev.mainTopic !== item.mainTopic;
                         return (
@@ -645,45 +726,32 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                             key={item.id}
                             onClick={() => {
                               setModalMode("viewer");
-                              setSelectedKpi({
-                                id: item.id,
-                                mainTopic: item.mainTopic,
-                                subTopic: item.subTopic,
-                                detailActivity: item.detailActivity,
-                                bm: item.bm,
-                                weight: item.weight,
-                                owner: item.owner,
-                                halfYearSummary: item.halfYearSummary,
-                                challengeTarget: item.challengeTarget,
-                                firstHalfRate: item.firstHalfRate,
-                                secondHalfRate: item.secondHalfRate,
-                                firstHalfTarget: item.firstHalfTarget,
-                                secondHalfTarget: item.secondHalfTarget,
-                                h1TargetDate: item.h1TargetDate,
-                                h2TargetDate: item.h2TargetDate,
-                                periodStartMonth: item.periodStartMonth,
-                                periodEndMonth: item.periodEndMonth,
-                                targetDirection: item.targetDirection,
-                                targetFinalValue: item.targetFinalValue,
-                                monthlyTargets: item.monthlyTargets,
-                                scheduleRaw: item.scheduleRaw,
-                                indicatorType: item.indicatorType,
-                                targetPpm: item.targetPpm,
-                              });
+                              setSelectedKpi(item);
                             }}
                             className={`min-h-[4.25rem] border-t border-sky-50 text-slate-700 transition hover:bg-sky-50/50 ${
                               item.hasRejectionNotice
                                 ? "bg-red-50/50 ring-1 ring-inset ring-red-300"
+                                : item.needsStructureReview
+                                  ? "bg-amber-50/50 ring-1 ring-inset ring-amber-300"
                                 : ""
                             }`}
                           >
                             <td className="align-middle px-4 py-2 font-medium text-slate-800">
                               {showMainGroup ? (
                                 <div className="flex items-center gap-2">
-                                  {item.hasRejectionNotice ? (
-                                    <span className="inline-flex shrink-0" title="반려 사유가 있는 항목">
+                                  {item.hasRejectionNotice || item.needsStructureReview ? (
+                                    <span
+                                      className="inline-flex shrink-0"
+                                      title={
+                                        item.hasRejectionNotice
+                                          ? "반려 사유가 있는 항목"
+                                          : "Rev02 평가 구조 확인 필요"
+                                      }
+                                    >
                                       <AlertTriangle
-                                        className="h-4 w-4 text-red-600"
+                                        className={`h-4 w-4 ${
+                                          item.hasRejectionNotice ? "text-red-600" : "text-amber-600"
+                                        }`}
                                         aria-hidden
                                       />
                                     </span>
@@ -702,6 +770,11 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                                 <p className="mt-0.5 line-clamp-2 text-xs text-slate-500">
                                   {item.detailActivity?.trim() ? item.detailActivity : "세부 내용 없음"}
                                 </p>
+                                {item.needsStructureReview ? (
+                                  <span className="mt-1 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800 ring-1 ring-amber-200">
+                                    KPI 구조 수정 필요
+                                  </span>
+                                ) : null}
                               </div>
                             </td>
                             <td className="align-middle px-4 py-2">{item.bm}</td>
@@ -714,13 +787,15 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                               <span className="inline-flex flex-col items-start gap-0.5 rounded-full bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700 ring-1 ring-sky-100">
                                 {has ? (
                                   <span className="tabular-nums leading-tight">
-                                    {formatKoPercentMax2(item.averageAchievement ?? 0)}
+                                    {formatKoPercentMax2(selectedMonthRate ?? 0)}
                                   </span>
                                 ) : (
                                   <>
-                                    <span className="leading-none tabular-nums">0%</span>
+                                    <span className="leading-none tabular-nums">
+                                      {isAllView ? "0%" : "—"}
+                                    </span>
                                     <span className="text-[10px] font-medium leading-tight text-sky-700/90">
-                                      데이터 없음
+                                      {isAllView ? "데이터 없음" : "평가 제외"}
                                     </span>
                                   </>
                                 )}
@@ -739,31 +814,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                                       return;
                                     }
                                     setModalMode("editor");
-                                    setSelectedKpi({
-                                      id: item.id,
-                                      mainTopic: item.mainTopic,
-                                      subTopic: item.subTopic,
-                                      detailActivity: item.detailActivity,
-                                      bm: item.bm,
-                                      weight: item.weight,
-                                      owner: item.owner,
-                                      halfYearSummary: item.halfYearSummary,
-                                      challengeTarget: item.challengeTarget,
-                                      firstHalfRate: item.firstHalfRate,
-                                      secondHalfRate: item.secondHalfRate,
-                                      firstHalfTarget: item.firstHalfTarget,
-                                      secondHalfTarget: item.secondHalfTarget,
-                                      h1TargetDate: item.h1TargetDate,
-                                      h2TargetDate: item.h2TargetDate,
-                                      periodStartMonth: item.periodStartMonth,
-                                      periodEndMonth: item.periodEndMonth,
-                                      targetDirection: item.targetDirection,
-                                      targetFinalValue: item.targetFinalValue,
-                                      monthlyTargets: item.monthlyTargets,
-                                      scheduleRaw: item.scheduleRaw,
-                                      indicatorType: item.indicatorType,
-                                      targetPpm: item.targetPpm,
-                                    });
+                                    setSelectedKpi(item);
                                   }}
                                   className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
@@ -806,6 +857,8 @@ export function DepartmentDetailClient({ departmentId }: Props) {
         profileRole={ensuredRole}
         canDeleteKpiItem={canManageKpiItems}
         onDeleteKpiItem={(kpiId) => handleDeleteKpiItem(kpiId)}
+        canFinalizeKpiItem={canFinalizeKpiItems}
+        onFinalizeKpiItem={(kpiId) => handleFinalizeKpiItem(kpiId)}
         onClose={() => setSelectedKpi(null)}
       />
       <KpiCreateModal
@@ -833,8 +886,14 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                 bm: editingKpiItem.bm,
                 owner: editingKpiItem.owner,
                 weight: editingKpiItem.weight,
+                evaluationType: editingKpiItem.evaluationType,
+                unit: editingKpiItem.unit,
                 indicatorType: editingKpiItem.indicatorType,
                 targetDirection: editingKpiItem.targetDirection,
+                qualitativeCalcType: editingKpiItem.qualitativeCalcType,
+                aggregationType: editingKpiItem.aggregationType,
+                targetFillPolicy: editingKpiItem.targetFillPolicy,
+                achievementCap: editingKpiItem.achievementCap,
                 periodStartMonth: editingKpiItem.periodStartMonth,
                 periodEndMonth: editingKpiItem.periodEndMonth,
                 targetPpm: editingKpiItem.targetPpm,
