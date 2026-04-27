@@ -16,6 +16,7 @@ import {
   CURRENT_KPI_YEAR,
   KPI_MONTHS,
   indicatorUsesComputedAchievement,
+  resolveEffectiveIndicatorTypeForUi,
   type DepartmentKpiDetailItem,
   type KpiIndicatorType,
   type MonthKey,
@@ -44,6 +45,7 @@ import {
   useCreateManualKpiMutation,
   useDeleteKpiItemMutation,
   useDepartmentKpiDetail,
+  useExtendKpiItemPeriodEndMonthMutation,
   useImportKpisByExcelMutation,
   useUpdateManualKpiMutation,
   useUpdateKpiItemIndicatorMutation,
@@ -133,6 +135,29 @@ function periodRangeLabel(
   return `${monthLabel(start)} ~ ${monthLabel(end)}`;
 }
 
+function parseBenchmarkValue(raw: string | null | undefined): number | null {
+  const match = String(raw ?? "").replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
+  if (!match?.[0]) return null;
+  const n = Number(match[0]);
+  return Number.isFinite(n) ? n : null;
+}
+
+function benchmarkValueLabel(item: DepartmentKpiDetailItem): string {
+  if (!item.bm?.trim()) return "—";
+  const parsed = parseBenchmarkValue(item.bm);
+  if (parsed === null) return item.bm;
+
+  const indicatorType = resolveEffectiveIndicatorTypeForUi(item.indicatorType, item.bm);
+  if (indicatorType === "ppm") return `${formatKoMax2Decimals(parsed)} ppm`;
+  if (indicatorType === "quantity") return `${formatKoMax2Decimals(parsed)} k`;
+  if (indicatorType === "count") return `${formatKoMax2Decimals(parsed)} 건`;
+  if (indicatorType === "headcount") return `${formatKoMax2Decimals(parsed)} 명`;
+  if (indicatorType === "money") return `${formatKoMax2Decimals(parsed)}억`;
+  if (indicatorType === "time") return `${formatKoMax2Decimals(parsed)} h`;
+  if (indicatorType === "uph") return `${formatKoMax2Decimals(parsed)} UPH`;
+  return formatKoPercentMax2(parsed);
+}
+
 export function DepartmentDetailClient({ departmentId }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -155,6 +180,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   const deleteKpiItemMutation = useDeleteKpiItemMutation();
   const updateIndicatorMutation = useUpdateKpiItemIndicatorMutation();
   const updateFinalCompletionMutation = useUpdateKpiItemFinalCompletionMutation();
+  const extendPeriodEndMonthMutation = useExtendKpiItemPeriodEndMonthMutation();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [selectedKpi, setSelectedKpi] = useState<DepartmentKpiDetailItem | null>(null);
   const [modalMode, setModalMode] = useState<"viewer" | "editor">("viewer");
@@ -351,7 +377,8 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   const roleCanAlwaysEdit =
     isAdmin ||
     normalizedRole === "group_leader" ||
-    normalizedRole === "team_leader";
+    normalizedRole === "team_leader" ||
+    normalizedRole === "group_team_leader";
   const canExcel = canBulkUploadKpiExcel(ensuredRole);
   const isOwnDepartment =
     Boolean(ensuredUserDeptId) && ensuredUserDeptId === departmentId;
@@ -476,15 +503,15 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     }
   }
 
-  async function handleFinalizeKpiItem(kpiItemId: string): Promise<void> {
+  async function handleFinalizeKpiItem(kpiItemId: string): Promise<boolean> {
     if (!canFinalizeKpiItems) {
       window.alert("최종 완료 처리는 관리자·팀장·그룹장만 가능합니다.");
-      return;
+      return false;
     }
     const ok = window.confirm(
       "이 KPI 항목을 최종 완료로 표시하시겠습니까? 대시보드의 '최종 완료 KPI'에 반영됩니다."
     );
-    if (!ok) return;
+    if (!ok) return false;
     try {
       await updateFinalCompletionMutation.mutateAsync({
         kpiItemId,
@@ -497,10 +524,56 @@ export function DepartmentDetailClient({ departmentId }: Props) {
           : prev
       );
       window.alert("KPI 항목이 최종 완료 처리되었습니다.");
+      return true;
     } catch (e) {
       window.alert(
         e instanceof Error ? e.message : "최종 완료 처리 중 오류가 발생했습니다."
       );
+      return false;
+    }
+  }
+
+  async function handleExtendKpiItemPeriodEndMonth(kpiItemId: string): Promise<boolean> {
+    if (!canFinalizeKpiItems) {
+      window.alert("지연 월 추가는 관리자·팀장·그룹장만 가능합니다.");
+      return false;
+    }
+
+    const item = detailItems.find((row) => row.id === kpiItemId);
+    const currentEnd = item?.periodEndMonth ?? 12;
+    if (currentEnd >= 15) {
+      window.alert("더 이상 월을 추가할 수 없습니다. 최대 익년 3월까지 가능합니다.");
+      return false;
+    }
+    const nextMonth = (currentEnd + 1) as MonthKey;
+    const ok = window.confirm(
+      `${monthLabel(nextMonth)}을(를) 지연 월로 추가하시겠습니까? 새 월 목표값은 현재 최종 목표값으로 등록됩니다.`
+    );
+    if (!ok) return false;
+
+    try {
+      await extendPeriodEndMonthMutation.mutateAsync({
+        kpiItemId,
+        nextPeriodEndMonth: nextMonth,
+      });
+      await detailQuery.refetch();
+      setSelectedKpi((prev) =>
+        prev && prev.id === kpiItemId
+          ? {
+              ...prev,
+              periodEndMonth: nextMonth,
+              monthlyTargets: {
+                ...prev.monthlyTargets,
+                [nextMonth]: prev.targetFinalValue ?? 0,
+              },
+            }
+          : prev
+      );
+      window.alert(`${monthLabel(nextMonth)}이(가) 지연 월로 추가되었습니다.`);
+      return true;
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "지연 월 추가 중 오류가 발생했습니다.");
+      return false;
     }
   }
 
@@ -777,15 +850,25 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                                 ) : null}
                               </div>
                             </td>
-                            <td className="align-middle px-4 py-2">{item.bm}</td>
+                            <td className="align-middle px-4 py-2">
+                              {benchmarkValueLabel(item)}
+                            </td>
                             <td className="align-middle px-4 py-2">{item.weight}</td>
                             <td className="align-middle px-4 py-2">{item.owner}</td>
                             <td className="align-middle w-[10rem] max-w-[10rem] px-3 py-2 text-xs font-medium leading-5 text-slate-700">
                               {periodRangeLabel(item.periodStartMonth, item.periodEndMonth)}
                             </td>
                             <td className="align-middle px-4 py-2">
-                              <span className="inline-flex flex-col items-start gap-0.5 rounded-full bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700 ring-1 ring-sky-100">
-                                {has ? (
+                              <span
+                                className={`inline-flex flex-col items-start gap-0.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${
+                                  item.isFinalCompleted
+                                    ? "bg-emerald-50 text-emerald-700 ring-emerald-100"
+                                    : "bg-sky-50 text-sky-700 ring-sky-100"
+                                }`}
+                              >
+                                {item.isFinalCompleted ? (
+                                  <span className="leading-tight">완료</span>
+                                ) : has ? (
                                   <span className="tabular-nums leading-tight">
                                     {formatKoPercentMax2(selectedMonthRate ?? 0)}
                                   </span>
@@ -859,6 +942,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
         onDeleteKpiItem={(kpiId) => handleDeleteKpiItem(kpiId)}
         canFinalizeKpiItem={canFinalizeKpiItems}
         onFinalizeKpiItem={(kpiId) => handleFinalizeKpiItem(kpiId)}
+        onExtendPeriodEndMonth={(kpiId) => handleExtendKpiItemPeriodEndMonth(kpiId)}
         onClose={() => setSelectedKpi(null)}
       />
       <KpiCreateModal
@@ -898,6 +982,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                 periodEndMonth: editingKpiItem.periodEndMonth,
                 targetPpm: editingKpiItem.targetPpm,
                 monthlyTargets: editingKpiItem.monthlyTargets,
+                monthlyTargetNotes: editingKpiItem.monthlyTargetNotes,
               }
             : null
         }

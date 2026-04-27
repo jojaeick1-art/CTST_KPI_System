@@ -152,6 +152,13 @@ export function DashboardClient() {
       : null;
   const summaryStatsQuery = useDashboardSummaryStats(
     profileQuery.isSuccess && profileQuery.data !== null,
+    null
+  );
+  const approvalStatsQuery = useDashboardSummaryStats(
+    profileQuery.isSuccess &&
+      profileQuery.data !== null &&
+      resolvedRole !== undefined &&
+      canAccessApprovalsPage(resolvedRole),
     approvalNotificationDeptFilter(resolvedRole, userDeptId)
   );
   const featureQuery = useAppFeatureAvailability(
@@ -160,8 +167,8 @@ export function DashboardClient() {
   const pendingApprovalCount =
     approvalNotificationCount(
       resolvedRole,
-      summaryStatsQuery.data?.pendingPrimaryCount ?? 0,
-      summaryStatsQuery.data?.pendingFinalCount ?? 0
+      approvalStatsQuery.data?.pendingPrimaryCount ?? 0,
+      approvalStatsQuery.data?.pendingFinalCount ?? 0
     );
 
   useEffect(() => {

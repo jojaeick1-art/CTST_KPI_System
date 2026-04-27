@@ -7,6 +7,7 @@ export type ProfileRole =
   | "ceo"
   | "team_leader"
   | "group_leader"
+  | "group_team_leader"
   | "principal"
   | "manager"
   | "senior"

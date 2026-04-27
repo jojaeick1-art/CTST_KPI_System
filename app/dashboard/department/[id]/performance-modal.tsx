@@ -86,6 +86,7 @@ type KpiModalItem = {
   targetDirection: "up" | "down" | "na";
   targetFinalValue: number | null;
   monthlyTargets: Partial<Record<number, number>>;
+  monthlyTargetNotes: Partial<Record<number, string>>;
   scheduleRaw: string | null;
   indicatorType: KpiIndicatorType;
   /** ppm·quantity·count 공통 목표 (`kpi_items.target_value`) */
@@ -165,10 +166,11 @@ import {
 type ChartDatum = {
   periodLabel: string;
   month: MonthKey | 0;
-  target: number;
+  target: number | null;
   actual: number;
   submittedPercent: number | null;
   description: string | null;
+  bubbleNote: string | null;
   evidence_url: string | null;
   hasComment: boolean;
   challengeMet: boolean;
@@ -176,6 +178,8 @@ type ChartDatum = {
   copiedFromMonth?: MonthKey;
   /** 막대 높이는 달성률 유지, 상단에는 제출 지표 문자열만(있을 때만) */
   barTopLabel?: string;
+  commentLabel?: string;
+  targetNoteLabel?: string;
 };
 
 /** 승인 반영 전이라도 해당 월에 실적 숫자가 저장돼 있으면 true (0%·0ppm 포함) */
@@ -259,7 +263,8 @@ type Props = {
   canDeleteKpiItem?: boolean;
   onDeleteKpiItem?: (kpiId: string) => Promise<void> | void;
   canFinalizeKpiItem?: boolean;
-  onFinalizeKpiItem?: (kpiId: string) => Promise<void> | void;
+  onFinalizeKpiItem?: (kpiId: string) => Promise<boolean> | boolean;
+  onExtendPeriodEndMonth?: (kpiId: string) => Promise<boolean> | boolean;
 };
 
 function toNumber(v: string): number | null {
@@ -340,6 +345,20 @@ function resolveMonthlyTargetForMonth(
   return null;
 }
 
+function cumulativeTargetThroughMonth(
+  monthlyTargets: Partial<Record<number, number>> | undefined,
+  month: MonthKey
+): number | null {
+  let sum = 0;
+  for (let m = 1; m <= month; m += 1) {
+    const value = monthlyTargets?.[m];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      sum += value;
+    }
+  }
+  return sum > 0 ? sum : null;
+}
+
 function performanceStatusLabelKo(status: string | null | undefined): string {
   const s = status?.trim().toLowerCase() ?? "";
   if (s === "draft") return "제출 전";
@@ -401,7 +420,9 @@ function KpiChartTooltip({
         <p className="text-indigo-700">B/M {d.barTopLabel || chartValueLabel(indicatorType, d.actual)}</p>
       ) : (
         <>
-          <p className="text-slate-600">목표 {chartValueLabel(indicatorType, d.target)}</p>
+          <p className="text-slate-600">
+            목표 {d.target !== null ? chartValueLabel(indicatorType, d.target) : "—"}
+          </p>
           <p className="text-sky-700">실적 {chartValueLabel(indicatorType, d.actual)}</p>
         </>
       )}
@@ -473,6 +494,131 @@ function KpiComposedLegend({ payload }: RechartsLegendContentProps) {
   );
 }
 
+function KpiCommentBubbleLabel({
+  x,
+  y,
+  width,
+  value,
+}: {
+  x?: number | string;
+  y?: number | string;
+  width?: number | string;
+  value?: unknown;
+}) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const nx = Number(x);
+  const ny = Number(y);
+  const nw = Number(width);
+  if (!Number.isFinite(nx) || !Number.isFinite(ny) || !Number.isFinite(nw)) {
+    return null;
+  }
+
+  const label = previewComment(value, 14) ?? "";
+  const boxWidth = Math.max(44, Math.min(96, label.length * 8 + 18));
+  const anchorX = nx + nw / 2;
+  const anchorY = ny;
+  const boxX = anchorX + 16;
+  const boxY = Math.max(0, anchorY - 34);
+  const connectorY = boxY + 11;
+
+  return (
+    <g pointerEvents="none">
+      <line
+        x1={anchorX}
+        y1={anchorY}
+        x2={boxX}
+        y2={connectorY}
+        stroke="#f59e0b"
+        strokeWidth={1}
+        strokeDasharray="2 2"
+      />
+      <circle cx={anchorX} cy={anchorY} r={2.5} fill="#f59e0b" />
+      <rect
+        x={boxX}
+        y={boxY}
+        width={boxWidth}
+        height={22}
+        rx={8}
+        fill="#fef3c7"
+        stroke="#f59e0b"
+        strokeWidth={1}
+      />
+      <text
+        x={boxX + boxWidth / 2}
+        y={boxY + 14}
+        textAnchor="middle"
+        fill="#92400e"
+        fontSize={10}
+        fontWeight={700}
+      >
+        {label}
+      </text>
+    </g>
+  );
+}
+
+function KpiTargetBubbleLabel({
+  x,
+  y,
+  value,
+}: {
+  x?: number | string;
+  y?: number | string;
+  value?: unknown;
+}) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const nx = Number(x);
+  const ny = Number(y);
+  if (!Number.isFinite(nx) || !Number.isFinite(ny)) {
+    return null;
+  }
+
+  const label = previewComment(value, 12) ?? "";
+  const boxWidth = Math.max(42, Math.min(92, label.length * 8 + 18));
+  const anchorX = nx;
+  const anchorY = ny;
+  const placeLeft = anchorX > boxWidth + 22;
+  const boxX = placeLeft ? anchorX - boxWidth - 16 : anchorX + 16;
+  const boxY = Math.max(0, anchorY - 36);
+  const connectorY = boxY + 11;
+  const pointerX = placeLeft ? boxX + boxWidth : boxX;
+
+  return (
+    <g pointerEvents="none">
+      <line
+        x1={anchorX}
+        y1={anchorY}
+        x2={pointerX}
+        y2={connectorY}
+        stroke="#dc2626"
+        strokeWidth={1}
+        strokeDasharray="2 2"
+      />
+      <circle cx={anchorX} cy={anchorY} r={2.5} fill="#dc2626" />
+      <rect
+        x={boxX}
+        y={boxY}
+        width={boxWidth}
+        height={22}
+        rx={8}
+        fill="#fee2e2"
+        stroke="#dc2626"
+        strokeWidth={1}
+      />
+      <text
+        x={boxX + boxWidth / 2}
+        y={boxY + 14}
+        textAnchor="middle"
+        fill="#991b1b"
+        fontSize={10}
+        fontWeight={700}
+      >
+        {label}
+      </text>
+    </g>
+  );
+}
+
 function chartValueLabel(indicatorType: KpiIndicatorType, value: number): string {
   if (indicatorType === "ppm") return `${formatKoMax2Decimals(value)} ppm`;
   if (indicatorType === "quantity") return `${formatKoMax2Decimals(value)} k`;
@@ -482,6 +628,60 @@ function chartValueLabel(indicatorType: KpiIndicatorType, value: number): string
   if (indicatorType === "time") return `${formatKoMax2Decimals(value)} h`;
   if (indicatorType === "uph") return `${formatKoMax2Decimals(value)} UPH`;
   return formatKoPercentMax2(value);
+}
+
+function benchmarkLabel(indicatorType: KpiIndicatorType, raw: string): string {
+  const parsed = parseBenchmarkValue(raw);
+  return parsed !== null ? chartValueLabel(indicatorType, parsed) : raw;
+}
+
+type ChartYDomain = { min: number; max: number };
+
+function niceAxisStep(rawStep: number): number {
+  if (!Number.isFinite(rawStep) || rawStep <= 0) return 1;
+  const exponent = Math.floor(Math.log10(rawStep));
+  const base = 10 ** exponent;
+  const fraction = rawStep / base;
+  if (fraction <= 1) return base;
+  if (fraction <= 2) return 2 * base;
+  if (fraction <= 5) return 5 * base;
+  return 10 * base;
+}
+
+function centeredChartYDomain(
+  values: number[],
+  percentClamped: boolean,
+  centerValue?: number | null
+): ChartYDomain {
+  const finiteValues = values.filter((v) => Number.isFinite(v));
+  if (finiteValues.length === 0) {
+    return { min: 0, max: percentClamped ? 120 : 100 };
+  }
+
+  const rawMax = Math.max(...finiteValues);
+  if (!Number.isFinite(rawMax) || rawMax <= 0) {
+    return { min: 0, max: percentClamped ? 120 : 1 };
+  }
+
+  if (percentClamped) {
+    return { min: 0, max: 120 };
+  }
+
+  const desiredTop =
+    centerValue !== null &&
+    centerValue !== undefined &&
+    Number.isFinite(centerValue) &&
+    centerValue > 0
+      ? centerValue * 2
+      : rawMax * 2;
+  const step = niceAxisStep(desiredTop / 4);
+  let max = Math.ceil(desiredTop / step) * step;
+
+  if (max <= 0) {
+    max = step;
+  }
+
+  return { min: 0, max };
 }
 
 /** 차트 세로축 단위 안내 — % 그래프 설명과 혼동 방지 */
@@ -521,6 +721,7 @@ export function PerformanceModal({
   onDeleteKpiItem,
   canFinalizeKpiItem = false,
   onFinalizeKpiItem,
+  onExtendPeriodEndMonth,
 }: Props) {
   const perfQuery = useKpiPerformances(isOpen && kpiItem ? kpiItem.id : null);
   const saveMutation = useUpsertMonthPerformance();
@@ -531,6 +732,7 @@ export function PerformanceModal({
   const [editorRate, setEditorRate] = useState("");
   const [editorActualPpm, setEditorActualPpm] = useState("");
   const [editorDescription, setEditorDescription] = useState("");
+  const [editorBubbleNote, setEditorBubbleNote] = useState("");
   const [editorFile, setEditorFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [liveRows, setLiveRows] = useState<ItemPerformanceRow[]>([]);
@@ -573,7 +775,8 @@ export function PerformanceModal({
   const isPrivilegedEditor =
     isAdmin ||
     normalizedRole === "group_leader" ||
-    normalizedRole === "team_leader";
+    normalizedRole === "team_leader" ||
+    normalizedRole === "group_team_leader";
   const canFinalComplete = canFinalizeKpiItem && isPrivilegedEditor;
 
   const activeMonthList = useMemo(() => {
@@ -609,14 +812,7 @@ export function PerformanceModal({
 
   const displayMonthList = useMemo(() => {
     if (!kpiItem || activeMonthList.length === 0) return [] as MonthKey[];
-    const start = activeMonthList[0]!;
-    const periodEnd = activeMonthList[activeMonthList.length - 1]!;
-    const endWithBuffer = Math.min(15, periodEnd + 3);
-    const months: MonthKey[] = [];
-    for (let m = start; m <= endWithBuffer; m += 1) {
-      months.push(m as MonthKey);
-    }
-    return months;
+    return activeMonthList;
   }, [kpiItem, activeMonthList]);
 
   const activeSet = useMemo(
@@ -651,6 +847,9 @@ export function PerformanceModal({
       return null;
     }
     const monthlyMap = kpiItem.monthlyTargets ?? {};
+    if (kpiItem.aggregationType === "cumulative") {
+      return cumulativeTargetThroughMonth(monthlyMap, editorMonth);
+    }
     const fromMap = resolveMonthlyTargetForMonth(
       monthlyMap,
       editorMonth,
@@ -665,6 +864,9 @@ export function PerformanceModal({
 
   const computedMonthlyTargetEditor = useMemo(() => {
     if (!isComputedItem || !kpiItem) return null;
+    if (kpiItem.aggregationType === "cumulative") {
+      return cumulativeTargetThroughMonth(kpiItem.monthlyTargets, editorMonth);
+    }
     const fromMonthly = resolveMonthlyTargetForMonth(
       kpiItem.monthlyTargets,
       editorMonth,
@@ -673,6 +875,19 @@ export function PerformanceModal({
     if (fromMonthly !== null) return fromMonthly;
     return computedTargetMetric;
   }, [isComputedItem, kpiItem, editorMonth, computedTargetMetric]);
+
+  const displayedFinalTargetValue = useMemo(() => {
+    if (!kpiItem) return null;
+    if (kpiItem.aggregationType === "cumulative") {
+      const values = Object.values(kpiItem.monthlyTargets ?? {}).filter(
+        (v): v is number => typeof v === "number" && Number.isFinite(v)
+      );
+      if (values.length > 0) {
+        return values.reduce((sum, value) => sum + value, 0);
+      }
+    }
+    return kpiItem.targetFinalValue;
+  }, [kpiItem]);
 
   const normalMetricEntryActive = Boolean(
     effectiveIndicatorType === "normal" &&
@@ -803,38 +1018,68 @@ export function PerformanceModal({
         Number.isFinite(Number(sourceRow.actual_value))
           ? Number(sourceRow.actual_value)
           : null;
+      const monthlyTargetMap = kpiItem.monthlyTargets ?? {};
+      const hasMonthlyTargetPlan = Object.keys(monthlyTargetMap).length > 0;
       const monthTargetNormal =
         effectiveIndicatorType === "normal"
           ? (() => {
-              const monthlyMap = kpiItem.monthlyTargets ?? {};
+              const exactMonthlyTarget = monthlyTargetMap[m];
+              if (
+                kpiItem.aggregationType === "cumulative" &&
+                typeof exactMonthlyTarget === "number" &&
+                Number.isFinite(exactMonthlyTarget)
+              ) {
+                return exactMonthlyTarget;
+              }
+              if (kpiItem.aggregationType === "cumulative") {
+                return null;
+              }
               const fromMap = resolveMonthlyTargetForMonth(
-                monthlyMap,
+                monthlyTargetMap,
                 m,
                 kpiItem.targetFillPolicy
               );
               if (fromMap !== null) {
                 return fromMap;
               }
+              if (hasMonthlyTargetPlan) {
+                return null;
+              }
               return normalMonthlyContext
                 ? resolveNormalMonthlyTargetMetric(m, normalMonthlyContext)
                 : 0;
             })()
-          : 0;
+          : null;
       const monthTargetComputed =
         indicatorUsesComputedAchievement(effectiveIndicatorType)
           ? (() => {
+              const exactMonthlyTarget = monthlyTargetMap[m];
+              if (
+                kpiItem.aggregationType === "cumulative" &&
+                typeof exactMonthlyTarget === "number" &&
+                Number.isFinite(exactMonthlyTarget)
+              ) {
+                return exactMonthlyTarget;
+              }
+              if (kpiItem.aggregationType === "cumulative") {
+                return null;
+              }
               const fromMonthly = resolveMonthlyTargetForMonth(
                 kpiItem.monthlyTargets,
                 m,
                 kpiItem.targetFillPolicy
               );
               if (fromMonthly !== null) return fromMonthly;
+              if (hasMonthlyTargetPlan) {
+                return null;
+              }
               return computedTargetMetric ?? 0;
             })()
-          : 0;
+          : null;
       const normalRowMetricMode =
         effectiveIndicatorType === "normal" &&
         kpiItem.targetDirection !== "na" &&
+        monthTargetNormal !== null &&
         monthTargetNormal > 0;
 
       let actual: number;
@@ -854,8 +1099,10 @@ export function PerformanceModal({
       }
 
       const description = row?.description ?? null;
+      const bubbleNote = row?.bubble_note ?? null;
+      const targetNote = kpiItem.monthlyTargetNotes?.[m] ?? null;
 
-      let target: number;
+      let target: number | null;
       if (indicatorUsesComputedAchievement(effectiveIndicatorType)) {
         target = monthTargetComputed;
       } else if (effectiveIndicatorType === "normal") {
@@ -884,6 +1131,7 @@ export function PerformanceModal({
         actual,
         submittedPercent: rawSubmitted,
         description,
+        bubbleNote,
         evidence_url: row?.evidence_url ?? null,
         hasComment: Boolean(description?.trim()),
         challengeMet:
@@ -893,23 +1141,33 @@ export function PerformanceModal({
           rawSubmitted >= kpiItem.challengeTarget,
         ...(copied ? { copiedFromMonth: copied.month } : {}),
         ...(topLabel ? { barTopLabel: topLabel } : {}),
+        ...(bubbleNote?.trim() ? { commentLabel: bubbleNote } : {}),
+        ...(targetNote?.trim() ? { targetNoteLabel: targetNote } : {}),
       };
     });
     const benchmarkNumber = parseBenchmarkValue(kpiItem.bm);
+    const benchmarkBarValue =
+      benchmarkNumber ??
+      (displayedFinalTargetValue !== null &&
+      displayedFinalTargetValue !== undefined &&
+      Number.isFinite(displayedFinalTargetValue)
+        ? displayedFinalTargetValue
+        : 0);
     const benchmarkRow: ChartDatum | null =
       kpiItem.bm && kpiItem.bm !== "-"
         ? {
             periodLabel: "B/M",
             month: 0,
-            target: 0,
-            actual: benchmarkNumber ?? 0,
+            target: null,
+            actual: benchmarkBarValue,
             submittedPercent: null,
             description: "전년실적 또는 벤치마크 기준",
+            bubbleNote: null,
             evidence_url: null,
             hasComment: false,
             challengeMet: false,
             isBenchmark: true,
-            barTopLabel: kpiItem.bm,
+            barTopLabel: benchmarkLabel(effectiveIndicatorType, kpiItem.bm),
           }
         : null;
     if (kpiItem.aggregationType !== "cumulative") {
@@ -918,7 +1176,9 @@ export function PerformanceModal({
     let targetSum = 0;
     let actualSum = 0;
     const cumulativeSeries = series.map((row) => {
-      targetSum += row.target;
+      if (row.target !== null) {
+        targetSum += row.target;
+      }
       actualSum += row.actual;
       return {
         ...row,
@@ -934,27 +1194,48 @@ export function PerformanceModal({
     effectiveIndicatorType,
     computedTargetMetric,
     normalMonthlyContext,
+    displayedFinalTargetValue,
   ]);
 
-  const chartYDomainMax = useMemo(() => {
-    if (!kpiItem) return 100;
-    let mx = 0;
-    for (const d of chartData) {
-      mx = Math.max(mx, d.actual, d.target);
-    }
-    if (!Number.isFinite(mx) || mx <= 0) return 100;
-    const paddedMax = mx * 1.2;
-    const unit = paddedMax <= 10 ? 1 : 10;
-    const roundedTop = Math.ceil(paddedMax / unit) * unit;
+  const chartYDomain = useMemo((): ChartYDomain => {
+    if (!kpiItem) return { min: 0, max: 100 };
     const normalMetricYAxis =
       effectiveIndicatorType === "normal" && kpiItem.targetDirection !== "na";
-    if (!indicatorUsesComputedAchievement(effectiveIndicatorType) && !normalMetricYAxis) {
-      // 일반·측정방향 없음: 막대가 달성률(0~100)일 때 Y축 상한 100%
-      return Math.min(100, Math.max(5, roundedTop));
+    const higherNormalPercentYAxis =
+      effectiveIndicatorType === "normal" && kpiItem.targetDirection !== "down";
+    const percentClamped =
+      !indicatorUsesComputedAchievement(effectiveIndicatorType) &&
+      (!normalMetricYAxis || higherNormalPercentYAxis);
+    const targetValues = chartData
+      .filter((d) => !d.isBenchmark && d.target !== null && Number.isFinite(d.target))
+      .map((d) => d.target as number);
+    const lowerTargetCenter =
+      kpiItem.targetDirection === "down" && targetValues.length > 0
+        ? Math.max(...targetValues)
+        : null;
+    const values: number[] = [];
+
+    for (const d of chartData) {
+      if (d.target !== null && Number.isFinite(d.target) && d.target !== 0) {
+        values.push(d.target);
+      }
+      if ((d.isBenchmark || d.barTopLabel || d.actual !== 0) && Number.isFinite(d.actual)) {
+        values.push(d.actual);
+      }
     }
-    // PPM·수량·건수·금액·일반(목표연동 지표값): 원값 범위
-    return Math.max(10, roundedTop);
+
+    return centeredChartYDomain(values, percentClamped, lowerTargetCenter);
   }, [kpiItem, chartData, effectiveIndicatorType]);
+
+  const hasTargetNoteLabels = useMemo(
+    () =>
+      chartData.some(
+        (d) => typeof d.targetNoteLabel === "string" && d.targetNoteLabel.trim()
+      ),
+    [chartData]
+  );
+  const hidePercentHeadroomTick =
+    effectiveIndicatorType === "normal" && kpiItem?.targetDirection !== "down";
 
   const selectedRow = rowByMonth.get(selectedMonth) ?? null;
   const selectedChartDatum =
@@ -1069,6 +1350,7 @@ export function PerformanceModal({
           : ""
       );
       setEditorDescription(row?.description ?? "");
+      setEditorBubbleNote(row?.bubble_note ?? "");
       setEditorFile(null);
     },
     [liveRows, normalMetricEntryActive, rowByMonth, displayMonthList]
@@ -1081,8 +1363,25 @@ export function PerformanceModal({
 
   if (!isOpen || !kpiItem) return null;
   const item = kpiItem;
+  const currentPeriodEndMonth =
+    item.periodEndMonth ?? activeMonthList[activeMonthList.length - 1] ?? 12;
+  const nextDelayMonth =
+    currentPeriodEndMonth < 15 ? ((currentPeriodEndMonth + 1) as MonthKey) : null;
+  const canAddDelayMonth =
+    canFinalComplete &&
+    !item.isFinalCompleted &&
+    nextDelayMonth !== null &&
+    typeof onExtendPeriodEndMonth === "function";
 
-  async function handleSaveMonth() {
+  async function handleExtendDelayMonth() {
+    if (!nextDelayMonth || !onExtendPeriodEndMonth) return;
+    const ok = await onExtendPeriodEndMonth(item.id);
+    if (!ok) return;
+    setSelectedMonth(nextDelayMonth);
+    setEditorMonth(nextDelayMonth);
+  }
+
+  async function handleSaveMonth(options?: { finalizeAfterSave?: boolean }) {
     if (!activeSet.has(editorMonth)) {
       notify("error", "해당 월은 프로젝트 기간에 포함되지 않습니다.");
       return;
@@ -1114,17 +1413,29 @@ export function PerformanceModal({
         return;
       }
       actualMetricSave = ap;
+      const actualForAchievement =
+        item.aggregationType === "cumulative"
+          ? displayMonthList.reduce((sum, month) => {
+              if (month >= editorMonth) return sum;
+              const prior = rowByMonth.get(month)?.actual_value;
+              const priorValue =
+                prior !== null && prior !== undefined && Number.isFinite(Number(prior))
+                  ? Number(prior)
+                  : 0;
+              return sum + priorValue;
+            }, 0) + ap
+          : ap;
       rateNum =
         item.evaluationType === "qualitative"
           ? qualitativeAchievementPercent(
-              ap,
+              actualForAchievement,
               computedMonthlyTargetEditor,
               item.qualitativeCalcType ?? "progress",
               item.achievementCap
             )
           : computedAchievementPercent(
               effectiveIndicatorType,
-              ap,
+              actualForAchievement,
               computedMonthlyTargetEditor,
               item.targetDirection,
               item.achievementCap
@@ -1140,9 +1451,21 @@ export function PerformanceModal({
         return;
       }
       actualMetricSave = metric;
+      const actualForAchievement =
+        item.aggregationType === "cumulative"
+          ? displayMonthList.reduce((sum, month) => {
+              if (month >= editorMonth) return sum;
+              const prior = rowByMonth.get(month)?.actual_value;
+              const priorValue =
+                prior !== null && prior !== undefined && Number.isFinite(Number(prior))
+                  ? Number(prior)
+                  : 0;
+              return sum + priorValue;
+            }, 0) + metric
+          : metric;
       rateNum = computedAchievementPercent(
         "normal",
-        metric,
+        actualForAchievement,
         normalMonthlyTargetEditor,
         item.targetDirection,
         item.achievementCap
@@ -1169,6 +1492,7 @@ export function PerformanceModal({
         month: editorMonth,
         achievement_rate: rateNum,
         description: editorDescription,
+        bubbleNote: editorBubbleNote,
         indicatorMode: isComputed ? effectiveIndicatorType : "normal",
         achievementCap: item.achievementCap,
         ...(actualMetricSave !== undefined
@@ -1205,13 +1529,24 @@ export function PerformanceModal({
         });
       }
 
+      let finalized = false;
+      if (options?.finalizeAfterSave) {
+        if (!canFinalComplete || !onFinalizeKpiItem || item.isFinalCompleted) {
+          notify("error", "최종 완료 처리 권한이 없거나 이미 완료된 항목입니다.");
+          return;
+        }
+        finalized = await onFinalizeKpiItem(item.id);
+      }
+
       const refreshed = await perfQuery.refetch();
       if (refreshed.data) setLiveRows(refreshed.data);
       setEditorFile(null);
       const normalizedActor = normalizeRole(profileRole);
       notify(
         "success",
-        normalizedActor === "team_leader"
+        finalized
+          ? `${editorMonth}월 실적 저장 및 최종 완료 처리가 완료되었습니다.`
+          : normalizedActor === "team_leader" || normalizedActor === "group_team_leader"
           ? `${editorMonth}월 실적이 저장되었습니다. (상태: 승인 완료 — 즉시 반영)`
           : normalizedActor === "group_leader"
             ? `${editorMonth}월 실적이 저장되었습니다. (상태: 최종 승인 대기 — 팀장 검토)`
@@ -1306,11 +1641,6 @@ export function PerformanceModal({
     onClose();
   }
 
-  async function handleFinalizeKpiItemInModal() {
-    if (!kpiItem || !canFinalComplete || !onFinalizeKpiItem || item.isFinalCompleted) return;
-    await onFinalizeKpiItem(kpiItem.id);
-  }
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3">
       <AppToast
@@ -1375,16 +1705,6 @@ export function PerformanceModal({
                   실적 수정
                 </button>
               ) : null}
-              {canFinalComplete ? (
-                <button
-                  type="button"
-                  onClick={() => void handleFinalizeKpiItemInModal()}
-                  disabled={item.isFinalCompleted}
-                  className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-emerald-700 shadow-sm hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {item.isFinalCompleted ? "완료됨" : "최종 완료"}
-                </button>
-              ) : null}
               {canDeleteKpiItem ? (
                 <button
                   type="button"
@@ -1423,14 +1743,10 @@ export function PerformanceModal({
                 </p>
               </div>
               <div className="rounded-lg bg-slate-50 px-3 py-2">
-                <p className="text-[11px] font-semibold text-slate-500">계산 기준</p>
-                <p className="mt-0.5 text-sm font-semibold text-slate-800">
-                  {item.aggregationType === "cumulative" ? "누적" : "당월"}
-                </p>
-              </div>
-              <div className="rounded-lg bg-slate-50 px-3 py-2">
                 <p className="text-[11px] font-semibold text-slate-500">B/M</p>
-                <p className="mt-0.5 text-sm font-semibold text-slate-800">{item.bm || "—"}</p>
+                <p className="mt-0.5 text-sm font-semibold text-slate-800">
+                  {item.bm ? benchmarkLabel(effectiveIndicatorType, item.bm) : "—"}
+                </p>
               </div>
               <div className="rounded-lg bg-slate-50 px-3 py-2">
                 <p className="text-[11px] font-semibold text-slate-500">평가 기간</p>
@@ -1441,17 +1757,10 @@ export function PerformanceModal({
               <div className="rounded-lg bg-slate-50 px-3 py-2">
                 <p className="text-[11px] font-semibold text-slate-500">최종 목표값</p>
                 <p className="mt-0.5 text-sm font-semibold text-slate-800">
-                  {item.targetFinalValue !== null && item.targetFinalValue !== undefined
-                    ? chartValueLabel(effectiveIndicatorType, item.targetFinalValue)
+                  {displayedFinalTargetValue !== null &&
+                  displayedFinalTargetValue !== undefined
+                    ? chartValueLabel(effectiveIndicatorType, displayedFinalTargetValue)
                     : "—"}
-                </p>
-              </div>
-              <div className="rounded-lg bg-slate-50 px-3 py-2">
-                <p className="text-[11px] font-semibold text-slate-500">자동계산 기준값</p>
-                <p className="mt-0.5 text-sm font-semibold text-slate-800">
-                  {computedMonthlyTargetEditor !== null && computedMonthlyTargetEditor > 0
-                    ? chartValueLabel(effectiveIndicatorType, computedMonthlyTargetEditor)
-                    : "해당 없음"}
                 </p>
               </div>
               <div className="rounded-lg bg-slate-50 px-3 py-2">
@@ -1486,13 +1795,14 @@ export function PerformanceModal({
                 <CartesianGrid strokeDasharray="3 3" stroke="#dbeafe" />
                 <XAxis dataKey="periodLabel" tick={{ fill: "#334155", fontSize: 11 }} />
                 <YAxis
-                  domain={[0, chartYDomainMax]}
-                  tickFormatter={(v) =>
-                    chartValueLabel(
-                      effectiveIndicatorType,
-                      typeof v === "number" ? v : Number(v)
-                    )
-                  }
+                  domain={[chartYDomain.min, chartYDomain.max]}
+                  allowDataOverflow
+                  ticks={hidePercentHeadroomTick ? [20, 40, 60, 80, 100] : undefined}
+                  tickFormatter={(v) => {
+                    const numeric = typeof v === "number" ? v : Number(v);
+                    if (hidePercentHeadroomTick && numeric > 100) return "";
+                    return chartValueLabel(effectiveIndicatorType, numeric);
+                  }}
                   tick={{ fontSize: 11 }}
                 />
                 <Tooltip content={<KpiChartTooltip indicatorType={effectiveIndicatorType} />} />
@@ -1540,6 +1850,7 @@ export function PerformanceModal({
                     fontSize={10}
                     fontWeight={600}
                   />
+                  <LabelList dataKey="commentLabel" content={KpiCommentBubbleLabel} />
                 </Bar>
                 <Line
                   type="linear"
@@ -1548,9 +1859,14 @@ export function PerformanceModal({
                   stroke={CHART_TARGET_LINE_STROKE}
                   strokeWidth={2}
                   strokeDasharray="6 5"
+                  connectNulls
                   dot={{ r: 3, fill: CHART_TARGET_LINE_STROKE, strokeWidth: 0 }}
                   activeDot={{ r: 5, fill: CHART_TARGET_LINE_STROKE }}
-                />
+                >
+                  {hasTargetNoteLabels ? (
+                    <LabelList dataKey="targetNoteLabel" content={KpiTargetBubbleLabel} />
+                  ) : null}
+                </Line>
               </ComposedChart>
             </ResponsiveContainer>
             <p className="mt-2 px-1 text-[11px] leading-snug text-slate-500">
@@ -1565,7 +1881,7 @@ export function PerformanceModal({
               !normalLinkedToTargetChart ? (
                 <>
                   {" "}
-                  세로축 범위는 해당 항목 목표·실적 최대치에 맞춰 0~100% 안에서 자동 조정됩니다.
+                  높을수록 좋은 % 그래프는 0~100% 기준으로, 낮을수록 좋은 목표 연동 그래프는 목표값이 중간 높이에 오도록 표시됩니다.
                 </>
               ) : null}
             </p>
@@ -1742,9 +2058,20 @@ export function PerformanceModal({
 
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
               <div>
-                <label className="mb-1 block text-xs font-medium text-slate-600">
-                  월 선택
-                </label>
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <label className="block text-xs font-medium text-slate-600">
+                    월 선택
+                  </label>
+                  {canAddDelayMonth && nextDelayMonth ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleExtendDelayMonth()}
+                      className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800 hover:bg-amber-100"
+                    >
+                      {formatAxisLabel(nextDelayMonth)} 지연 월 추가
+                    </button>
+                  ) : null}
+                </div>
                 <select
                   value={editorMonth}
                   onChange={(e) => setEditorMonth(Number(e.target.value) as MonthKey)}
@@ -1771,6 +2098,11 @@ export function PerformanceModal({
                 {editorMonthLocked ? (
                   <p className="mt-1 text-[11px] text-amber-700">
                     승인 대기 중이거나 승인 완료된 월은 그룹장·팀장·관리자만 수정할 수 있습니다.
+                  </p>
+                ) : null}
+                {canAddDelayMonth ? (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    일정 지연 시 권한자가 다음 월을 한 달씩 추가할 수 있습니다.
                   </p>
                 ) : null}
               </div>
@@ -1869,7 +2201,7 @@ export function PerformanceModal({
 
               <div>
                 <label className="mb-1 block text-xs font-medium text-slate-600">
-                  특이사항 (remarks)
+                  세부내용 / 코멘트
                 </label>
                 <textarea
                   value={editorDescription}
@@ -1877,8 +2209,29 @@ export function PerformanceModal({
                   disabled={!activeSet.has(editorMonth) || editorMonthLocked}
                   rows={3}
                   className="w-full resize-none rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-[#1a1a1a] outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200 disabled:bg-slate-100"
-                  placeholder="해당 월 코멘트"
+                  placeholder="해당 실적에 대한 세부내용을 입력해 주세요."
                 />
+                <p className="mt-1 text-[11px] text-slate-500">
+                  이 내용은 기존 코멘트 영역에 표시됩니다.
+                </p>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">
+                  그래프 말풍선
+                </label>
+                <input
+                  type="text"
+                  value={editorBubbleNote}
+                  onChange={(e) => setEditorBubbleNote(e.target.value)}
+                  disabled={!activeSet.has(editorMonth) || editorMonthLocked}
+                  maxLength={40}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-[#1a1a1a] outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200 disabled:bg-slate-100"
+                  placeholder="예: 고객 요청 지연"
+                />
+                <p className="mt-1 text-[11px] text-slate-500">
+                  입력 시 해당 월 막대 위에 짧은 말풍선으로 표시됩니다.
+                </p>
               </div>
 
               <div>
@@ -1940,12 +2293,39 @@ export function PerformanceModal({
                 {saveMutation.isPending || uploading ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : null}
-                {normalizeRole(profileRole) === "team_leader"
+                {normalizeRole(profileRole) === "team_leader" ||
+                normalizeRole(profileRole) === "group_team_leader"
                   ? "저장 (즉시 승인 적용)"
                   : normalizeRole(profileRole) === "group_leader"
                     ? "저장 (최종 승인 대기로 제출)"
                     : "저장 (1차 승인 대기로 제출)"}
               </button>
+              {canFinalComplete && !item.isFinalCompleted ? (
+                <button
+                  type="button"
+                  onClick={() => void handleSaveMonth({ finalizeAfterSave: true })}
+                  disabled={
+                    saveMutation.isPending ||
+                    uploading ||
+                    !activeSet.has(editorMonth) ||
+                    editorMonthLocked ||
+                    !editorHasEvidenceForSave ||
+                    (isComputedItem &&
+                      parseNonNegativeDecimal(editorActualPpm) === null) ||
+                    (normalMetricEntryActive &&
+                      parseNonNegativeDecimal(editorRate) === null) ||
+                    (!isComputedItem &&
+                      !normalMetricEntryActive &&
+                      !editorRate.trim())
+                  }
+                  className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                >
+                  {saveMutation.isPending || uploading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : null}
+                  저장 후 최종 완료
+                </button>
+              ) : null}
             </div>
           </div>
         ) : null}

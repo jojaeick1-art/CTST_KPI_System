@@ -1,0 +1,723 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CTST KPI 시스템 사용자 매뉴얼</title>
+  <style>
+    :root {
+      --ink: #0f172a;
+      --muted: #475569;
+      --line: #dbeafe;
+      --soft: #f8fafc;
+      --blue: #0284c7;
+      --blue-dark: #075985;
+      --red: #dc2626;
+      --amber: #d97706;
+      --green: #059669;
+      --purple: #6366f1;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: linear-gradient(180deg, #eef6ff 0, #ffffff 220px);
+      font-family: "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", Arial, sans-serif;
+      line-height: 1.65;
+    }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 32px 22px 72px; }
+    .hero {
+      padding: 32px;
+      border: 1px solid #bae6fd;
+      border-radius: 24px;
+      background: rgba(255,255,255,.92);
+      box-shadow: 0 18px 50px rgba(2, 132, 199, .12);
+    }
+    h1 { margin: 0 0 10px; font-size: 34px; letter-spacing: -.04em; }
+    h2 { margin: 42px 0 14px; padding-top: 12px; font-size: 25px; letter-spacing: -.03em; border-top: 2px solid var(--line); }
+    h3 { margin: 28px 0 10px; font-size: 19px; color: #0f3f5f; }
+    h4 { margin: 18px 0 8px; font-size: 16px; }
+    p { margin: 8px 0; }
+    a { color: var(--blue-dark); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .subtitle { margin: 0; color: var(--muted); font-size: 15px; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid #cbd5e1;
+      border-radius: 999px;
+      background: #fff;
+      padding: 5px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #334155;
+    }
+    .toc {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 10px;
+      margin-top: 22px;
+    }
+    .toc a {
+      display: block;
+      padding: 10px 12px;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      background: #fff;
+      font-weight: 700;
+    }
+    .note, .warn, .ok, .example {
+      margin: 14px 0;
+      padding: 13px 15px;
+      border-radius: 14px;
+      border: 1px solid;
+      background: #fff;
+    }
+    .note { border-color: #bae6fd; background: #f0f9ff; }
+    .warn { border-color: #fed7aa; background: #fff7ed; }
+    .ok { border-color: #bbf7d0; background: #f0fdf4; }
+    .example { border-color: #e9d5ff; background: #faf5ff; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+    .card {
+      border: 1px solid #e2e8f0;
+      border-radius: 16px;
+      background: #fff;
+      padding: 16px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, .04);
+    }
+    .card h3, .card h4 { margin-top: 0; }
+    ul, ol { padding-left: 22px; }
+    li { margin: 5px 0; }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0 18px; background: #fff; }
+    th, td { border: 1px solid #e2e8f0; padding: 10px 11px; vertical-align: top; }
+    th { background: #f1f5f9; text-align: left; }
+    code {
+      padding: 2px 5px;
+      border-radius: 6px;
+      background: #e2e8f0;
+      color: #0f172a;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: .92em;
+    }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 10px;
+      margin: 16px 0;
+    }
+    .step {
+      position: relative;
+      min-height: 88px;
+      padding: 13px;
+      border: 1px solid #dbeafe;
+      border-radius: 14px;
+      background: #fff;
+    }
+    .step b { display: block; color: var(--blue-dark); }
+    .legend-dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 5px;
+      vertical-align: -1px;
+    }
+    .blue { background: var(--blue); }
+    .red { background: var(--red); }
+    .amber { background: var(--amber); }
+    .purple { background: var(--purple); }
+    details {
+      margin: 10px 0;
+      border: 1px solid #e2e8f0;
+      border-radius: 14px;
+      background: #fff;
+      overflow: hidden;
+    }
+    summary {
+      cursor: pointer;
+      padding: 12px 14px;
+      font-weight: 800;
+      background: #f8fafc;
+    }
+    details > div { padding: 0 14px 14px; }
+    .small { color: var(--muted); font-size: 13px; }
+    .kbd { border: 1px solid #cbd5e1; border-bottom-width: 2px; border-radius: 6px; background: #fff; padding: 1px 6px; font-weight: 700; }
+    .pagebreak { break-before: page; }
+    @media print {
+      body { background: #fff; }
+      .wrap { max-width: none; padding: 0; }
+      .hero, .card, .note, .warn, .ok, .example, details { box-shadow: none; }
+      a { color: inherit; text-decoration: none; }
+      details { break-inside: avoid; }
+      details > div { display: block; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="hero">
+      <h1>CTST KPI 시스템 사용자 매뉴얼</h1>
+      <p class="subtitle">
+        KPI 항목 추가, 월별 목표 설정, 실적 등록/수정, 승인, 지연 월 추가, 최종 완료까지
+        실사용자 관점에서 정리한 단일 파일 매뉴얼입니다.
+      </p>
+      <div class="meta">
+        <span class="chip">대상: 그룹장 · 팀장 · 수석 · 책임 · 선임 · 프로</span>
+        <span class="chip">형식: 단일 HTML 파일</span>
+        <span class="chip">배포: 이 파일 1개만 전달</span>
+        <span class="chip">작성 기준: 현재 KPI 화면 기준</span>
+      </div>
+      <nav class="toc" aria-label="목차">
+        <a href="#overview">1. 전체 흐름</a>
+        <a href="#roles">2. 역할별 권한</a>
+        <a href="#create">3. KPI 항목 추가/수정</a>
+        <a href="#target">4. 월별 목표값 설정</a>
+        <a href="#chart">5. 그래프와 말풍선</a>
+        <a href="#performance">6. 실적 등록/수정</a>
+        <a href="#approval">7. 승인과 반려</a>
+        <a href="#final">8. 최종 완료</a>
+        <a href="#delay">9. 지연 월 추가</a>
+        <a href="#cases">10. 상황별 입력 예시</a>
+        <a href="#faq">11. FAQ/주의사항</a>
+      </nav>
+    </section>
+
+    <section id="overview">
+      <h2>1. 전체 흐름</h2>
+      <p>
+        KPI는 먼저 항목을 만들고, 월별 목표값을 설정한 뒤, 매월 실적과 증빙을 등록하고,
+        승인 절차를 거쳐 관리합니다. 모든 실적이 정리되고 더 이상 관리할 변경이 없으면
+        권한자가 <b>최종 완료</b> 처리합니다.
+      </p>
+      <div class="flow">
+        <div class="step"><b>1. KPI 항목 추가</b>분류, 세부내용, B/M, 측정 기준, 목표값, 가중치, 담당자 입력</div>
+        <div class="step"><b>2. 월별 목표 설정</b>월별 목표값과 목표 말풍선 입력</div>
+        <div class="step"><b>3. 실적 등록</b>월 선택 후 실적값, 코멘트, 그래프 말풍선, 첨부파일 저장</div>
+        <div class="step"><b>4. 승인</b>그룹장 1차 승인, 팀장 최종 승인 또는 권한자 즉시 반영</div>
+        <div class="step"><b>5. 관리/수정</b>필요 시 실적 수정, 지연 월 추가, 말풍선 수정</div>
+        <div class="step"><b>6. 최종 완료</b>저장 후 최종 완료 처리, 부서 화면 달성률 영역에 완료 표시</div>
+      </div>
+      <div class="note">
+        <b>핵심 원칙:</b> KPI 그래프는 월별 목표값을 기준으로 생성됩니다.
+        목표값을 어떻게 입력했는지가 이후 실적 입력, 달성률, 그래프 모양에 그대로 영향을 줍니다.
+      </div>
+    </section>
+
+    <section id="roles">
+      <h2>2. 역할별 권한</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>역할</th>
+            <th>주요 가능 작업</th>
+            <th>주의할 점</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>관리자</td>
+            <td>전체 부서 조회, KPI 추가/수정/삭제, 실적 등록/수정, 승인, 최종 완료, 지연 월 추가</td>
+            <td>부서 제한 없이 관리 가능하므로 수정 대상 부서를 반드시 확인합니다.</td>
+          </tr>
+          <tr>
+            <td>그룹장</td>
+            <td>소속 부서 KPI 추가/수정, 실적 등록/수정, 1차 승인, 최종 완료, 지연 월 추가</td>
+            <td>그룹장이 저장한 실적은 보통 팀장 검토 단계로 넘어갑니다.</td>
+          </tr>
+          <tr>
+            <td>팀장</td>
+            <td>소속 부서 KPI 수정, 실적 등록/수정, 최종 승인, 최종 완료, 지연 월 추가</td>
+            <td>팀장이 저장한 실적은 즉시 승인 완료 상태로 반영됩니다.</td>
+          </tr>
+          <tr>
+            <td>그룹장/팀장 겸임</td>
+            <td>그룹장 권한과 팀장 권한을 모두 수행</td>
+            <td>1차 승인 대상과 최종 승인 대상을 모두 확인할 수 있습니다.</td>
+          </tr>
+          <tr>
+            <td>수석 · 책임 · 선임 · 프로</td>
+            <td>소속 부서 KPI 조회, 실적 등록/수정</td>
+            <td>KPI 항목 자체의 수정/삭제, 최종 완료, 지연 월 추가는 불가합니다.</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="warn">
+        타 부서 KPI는 조회만 가능할 수 있습니다. 실적 등록/수정은 본인 소속 부서에서 진행하는 것이 기본입니다.
+      </div>
+    </section>
+
+    <section id="create" class="pagebreak">
+      <h2>3. KPI 항목 추가/수정</h2>
+      <p>
+        부서 상세 화면에서 <b>KPI 항목 추가</b>를 누르면 새 KPI를 만들 수 있습니다.
+        이미 등록된 KPI는 권한자에게 <b>KPI 수정</b> 버튼으로 표시됩니다.
+      </p>
+
+      <h3>3-1. 기본 정보 입력</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>입력 항목</th>
+            <th>입력 방법</th>
+            <th>예시</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>KPI 대분류 / 소분류</td>
+            <td>항목을 찾기 쉽게 분류명을 입력합니다.</td>
+            <td>품질 / 고객 클레임, 생산성 / 설비 제작</td>
+          </tr>
+          <tr>
+            <td>세부 내용</td>
+            <td>KPI가 무엇을 관리하는지 설명합니다.</td>
+            <td>신규 설비 제작 일정 준수, 불량률 개선</td>
+          </tr>
+          <tr>
+            <td>B/M</td>
+            <td>전년 실적, 기준값, 벤치마크, 신규 여부를 입력합니다.</td>
+            <td>80%, 0.2, 전년 82.5, 신규제작</td>
+          </tr>
+          <tr>
+            <td>평가 유형</td>
+            <td>수치로 평가하면 정량, 진행률/완료 여부 중심이면 정성 선택</td>
+            <td>정량 평가, 정성 평가</td>
+          </tr>
+          <tr>
+            <td>측정 기준</td>
+            <td>그래프와 달성률 계산에 사용할 단위를 선택합니다.</td>
+            <td>%, PPM, 건, 명, k, 억, 시간, UPH</td>
+          </tr>
+          <tr>
+            <td>측정 방향</td>
+            <td>실적이 높을수록 좋은지, 낮을수록 좋은지 선택합니다.</td>
+            <td>매출: 높을수록 좋음, 불량률: 낮을수록 좋음</td>
+          </tr>
+          <tr>
+            <td>계산 기준</td>
+            <td>월별 실적을 당월 단독으로 볼지, 누적으로 볼지 선택합니다.</td>
+            <td>매월 불량률: 당월 단독, 9월까지 5건 완료: 누적 계산</td>
+          </tr>
+          <tr>
+            <td>가중치</td>
+            <td>부서 내 KPI 중요도를 1~100 사이 숫자로 입력합니다.</td>
+            <td>10, 20, 30</td>
+          </tr>
+          <tr>
+            <td>담당자</td>
+            <td>해당 KPI를 관리할 담당자를 입력합니다.</td>
+            <td>홍길동, 1111</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>3-2. B/M 입력 시 그래프 표시</h3>
+      <ul>
+        <li>B/M에 숫자가 있으면 측정 기준에 맞춰 표시됩니다. 예: 측정 기준이 <code>억</code>이면 <code>0.2억</code>으로 표시됩니다.</li>
+        <li>B/M이 <code>신규</code>, <code>신규제작</code>처럼 숫자가 아닌 텍스트이면 라벨은 텍스트 그대로 보이고, 그래프 막대 높이는 최종 목표값만큼 표시됩니다.</li>
+        <li>B/M 막대는 그래프의 1월 왼쪽에 별도 기준 막대로 표시됩니다.</li>
+      </ul>
+    </section>
+
+    <section id="target">
+      <h2>4. 월별 목표값 설정</h2>
+      <p>
+        KPI 항목 추가/수정 화면 오른쪽의 <b>월별 목표값 설정</b>에서 월별 목표값과 목표 말풍선을 입력합니다.
+        목표값은 그래프의 빨간 점선 기준이 됩니다.
+      </p>
+
+      <h3>4-1. 당월 단독</h3>
+      <p>
+        각 월의 목표와 실적을 그 달 하나만 놓고 비교합니다. 매월 독립적으로 관리하는 지표에 적합합니다.
+      </p>
+      <div class="example">
+        <b>예시:</b> 매월 불량률 목표를 3월 2%, 4월 1.8%, 5월 1.5%처럼 관리하는 경우
+        <ul>
+          <li>3월 목표값: 2</li>
+          <li>4월 목표값: 1.8</li>
+          <li>5월 목표값: 1.5</li>
+        </ul>
+      </div>
+
+      <h3>4-2. 누적 계산</h3>
+      <p>
+        각 월에 입력하는 값은 “그 달에 추가로 달성해야 하는 양”입니다.
+        그래프에서는 1월부터 해당 월까지의 합계가 목표선으로 표시됩니다.
+      </p>
+      <div class="example">
+        <b>예시: 9월까지 총 5건 완료해야 하는 KPI</b>
+        <ul>
+          <li>1월 목표값: 1건</li>
+          <li>4월 목표값: 2건</li>
+          <li>6월 목표값: 1건</li>
+          <li>9월 목표값: 1건</li>
+        </ul>
+        최종 목표값은 자동으로 <b>5건</b>이 됩니다. 그래프 목표선은 1월 1건, 4월 3건, 6월 4건, 9월 5건처럼 누적으로 올라갑니다.
+      </div>
+
+      <h3>4-3. 목표 말풍선</h3>
+      <p>
+        목표 말풍선은 월별 목표값 옆에 입력하는 짧은 설명입니다. 목표선 근처에 표시되어 해당 월 목표의 의미를 보여줍니다.
+      </p>
+      <ul>
+        <li>입력 예시: <code>검토</code>, <code>제작</code>, <code>책임</code>, <code>양산</code></li>
+        <li>미입력 시 그래프에 표시되지 않습니다.</li>
+        <li>입력 후 지우고 저장하면 표시되지 않습니다.</li>
+        <li>실적 말풍선과 겹치지 않도록 목표점에서 점선으로 연결되어 별도 위치에 표시됩니다.</li>
+      </ul>
+      <div class="warn">
+        목표 말풍선은 “목표에 대한 설명”입니다. 실제로 왜 지연됐는지, 어떤 일이 있었는지 같은 실적 내용은 실적 등록 화면의 코멘트 또는 그래프 말풍선에 입력합니다.
+      </div>
+    </section>
+
+    <section id="chart" class="pagebreak">
+      <h2>5. 그래프와 말풍선 읽는 법</h2>
+      <div class="grid">
+        <div class="card">
+          <h3><span class="legend-dot red"></span>목표선</h3>
+          <p>빨간 점선은 월별 목표값입니다. 누적 계산 KPI는 월별 추가 목표값이 누적되어 표시됩니다.</p>
+        </div>
+        <div class="card">
+          <h3><span class="legend-dot blue"></span>실적 막대</h3>
+          <p>파란 막대는 승인 반영된 실적입니다. 저장했지만 승인 전인 경우 상태에 따라 그래프 반영이 다르게 보일 수 있습니다.</p>
+        </div>
+        <div class="card">
+          <h3><span class="legend-dot purple"></span>B/M 막대</h3>
+          <p>B/M 기준값은 1월 왼쪽에 별도 막대로 표시됩니다.</p>
+        </div>
+        <div class="card">
+          <h3><span class="legend-dot amber"></span>도전 목표</h3>
+          <p>도전 목표를 달성한 월은 금색 계열로 강조됩니다.</p>
+        </div>
+      </div>
+
+      <h3>5-1. 그래프 축 기준</h3>
+      <ul>
+        <li>높을수록 좋은 <code>%</code> KPI는 100%가 최대 기준입니다. 라벨이 잘리지 않도록 그래프 공간은 위쪽에 여유를 두지만, 눈금은 20%, 40%, 60%, 80%, 100% 기준으로 보입니다.</li>
+        <li>낮을수록 좋은 KPI는 목표치가 그래프 중간 근처에 오도록 표시됩니다.</li>
+        <li>건, 억, 명, 시간, UPH 등 수치형 KPI는 목표값과 실적값의 단위에 맞춰 표시됩니다.</li>
+      </ul>
+
+      <h3>5-2. 말풍선 종류</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>종류</th>
+            <th>입력 위치</th>
+            <th>그래프 표시 위치</th>
+            <th>용도</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>목표 말풍선</td>
+            <td>KPI 항목 추가/수정 &gt; 월별 목표값 설정</td>
+            <td>빨간 목표선 근처</td>
+            <td>그 달 목표의 계획 단계 설명</td>
+          </tr>
+          <tr>
+            <td>실적 말풍선</td>
+            <td>실적 등록/수정 &gt; 그래프 말풍선</td>
+            <td>실적 막대 근처</td>
+            <td>그 달 실적의 짧은 사유 또는 메모</td>
+          </tr>
+          <tr>
+            <td>코멘트</td>
+            <td>실적 등록/수정 &gt; 세부내용 / 코멘트</td>
+            <td>하단 상세 영역</td>
+            <td>상세 설명, 이슈, 조치 내용 기록</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="ok">
+        같은 월에 목표 말풍선과 실적 말풍선이 모두 있어도 서로 겹치지 않도록 위치를 벌리고 점선으로 연결됩니다.
+      </div>
+    </section>
+
+    <section id="performance">
+      <h2>6. 실적 등록/수정</h2>
+      <p>
+        KPI 항목을 클릭하거나 <b>실적 등록</b> 버튼을 누르면 상세 모달이 열립니다.
+        권한이 있으면 상단 또는 오른쪽 패널에서 실적을 등록/수정할 수 있습니다.
+      </p>
+
+      <h3>6-1. 기본 절차</h3>
+      <ol>
+        <li>부서 상세 화면에서 KPI 항목을 선택합니다.</li>
+        <li><b>실적 등록</b> 또는 <b>실적 수정</b>을 누릅니다.</li>
+        <li>월 선택에서 입력할 월을 선택합니다.</li>
+        <li>실적값을 입력합니다. KPI 유형에 따라 달성률, 실제 수치, 완료 여부 등이 표시됩니다.</li>
+        <li>필요하면 <b>세부내용 / 코멘트</b>를 입력합니다.</li>
+        <li>그래프 위에 짧게 보일 내용은 <b>그래프 말풍선</b>에 입력합니다.</li>
+        <li>증빙 파일이 필요하면 첨부합니다.</li>
+        <li><b>저장</b>을 누릅니다.</li>
+      </ol>
+
+      <h3>6-2. 저장 후 상태</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>저장한 사람</th>
+            <th>저장 후 상태</th>
+            <th>다음 처리자</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>프로 · 선임 · 책임 · 수석</td>
+            <td>1차 승인 대기</td>
+            <td>그룹장</td>
+          </tr>
+          <tr>
+            <td>그룹장</td>
+            <td>최종 승인 대기</td>
+            <td>팀장</td>
+          </tr>
+          <tr>
+            <td>팀장</td>
+            <td>승인 완료로 즉시 반영</td>
+            <td>추가 승인 불필요</td>
+          </tr>
+          <tr>
+            <td>관리자</td>
+            <td>권한에 따라 즉시 반영 또는 승인 처리 가능</td>
+            <td>관리자 판단</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>6-3. 수정 가능 여부</h3>
+      <ul>
+        <li>제출 전 상태의 월은 일반 실적 등록자가 수정할 수 있습니다.</li>
+        <li>승인 대기 또는 승인 완료된 월은 그룹장, 팀장, 관리자만 수정할 수 있습니다.</li>
+        <li>수정 후 저장하면 승인 상태가 다시 변경될 수 있으므로, 승인자에게 알리는 것이 좋습니다.</li>
+      </ul>
+    </section>
+
+    <section id="approval">
+      <h2>7. 승인과 반려</h2>
+      <p>
+        실적은 등록자, 그룹장, 팀장 흐름으로 검토됩니다. 승인자는 KPI 상세 모달의 승인 처리 영역 또는 실적 승인 관리 화면에서 처리합니다.
+      </p>
+      <div class="flow">
+        <div class="step"><b>제출 전</b>아직 승인 요청 전이거나 임시 상태</div>
+        <div class="step"><b>1차 승인 대기</b>일반 사용자가 저장한 실적, 그룹장 검토 필요</div>
+        <div class="step"><b>최종 승인 대기</b>그룹장 승인 후 팀장 검토 필요</div>
+        <div class="step"><b>승인 완료</b>그래프와 달성률에 반영되는 최종 상태</div>
+      </div>
+      <h3>7-1. 반려되는 경우</h3>
+      <ul>
+        <li>증빙 파일이 없거나 내용이 맞지 않는 경우</li>
+        <li>실적값이 목표 또는 첨부자료와 맞지 않는 경우</li>
+        <li>코멘트 설명이 부족한 경우</li>
+        <li>월을 잘못 선택한 경우</li>
+      </ul>
+      <div class="warn">
+        반려되면 반려 사유를 확인하고 실적을 수정한 뒤 다시 저장해야 합니다.
+      </div>
+    </section>
+
+    <section id="final" class="pagebreak">
+      <h2>8. 최종 완료</h2>
+      <p>
+        <b>최종 완료</b>는 해당 KPI 항목의 실적 관리가 끝났음을 표시하는 기능입니다.
+        완료 처리되면 부서 화면의 달성률 영역에 <b>완료</b>로 표시되고, 대시보드의 최종 완료 KPI 수에도 반영됩니다.
+      </p>
+
+      <h3>8-1. 언제 최종 완료하나요?</h3>
+      <ul>
+        <li>해당 KPI의 최종 목표월까지 실적 등록과 증빙 첨부가 끝났을 때</li>
+        <li>필요한 승인 또는 내부 확인이 끝났을 때</li>
+        <li>더 이상 지연 월을 추가하거나 실적을 보완할 계획이 없을 때</li>
+      </ul>
+
+      <h3>8-2. 왜 실적 저장 화면에서 하나요?</h3>
+      <p>
+        최종 완료는 마지막 실적, 코멘트, 첨부파일까지 함께 저장된 뒤 처리되어야 합니다.
+        그래서 상세 모달의 <b>저장 후 최종 완료</b> 버튼을 사용합니다.
+      </p>
+      <ol>
+        <li>최종 실적을 입력합니다.</li>
+        <li>필요한 코멘트와 그래프 말풍선을 입력합니다.</li>
+        <li>증빙 파일을 첨부합니다.</li>
+        <li><b>저장 후 최종 완료</b>를 누릅니다.</li>
+        <li>확인창에서 최종 완료를 승인합니다.</li>
+      </ol>
+      <div class="warn">
+        최종 완료는 “승인 완료”와 다릅니다. 승인 완료는 특정 월 실적 검토가 끝났다는 뜻이고,
+        최종 완료는 KPI 항목 전체 관리가 끝났다는 뜻입니다.
+      </div>
+    </section>
+
+    <section id="delay">
+      <h2>9. 지연 월 추가</h2>
+      <p>
+        일정 지연으로 기존 종료월 이후에도 실적을 관리해야 할 때 권한자가 지연 월을 추가할 수 있습니다.
+        자동으로 +3개월을 보여주는 방식이 아니라, 필요한 경우에만 한 달씩 추가합니다.
+      </p>
+      <ul>
+        <li>가능 권한: 관리자, 그룹장, 팀장, 그룹장/팀장 겸임</li>
+        <li>위치: 실적 등록/수정 패널의 월 선택 영역 근처</li>
+        <li>동작: 다음 월을 지연 월로 추가하고, 해당 월도 실적 입력 대상에 포함합니다.</li>
+        <li>예시: 10월 종료 KPI가 지연되면 11월 지연 월 추가, 필요 시 이후 12월도 추가</li>
+      </ul>
+      <div class="note">
+        지연 월을 추가한 뒤에는 해당 월의 실적, 코멘트, 그래프 말풍선, 증빙을 동일하게 관리합니다.
+      </div>
+    </section>
+
+    <section id="cases">
+      <h2>10. 상황별 입력 예시</h2>
+
+      <details open>
+        <summary>예시 1. 9월까지 총 5건 완료해야 하는 KPI</summary>
+        <div>
+          <ul>
+            <li>평가 유형: 정량 평가</li>
+            <li>측정 기준: 건</li>
+            <li>측정 방향: 높을수록 좋음</li>
+            <li>계산 기준: 누적 계산</li>
+            <li>월별 목표값: 1월 1, 4월 2, 6월 1, 9월 1</li>
+            <li>목표 말풍선: 1월 검토, 4월 제작, 6월 검증, 9월 완료 등 필요한 월만 입력</li>
+          </ul>
+          <p>최종 목표값은 5건으로 자동 표시됩니다.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>예시 2. 매월 불량률을 낮춰야 하는 KPI</summary>
+        <div>
+          <ul>
+            <li>평가 유형: 정량 평가</li>
+            <li>측정 기준: % 또는 PPM</li>
+            <li>측정 방향: 낮을수록 좋음</li>
+            <li>계산 기준: 당월 단독</li>
+            <li>월별 목표값: 각 월 목표 불량률 또는 PPM 입력</li>
+          </ul>
+          <p>낮을수록 좋은 KPI는 목표값이 그래프 중간에 오도록 표시되어 실적이 목표보다 낮은지 쉽게 볼 수 있습니다.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>예시 3. 100% 달성을 목표로 하는 진행률 KPI</summary>
+        <div>
+          <ul>
+            <li>평가 유형: 정성 평가 또는 정량 평가</li>
+            <li>측정 기준: %</li>
+            <li>측정 방향: 높을수록 좋음</li>
+            <li>월별 목표값: 1월 10, 4월 40, 7월 70, 10월 100 등</li>
+          </ul>
+          <p>높을수록 좋은 % KPI는 100%를 기준으로 그래프가 표시되며, 상단 라벨이 잘리지 않도록 화면 여백만 추가됩니다.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>예시 4. 신규 설비 제작 KPI</summary>
+        <div>
+          <ul>
+            <li>B/M: 신규제작</li>
+            <li>측정 기준: % 또는 건</li>
+            <li>목표 말풍선: 3월 검토, 6월 제작, 8월 책임, 10월 양산</li>
+            <li>실적 말풍선: 6월 고객 요청 지연, 8월 부품 입고 지연 등</li>
+          </ul>
+          <p>B/M이 텍스트여도 그래프 막대는 최종 목표값 기준으로 표시됩니다.</p>
+        </div>
+      </details>
+    </section>
+
+    <section id="faq" class="pagebreak">
+      <h2>11. FAQ / 주의사항</h2>
+
+      <h3>Q1. 목표 말풍선을 지웠는데 계속 보이면?</h3>
+      <p>
+        KPI 수정 화면에서 해당 월의 목표 말풍선 입력칸을 완전히 비운 뒤 저장합니다.
+        저장 후 그래프에서 목표 말풍선이 사라져야 합니다.
+      </p>
+
+      <h3>Q2. 실적 말풍선과 코멘트는 무엇이 다른가요?</h3>
+      <p>
+        그래프 말풍선은 막대 위에 짧게 보이는 한 줄 메모입니다.
+        코멘트는 상세 영역에 남는 긴 설명입니다.
+      </p>
+
+      <h3>Q3. 월별 목표값이 없는 월에도 실적을 넣을 수 있나요?</h3>
+      <p>
+        KPI 설정의 목표 공백 처리 방식에 따라 달라집니다.
+        목표 없는 달 제외를 선택하면 목표값이 있는 월 중심으로 관리하고,
+        직전 목표 유지를 선택하면 이전 목표를 이어서 적용할 수 있습니다.
+      </p>
+
+      <h3>Q4. 최종 목표값이 내가 입력한 값과 다르게 보이면?</h3>
+      <p>
+        누적 계산 KPI는 월별 목표값의 합계가 최종 목표값입니다.
+        당월 단독 KPI는 마지막 목표 월의 값이 최종 목표 기준으로 사용됩니다.
+      </p>
+
+      <h3>Q5. 저장 버튼 문구가 사람마다 다른 이유는?</h3>
+      <p>
+        역할별 승인 흐름이 다르기 때문입니다.
+        일반 사용자는 1차 승인 대기로 제출되고, 그룹장은 최종 승인 대기로 제출되며,
+        팀장은 즉시 승인 완료로 반영됩니다.
+      </p>
+
+      <h3>Q6. 완료 처리 후에도 실적을 수정할 수 있나요?</h3>
+      <p>
+        최종 완료는 KPI 항목이 완료되었음을 표시하는 상태입니다.
+        수정이 꼭 필요하면 관리자, 그룹장, 팀장 등 권한자에게 확인 후 처리하는 것을 권장합니다.
+      </p>
+
+      <h3>Q7. 첨부파일은 언제 올려야 하나요?</h3>
+      <p>
+        실적 저장 시점에 첨부하는 것이 원칙입니다.
+        특히 최종 완료를 누를 때는 마지막 실적과 첨부파일이 함께 저장되어야 합니다.
+      </p>
+
+      <div class="ok">
+        <b>운영 팁:</b> KPI를 새로 만들 때는 먼저 “당월 단독인지 누적 계산인지”를 정하고,
+        그 다음 월별 목표값을 입력하세요. 이 순서가 맞아야 그래프와 최종 목표값이 자연스럽게 맞습니다.
+      </div>
+    </section>
+
+    <section id="checklist">
+      <h2>12. 빠른 체크리스트</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>KPI 추가 전</h3>
+          <ul>
+            <li>이 KPI는 당월 단독인가, 누적인가?</li>
+            <li>높을수록 좋은가, 낮을수록 좋은가?</li>
+            <li>측정 기준 단위는 무엇인가?</li>
+            <li>최종 목표월은 언제인가?</li>
+            <li>월별 목표값을 어떤 월에 넣을 것인가?</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>실적 저장 전</h3>
+          <ul>
+            <li>월 선택이 맞는가?</li>
+            <li>실적값 단위가 목표값과 같은가?</li>
+            <li>코멘트에 상세 설명을 남겼는가?</li>
+            <li>그래프 말풍선은 짧게 입력했는가?</li>
+            <li>증빙 파일을 첨부했는가?</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>최종 완료 전</h3>
+          <ul>
+            <li>마지막 월 실적이 저장됐는가?</li>
+            <li>첨부파일이 누락되지 않았는가?</li>
+            <li>승인 상태를 확인했는가?</li>
+            <li>지연 월 추가가 더 필요 없는가?</li>
+            <li>완료 후 부서 화면에서 완료 표시를 확인했는가?</li>
+          </ul>
+        </div>
+      </div>
+      <p class="small">
+        문서 파일명: KPI_사용자_매뉴얼.html · 이 파일 하나만 전달하면 브라우저에서 열람할 수 있습니다.
+      </p>
+    </section>
+  </main>
+</body>
+</html>

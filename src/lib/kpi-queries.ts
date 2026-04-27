@@ -55,7 +55,7 @@ function approvalStepAfterPerformanceSubmit(
   actorRole: string | null | undefined
 ): string {
   const actor = normalizeRole(actorRole);
-  if (actor === "team_leader") {
+  if (actor === "team_leader" || actor === "group_team_leader") {
     return PERF_STATUS_APPROVED;
   }
   if (actor === "group_leader") return PERF_STATUS_PENDING_FINAL;
@@ -535,6 +535,7 @@ type PerformanceMonthlyCell = {
   actual_value?: number | string | null;
   approval_step?: string | null;
   remarks?: string | null;
+  bubble_note?: string | null;
   evidence_url?: string | null;
   rejection_reason?: string | null;
 };
@@ -846,6 +847,20 @@ export async function fetchDepartmentKpiSummary(): Promise<
       }
       return acc;
     }, {});
+    const monthlyTargetNotes = milestoneRows.reduce<Partial<Record<number, string>>>((acc, row) => {
+      const month = toNum(row.target_month as number | string | null | undefined);
+      const note = typeof row.note === "string" ? row.note.trim() : "";
+      if (
+        month !== null &&
+        Number.isInteger(month) &&
+        month >= 1 &&
+        month <= 15 &&
+        note
+      ) {
+        acc[month] = note;
+      }
+      return acc;
+    }, {});
     if (itemIsEvaluatedInMonthRecord(itemRecord, monthlyTargets, currentMonth)) {
       const byMonth = monthlyAchievementRatesByMonth(targets);
       currentMonthByDept.get(deptId)!.push(byMonth[currentMonth] ?? 0);
@@ -924,6 +939,7 @@ export type DepartmentKpiDetailItem = {
   targetDirection: "up" | "down" | "na";
   targetFinalValue: number | null;
   monthlyTargets: Partial<Record<number, number>>;
+  monthlyTargetNotes: Partial<Record<number, string>>;
   monthlyAchievementRates: Partial<Record<number, number>>;
   scheduleRaw: string | null;
   /** 일반(%) / PPM / 수량 / 건수 */
@@ -1327,6 +1343,20 @@ export async function fetchDepartmentKpiDetail(
       }
       return acc;
     }, {});
+    const monthlyTargetNotes = milestoneRows.reduce<Partial<Record<number, string>>>((acc, row) => {
+      const month = toNum(row.target_month as number | string | null | undefined);
+      const note = typeof row.note === "string" ? row.note.trim() : "";
+      if (
+        month !== null &&
+        Number.isInteger(month) &&
+        month >= 1 &&
+        month <= 15 &&
+        note
+      ) {
+        acc[month] = note;
+      }
+      return acc;
+    }, {});
     const monthlyAchievementRates = monthlyAchievementRatesByMonth(targets);
     const firstDraftRow = targetRows.find(
       (t) => String(t.approval_step ?? "").trim().toLowerCase() === PERF_STATUS_DRAFT
@@ -1415,6 +1445,7 @@ export async function fetchDepartmentKpiDetail(
       targetDirection,
       targetFinalValue,
       monthlyTargets,
+      monthlyTargetNotes,
       monthlyAchievementRates,
       scheduleRaw,
       indicatorType,
@@ -1575,6 +1606,7 @@ export type ItemPerformanceRow = {
   evidence_path: string | null;
   evidence_url: string | null;
   description: string | null;
+  bubble_note: string | null;
   rejection_reason: string | null;
 };
 
@@ -1779,6 +1811,7 @@ function mapTargetRecordToItemPerformanceRow(
         : null,
     evidence_url: toEvidencePublicUrl(supabase, t.evidence_url),
     description: remarks,
+    bubble_note: null,
     rejection_reason:
       typeof rr === "string" && rr.trim() ? rr.trim() : null,
   };
@@ -1862,6 +1895,8 @@ async function buildItemPerformanceRowsFromKpiTargets(
         evidence_url: toEvidencePublicUrl(supabase, ev),
         description:
           typeof cell?.remarks === "string" ? cell.remarks : null,
+        bubble_note:
+          typeof cell?.bubble_note === "string" ? cell.bubble_note : null,
         rejection_reason:
           typeof cell?.rejection_reason === "string" &&
           cell.rejection_reason.trim()
@@ -1903,6 +1938,7 @@ async function buildItemPerformanceRowsFromKpiTargets(
       evidence_url: toEvidencePublicUrl(supabase, src.evidence_url),
       description:
         typeof src.remarks === "string" ? src.remarks : null,
+      bubble_note: null,
       rejection_reason:
         typeof rr === "string" && rr.trim() ? rr.trim() : null,
     };
@@ -2120,7 +2156,10 @@ export async function upsertQuarterPerformance(
   const st = stepRaw.trim().toLowerCase();
   const actor = normalizeRole(options?.actorRole);
   const privilegedEditor =
-    actor === "admin" || actor === "group_leader" || actor === "team_leader";
+    actor === "admin" ||
+    actor === "group_leader" ||
+    actor === "team_leader" ||
+    actor === "group_team_leader";
   if (!options?.adminBypassApprovalLock && !privilegedEditor) {
     if (st === PERF_STATUS_APPROVED) {
       throw new Error(
@@ -2202,6 +2241,7 @@ export async function upsertMonthPerformance(
     month: MonthKey;
     achievement_rate: number;
     description: string;
+    bubbleNote?: string | null;
     evidenceUrl?: string | null;
     /**
      * `normal`: 기본은 달성률만. 목표연동 입력 시에만 `actual_value`에 실적 지표값(%p 등).
@@ -2272,7 +2312,10 @@ export async function upsertMonthPerformance(
       : "";
   const actor = normalizeRole(options?.actorRole);
   const privilegedEditor =
-    actor === "admin" || actor === "group_leader" || actor === "team_leader";
+    actor === "admin" ||
+    actor === "group_leader" ||
+    actor === "team_leader" ||
+    actor === "group_team_leader";
   if (!options?.adminBypassApprovalLock && !privilegedEditor) {
     if (prevStep === PERF_STATUS_APPROVED) {
       throw new Error(
@@ -2289,6 +2332,10 @@ export async function upsertMonthPerformance(
     approval_step: approvalStepAfterPerformanceSubmit(options?.actorRole),
     rejection_reason: null,
     remarks: input.description.trim() || null,
+    bubble_note:
+      input.bubbleNote !== undefined
+        ? input.bubbleNote?.trim() || null
+        : prevCell.bubble_note ?? null,
   };
   if (indicatorUsesComputedAchievement(mode)) {
     if (
@@ -2902,6 +2949,62 @@ export async function updateKpiItemFinalCompletion(input: {
   }
 }
 
+export async function extendKpiItemPeriodEndMonth(input: {
+  kpiItemId: string;
+  nextPeriodEndMonth: MonthKey;
+}): Promise<void> {
+  const supabase = createBrowserSupabase();
+  const id = input.kpiItemId.trim();
+  if (!id) throw new Error("KPI 항목 ID가 없습니다.");
+
+  const nextMonth = input.nextPeriodEndMonth;
+  if (!Number.isInteger(nextMonth) || nextMonth < 1 || nextMonth > 15) {
+    throw new Error("추가할 월은 1월부터 익년 3월까지만 가능합니다.");
+  }
+
+  const { data: item, error: itemReadErr } = await supabase
+    .from("kpi_items")
+    .select("period_start_month, period_end_month, target_final_value")
+    .eq("id", id)
+    .maybeSingle();
+  if (itemReadErr) throw new Error(itemReadErr.message);
+  if (!item) throw new Error("KPI 항목을 찾지 못했습니다.");
+
+  const currentEnd =
+    toNum((item as Record<string, unknown>).period_end_month as number | string | null | undefined) ??
+    12;
+  const startMonth =
+    toNum((item as Record<string, unknown>).period_start_month as number | string | null | undefined) ??
+    1;
+  if (nextMonth <= currentEnd) {
+    throw new Error("현재 종료월보다 뒤의 월만 추가할 수 있습니다.");
+  }
+  if (nextMonth !== currentEnd + 1) {
+    throw new Error("지연 월은 한 달씩 순서대로 추가해 주세요.");
+  }
+  if (nextMonth < startMonth) {
+    throw new Error("평가 시작월보다 앞의 월은 추가할 수 없습니다.");
+  }
+
+  const finalTarget =
+    toNum((item as Record<string, unknown>).target_final_value as number | string | null | undefined) ??
+    0;
+
+  const { error: itemUpdateErr } = await supabase
+    .from("kpi_items")
+    .update({ period_end_month: nextMonth })
+    .eq("id", id);
+  if (itemUpdateErr) throw new Error(itemUpdateErr.message);
+
+  const { error: milestoneErr } = await supabase.from("kpi_milestones").upsert({
+    kpi_id: id,
+    target_month: nextMonth,
+    target_value: finalTarget,
+    note: `${nextMonth}월 지연 추가 목표`,
+  });
+  if (milestoneErr) throw new Error(milestoneErr.message);
+}
+
 /** 그룹장·관리자 UI: 항목별 실적 방식 및 목표값(`target_value`) */
 export async function updateKpiItemIndicatorSettings(input: {
   kpiItemId: string;
@@ -3181,7 +3284,7 @@ export type CreateManualKpiInput = {
   achievementCap: KpiAchievementCap;
   periodStartMonth: number;
   periodEndMonth: number;
-  monthlyTargets: Array<{ month: number; targetValue: number }>;
+  monthlyTargets: Array<{ month: number; targetValue: number; note?: string | null }>;
 };
 
 export type UpdateManualKpiInput = CreateManualKpiInput & {
@@ -3200,6 +3303,29 @@ function parsePercentOrNull(raw: string): number | null {
   const n = Number(m[1]);
   if (!Number.isFinite(n)) return null;
   return Math.min(100, Math.max(0, n));
+}
+
+function cumulativeMonthlyTargetAt(
+  rows: Array<{ month: number; targetValue: number; note?: string | null }>,
+  month: number
+): number {
+  return rows.reduce(
+    (sum, row) => (row.month <= month ? sum + row.targetValue : sum),
+    0
+  );
+}
+
+function representativeMonthlyTargetValue(
+  rows: Array<{ month: number; targetValue: number; note?: string | null }>,
+  month: number,
+  fallback: number,
+  aggregationType: KpiAggregationType
+): number {
+  if (aggregationType === "cumulative") {
+    const cumulative = cumulativeMonthlyTargetAt(rows, month);
+    return cumulative > 0 ? cumulative : fallback;
+  }
+  return rows.find((row) => row.month === month)?.targetValue ?? fallback;
 }
 
 export async function createManualKpiItem(
@@ -3242,7 +3368,10 @@ export async function createManualKpiItem(
   if (normalizedMonthlyTargets.length === 0) {
     throw new Error("월별 목표값을 최소 1개 이상 입력해 주세요.");
   }
-  const finalTarget = normalizedMonthlyTargets[normalizedMonthlyTargets.length - 1]!.targetValue;
+  const finalTarget =
+    input.aggregationType === "cumulative"
+      ? normalizedMonthlyTargets.reduce((sum, row) => sum + row.targetValue, 0)
+      : normalizedMonthlyTargets[normalizedMonthlyTargets.length - 1]!.targetValue;
   const h1RefMonth = Math.min(
     input.periodEndMonth,
     Math.max(input.periodStartMonth, 6)
@@ -3252,11 +3381,19 @@ export async function createManualKpiItem(
     Math.max(input.periodStartMonth, 12)
   );
   const h1FromMonthly =
-    normalizedMonthlyTargets.find((row) => row.month === h1RefMonth)?.targetValue ??
-    normalizedMonthlyTargets[0]!.targetValue;
+    representativeMonthlyTargetValue(
+      normalizedMonthlyTargets,
+      h1RefMonth,
+      normalizedMonthlyTargets[0]!.targetValue,
+      input.aggregationType
+    );
   const h2FromMonthly =
-    normalizedMonthlyTargets.find((row) => row.month === h2RefMonth)?.targetValue ??
-    finalTarget;
+    representativeMonthlyTargetValue(
+      normalizedMonthlyTargets,
+      h2RefMonth,
+      finalTarget,
+      input.aggregationType
+    );
 
   const { data: inserted, error: itemErr } = await supabase
     .from("kpi_items")
@@ -3333,7 +3470,7 @@ export async function createManualKpiItem(
     kpi_id: inserted.id,
     target_month: m.month,
     target_value: m.targetValue,
-    note: `${m.month}월 목표`,
+    note: m.note?.trim() || null,
   }));
   if (milestoneRows.length > 0) {
     const { error: milestoneErr } = await supabase.from("kpi_milestones").upsert(milestoneRows);
@@ -3387,7 +3524,10 @@ export async function updateManualKpiItem(
   if (normalizedMonthlyTargets.length === 0) {
     throw new Error("월별 목표값을 최소 1개 이상 입력해 주세요.");
   }
-  const finalTarget = normalizedMonthlyTargets[normalizedMonthlyTargets.length - 1]!.targetValue;
+  const finalTarget =
+    input.aggregationType === "cumulative"
+      ? normalizedMonthlyTargets.reduce((sum, row) => sum + row.targetValue, 0)
+      : normalizedMonthlyTargets[normalizedMonthlyTargets.length - 1]!.targetValue;
   const h1RefMonth = Math.min(
     input.periodEndMonth,
     Math.max(input.periodStartMonth, 6)
@@ -3397,11 +3537,19 @@ export async function updateManualKpiItem(
     Math.max(input.periodStartMonth, 12)
   );
   const h1FromMonthly =
-    normalizedMonthlyTargets.find((row) => row.month === h1RefMonth)?.targetValue ??
-    normalizedMonthlyTargets[0]!.targetValue;
+    representativeMonthlyTargetValue(
+      normalizedMonthlyTargets,
+      h1RefMonth,
+      normalizedMonthlyTargets[0]!.targetValue,
+      input.aggregationType
+    );
   const h2FromMonthly =
-    normalizedMonthlyTargets.find((row) => row.month === h2RefMonth)?.targetValue ??
-    finalTarget;
+    representativeMonthlyTargetValue(
+      normalizedMonthlyTargets,
+      h2RefMonth,
+      finalTarget,
+      input.aggregationType
+    );
 
   const { error: itemErr } = await supabase
     .from("kpi_items")
@@ -3478,7 +3626,7 @@ export async function updateManualKpiItem(
     kpi_id: cleanKpiId,
     target_month: m.month,
     target_value: m.targetValue,
-    note: `${m.month}월 목표`,
+    note: m.note?.trim() || null,
   }));
   const { error: milestoneErr } = await supabase.from("kpi_milestones").upsert(milestoneRows);
   if (milestoneErr) throw new Error(milestoneErr.message);

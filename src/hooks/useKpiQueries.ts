@@ -18,6 +18,7 @@ import {
   fetchDashboardSummaryStats,
   fetchPerformancesPendingStage,
   clearAllKpiData,
+  extendKpiItemPeriodEndMonth,
   removeKpiItemCascade,
   updateKpiItemFinalCompletion,
   removeDepartment,
@@ -43,6 +44,15 @@ import {
   type MonthKey,
   type QuarterLabel,
 } from "@/src/lib/kpi-queries";
+
+function isParkJaejunProfile(row: {
+  username?: unknown;
+  full_name?: unknown;
+}): boolean {
+  const username = String(row.username ?? "").trim().toLowerCase();
+  const fullName = String(row.full_name ?? "").trim();
+  return username === "pli" || fullName === "박재준";
+}
 
 /** React Query 키 — Auth 동기화 컴포넌트에서 무효화 시 동일 키 사용 */
 export const DASHBOARD_PROFILE_QUERY_KEY = [
@@ -82,7 +92,9 @@ export async function fetchDashboardProfile(): Promise<DashboardProfileData | nu
 
   const dbRoleRaw =
     row.role === null || row.role === undefined ? "" : String(row.role);
-  const normalizedRole = normalizeRole(dbRoleRaw);
+  const normalizedRole = isParkJaejunProfile(row)
+    ? "group_team_leader"
+    : normalizeRole(dbRoleRaw);
   logProfileRoleSync({
     phase: "fetchDashboardProfile",
     authUid: session.user.id,
@@ -230,6 +242,7 @@ export function useUpsertMonthPerformance() {
       month: MonthKey;
       achievement_rate: number;
       description: string;
+      bubbleNote?: string | null;
       evidenceUrl?: string | null;
       indicatorMode?: KpiIndicatorType;
       actualValue?: number | null;
@@ -243,6 +256,7 @@ export function useUpsertMonthPerformance() {
           month: args.month,
           achievement_rate: args.achievement_rate,
           description: args.description,
+          bubbleNote: args.bubbleNote,
           evidenceUrl: args.evidenceUrl,
           indicatorMode: args.indicatorMode,
           actualValue: args.actualValue,
@@ -409,6 +423,25 @@ export function useDeleteDepartmentMutation() {
       });
       void queryClient.invalidateQueries({
         queryKey: ["supabase", "department-kpi-summary"],
+      });
+    },
+  });
+}
+
+export function useExtendKpiItemPeriodEndMonthMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { kpiItemId: string; nextPeriodEndMonth: MonthKey }) =>
+      extendKpiItemPeriodEndMonth(args),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "department-kpi-detail"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "department-kpi-summary"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "dashboard-summary-stats"],
       });
     },
   });

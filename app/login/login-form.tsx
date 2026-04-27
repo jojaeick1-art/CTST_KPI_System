@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   User,
@@ -17,15 +17,17 @@ import {
   usernameToAuthEmail,
 } from "@/src/lib/supabase";
 
+const SAVED_LOGIN_ID_KEY = "ctst.savedLoginId";
+
 function mapAuthError(message: string): string {
   const m = message.toLowerCase();
   if (m.includes("invalid login credentials") || m.includes("invalid")) {
-    return "계정 ID 또는 비밀번호가 올바르지 않습니다. Supabase Auth 이메일이 ID@ctst.local 형식인지 확인해 주세요.";
+    return "ID 또는 비밀번호가 맞지 않습니다.";
   }
   if (m.includes("email not confirmed")) {
     return "이메일 인증이 필요합니다. 관리자에게 문의해 주세요.";
   }
-  return `로그인에 실패했습니다: ${message}`;
+  return "ID 또는 비밀번호가 맞지 않습니다.";
 }
 
 function showError(
@@ -41,9 +43,21 @@ export function LoginForm() {
   const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [rememberId, setRememberId] = useState(false);
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    try {
+      const savedId = window.localStorage.getItem(SAVED_LOGIN_ID_KEY);
+      if (!savedId) return;
+      setUsername(savedId);
+      setRememberId(true);
+    } catch {
+      /* 저장된 ID를 읽지 못해도 로그인은 계속 가능 */
+    }
+  }, []);
 
   function handleFormSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -125,10 +139,20 @@ export function LoginForm() {
         if ((profile.username ?? "").toLowerCase() !== normalized) {
           await supabase.auth.signOut();
           showError(
-            "profiles의 계정 ID와 로그인에 사용한 ID가 일치하지 않습니다. username과 Auth 이메일(ID@ctst.local)을 맞춰 주세요.",
+            "ID 또는 비밀번호가 맞지 않습니다.",
             setError
           );
           return;
+        }
+
+        try {
+          if (rememberId) {
+            window.localStorage.setItem(SAVED_LOGIN_ID_KEY, id);
+          } else {
+            window.localStorage.removeItem(SAVED_LOGIN_ID_KEY);
+          }
+        } catch {
+          /* ID 저장 실패는 로그인 성공 흐름을 막지 않음 */
         }
 
         router.push("/dashboard");
@@ -204,6 +228,17 @@ export function LoginForm() {
             이메일이 아닌 사내 계정 ID만 입력합니다 (@ 없음)
           </p>
         </div>
+
+        <label className="flex w-fit cursor-pointer items-center gap-2 text-sm font-medium text-slate-600">
+          <input
+            type="checkbox"
+            checked={rememberId}
+            onChange={(e) => setRememberId(e.target.checked)}
+            disabled={loading}
+            className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+          />
+          ID 저장
+        </label>
 
         <div>
           <label

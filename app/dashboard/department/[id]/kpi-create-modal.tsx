@@ -39,6 +39,7 @@ type Props = {
     periodEndMonth: number | null;
     targetPpm: number | null;
     monthlyTargets: Partial<Record<number, number>>;
+    monthlyTargetNotes: Partial<Record<number, string>>;
   } | null;
   onSubmit: (payload: CreateManualKpiInput, options?: { kpiId?: string }) => Promise<void>;
   submitting: boolean;
@@ -69,6 +70,17 @@ function parseNumberOrNull(v: string): number | null {
   const n = Number(v.trim().replace(",", "."));
   if (!Number.isFinite(n)) return null;
   return n;
+}
+
+function totalMonthlyTargetValue(
+  monthlyTargets: Array<{ month: number; targetValue: number; note?: string | null }>,
+  aggregationType: KpiAggregationType
+): number | null {
+  if (monthlyTargets.length === 0) return null;
+  if (aggregationType === "cumulative") {
+    return monthlyTargets.reduce((sum, row) => sum + row.targetValue, 0);
+  }
+  return monthlyTargets[monthlyTargets.length - 1]!.targetValue;
 }
 
 function sanitizeNumericInput(raw: string): string {
@@ -250,6 +262,9 @@ export function KpiCreateModal({
   const [monthlyTargetTextByMonth, setMonthlyTargetTextByMonth] = useState<Record<number, string>>(
     () => targetMapForRange(1, 12, {})
   );
+  const [monthlyTargetNoteByMonth, setMonthlyTargetNoteByMonth] = useState<Record<number, string>>(
+    () => targetMapForRange(1, 12, {})
+  );
   const [keepTyping, setKeepTyping] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const isEditMode = Boolean(editingItem?.id);
@@ -298,6 +313,11 @@ export function KpiCreateModal({
       }
     }
     setMonthlyTargetTextByMonth(baseMap);
+    const noteMap = targetMapForRange(start, end, {});
+    for (let m = start; m <= end; m += 1) {
+      noteMap[m] = editingItem.monthlyTargetNotes[m] ?? "";
+    }
+    setMonthlyTargetNoteByMonth(noteMap);
     setFieldErrors({});
   }, [isOpen, editingItem]);
 
@@ -322,6 +342,7 @@ export function KpiCreateModal({
     setPeriodStartMonth(1);
     setPeriodEndMonth(12);
     setMonthlyTargetTextByMonth(targetMapForRange(1, 12, {}));
+    setMonthlyTargetNoteByMonth(targetMapForRange(1, 12, {}));
     setKeepTyping(false);
     setFieldErrors({});
   }, [isOpen, editingItem]);
@@ -341,6 +362,17 @@ export function KpiCreateModal({
     evaluationType === "qualitative";
   const isQualitative = evaluationType === "qualitative";
   const unitSuffix = baseline;
+  const automaticTargetValueText = useMemo(() => {
+    const rows: Array<{ month: number; targetValue: number; note?: string | null }> = [];
+    for (let m = periodStartMonth; m <= periodEndMonth; m += 1) {
+      const parsed = parseNumberOrNull(monthlyTargetTextByMonth[m] ?? "");
+      if (parsed !== null && parsed >= 0) {
+        rows.push({ month: m, targetValue: parsed });
+      }
+    }
+    const total = totalMonthlyTargetValue(rows, aggregationType);
+    return total !== null ? String(total) : "";
+  }, [aggregationType, monthlyTargetTextByMonth, periodStartMonth, periodEndMonth]);
   const selectDisabledClass = "disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 disabled:ring-1 disabled:ring-slate-200";
   const inputWithUnitClass =
     "w-full rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-14 text-sm text-slate-800 placeholder:text-slate-500";
@@ -374,7 +406,7 @@ export function KpiCreateModal({
     const indicatorType =
       evaluationType === "qualitative" ? "normal" : baselineToIndicatorType(baseline);
 
-    const monthlyTargets: Array<{ month: number; targetValue: number }> = [];
+    const monthlyTargets: Array<{ month: number; targetValue: number; note?: string | null }> = [];
     for (let m = periodStartMonth; m <= periodEndMonth; m += 1) {
       const raw = monthlyTargetTextByMonth[m] ?? "";
       if (!raw.trim()) {
@@ -385,13 +417,17 @@ export function KpiCreateModal({
         errors[`monthlyTarget-${m}`] = `${periodMonthLabel(m)} 목표값을 0 이상 숫자로 입력해 주세요.`;
         continue;
       }
-      monthlyTargets.push({ month: m, targetValue: parsed });
+      monthlyTargets.push({
+        month: m,
+        targetValue: parsed,
+        note: monthlyTargetNoteByMonth[m]?.trim() || null,
+      });
     }
 
-    const finalTargetFromMonthly =
-      monthlyTargets.length > 0
-        ? monthlyTargets[monthlyTargets.length - 1]!.targetValue
-        : null;
+    const finalTargetFromMonthly = totalMonthlyTargetValue(
+      monthlyTargets,
+      aggregationType
+    );
     const targetValue = parseNumberOrNull(targetValueText);
     const autoTargetValue =
       indicatorType !== "normal" || evaluationType === "qualitative"
@@ -404,7 +440,12 @@ export function KpiCreateModal({
       errors.targetValue = "자동 계산용 목표값을 0보다 큰 숫자로 입력해 주세요. 목표가 없는 달은 비워둘 수 있지만 최소 1개 목표는 필요합니다.";
     }
 
-    if (monthlyTargets.length > 1 && supportsDirection && targetFillPolicy !== "exclude") {
+    if (
+      aggregationType !== "cumulative" &&
+      monthlyTargets.length > 1 &&
+      supportsDirection &&
+      targetFillPolicy !== "exclude"
+    ) {
       for (let i = 1; i < monthlyTargets.length; i += 1) {
         const prev = monthlyTargets[i - 1]!;
         const cur = monthlyTargets[i]!;
@@ -440,6 +481,7 @@ export function KpiCreateModal({
     setPeriodStartMonth(1);
     setPeriodEndMonth(12);
     setMonthlyTargetTextByMonth(targetMapForRange(1, 12, {}));
+    setMonthlyTargetNoteByMonth(targetMapForRange(1, 12, {}));
     setFieldErrors({});
   }
 
@@ -486,7 +528,7 @@ export function KpiCreateModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-      <div className="flex max-h-[94vh] w-full max-w-[84rem] flex-col overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-2xl">
+      <div className="flex max-h-[94vh] w-full max-w-[96rem] flex-col overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-2xl">
         <div className="shrink-0 border-b border-sky-100 px-5 py-4">
           <h3 className="text-lg font-semibold text-slate-800">
             {isEditMode ? "KPI 항목 수정" : "KPI 항목 추가"}
@@ -495,7 +537,7 @@ export function KpiCreateModal({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)]">
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(480px,560px)]">
             <div className="grid gap-3 lg:grid-cols-3">
               <p className="text-xs font-semibold text-slate-500 lg:col-span-3">기본 정보</p>
               <div>
@@ -688,21 +730,29 @@ export function KpiCreateModal({
                 <div className="lg:col-span-2">
                   <label className="mb-1 block text-xs font-medium text-slate-600">
                     자동계산 기준값
-                    <FieldHint text="ppm/건/수량(k)/금액/시간/UPH 기준에서는 평가 종료월 목표값과 동일하게 자동 적용됩니다." />
+                    <FieldHint text="누적 계산은 입력한 월별 추가 목표값의 합계가 최종 목표값입니다. 당월 계산은 마지막 목표 월 값이 적용됩니다." />
                   </label>
                   <div className="relative">
                     <input
                       className={`${inputWithUnitClass} disabled:bg-slate-100 disabled:text-slate-500`}
-                      placeholder="평가 종료월 목표값과 동일하게 자동 적용"
-                      value={targetValueText}
+                      placeholder={
+                        aggregationType === "cumulative"
+                          ? "월별 추가 목표값 합계로 자동 적용"
+                          : "마지막 목표 월 값으로 자동 적용"
+                      }
+                      value={automaticTargetValueText}
                       disabled
                       readOnly
                     />
-                    {targetValueText.trim() ? (
-                      <UnitSuffixNearValue value={targetValueText} unit={unitSuffix} />
+                    {automaticTargetValueText.trim() ? (
+                      <UnitSuffixNearValue value={automaticTargetValueText} unit={unitSuffix} />
                     ) : null}
                   </div>
-                  <p className="mt-1 text-[11px] text-slate-500">자동 적용값: 평가 종료월 목표값</p>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    {aggregationType === "cumulative"
+                      ? "자동 적용값: 월별 추가 목표값 합계"
+                      : "자동 적용값: 마지막 목표 월 값"}
+                  </p>
                   {fieldErrors.targetValue ? <p className="mt-1 text-[11px] text-red-600">{fieldErrors.targetValue}</p> : null}
                 </div>
               ) : null}
@@ -722,6 +772,7 @@ export function KpiCreateModal({
                     setPeriodStartMonth(nextStart);
                     setPeriodEndMonth(nextEnd);
                     setMonthlyTargetTextByMonth((prev) => targetMapForRange(nextStart, nextEnd, prev));
+                    setMonthlyTargetNoteByMonth((prev) => targetMapForRange(nextStart, nextEnd, prev));
                   }}
                 >
                   {PERIOD_MONTH_OPTIONS.map((m) => (
@@ -745,6 +796,7 @@ export function KpiCreateModal({
                     setPeriodStartMonth(nextStart);
                     setPeriodEndMonth(nextEnd);
                     setMonthlyTargetTextByMonth((prev) => targetMapForRange(nextStart, nextEnd, prev));
+                    setMonthlyTargetNoteByMonth((prev) => targetMapForRange(nextStart, nextEnd, prev));
                     if (usesComputedTarget) {
                       setTargetValueText(monthlyTargetTextByMonth[nextEnd] ?? "");
                     }
@@ -766,7 +818,9 @@ export function KpiCreateModal({
               <div className="mb-3">
                 <p className="text-xs font-semibold text-slate-600">월별 목표값 설정</p>
                 <p className="mt-1 text-[11px] text-slate-500">
-                  목표가 있는 월만 입력할 수 있습니다. 공백 월은 선택한 공백 처리 규칙에 따라 제외하거나 직전 목표를 유지합니다.
+                  {aggregationType === "cumulative"
+                    ? "누적 계산은 각 월에 추가로 달성해야 하는 목표량을 입력합니다. 예: 1월 1건, 4월 2건이면 4월 목표선은 누적 3건입니다."
+                    : "목표가 있는 월만 입력할 수 있습니다. 공백 월은 선택한 공백 처리 규칙에 따라 제외하거나 직전 목표를 유지합니다."}
                 </p>
               </div>
               <div className="space-y-1.5 pr-1">
@@ -775,9 +829,9 @@ export function KpiCreateModal({
                   return (
                     <div
                       key={`monthly-target-${month}`}
-                      className="grid grid-cols-[3.25rem_minmax(0,1fr)] items-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5"
+                      className="grid grid-cols-[3.25rem_minmax(0,1fr)_minmax(0,1fr)] items-start gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5"
                     >
-                      <label className="text-xs font-medium text-slate-600">
+                      <label className="pt-2 text-xs font-medium text-slate-600">
                         {periodMonthLabel(month)}
                       </label>
                       <div>
@@ -807,6 +861,18 @@ export function KpiCreateModal({
                           </p>
                         ) : null}
                       </div>
+                      <input
+                        className={inputClass}
+                        maxLength={40}
+                        placeholder="목표 말풍선 (예: 검토, 제작)"
+                        value={monthlyTargetNoteByMonth[month] ?? ""}
+                        onChange={(e) =>
+                          setMonthlyTargetNoteByMonth((prev) => ({
+                            ...prev,
+                            [month]: e.target.value,
+                          }))
+                        }
+                      />
                     </div>
                   );
                 })}
