@@ -40,6 +40,7 @@ import {
   type CreateManualKpiInput,
   type UpdateManualKpiInput,
   type KpiExcelImportRow,
+  type KpiAggregationType,
   type KpiIndicatorType,
   type MonthKey,
   type QuarterLabel,
@@ -247,6 +248,7 @@ export function useUpsertMonthPerformance() {
       indicatorMode?: KpiIndicatorType;
       actualValue?: number | null;
       achievementCap?: KpiAchievementCap;
+      aggregationType?: KpiAggregationType | null;
       adminBypassApprovalLock?: boolean;
       actorRole?: string | null;
     }) =>
@@ -261,6 +263,7 @@ export function useUpsertMonthPerformance() {
           indicatorMode: args.indicatorMode,
           actualValue: args.actualValue,
           achievementCap: args.achievementCap,
+          aggregationType: args.aggregationType,
         },
         {
           ...(args.adminBypassApprovalLock

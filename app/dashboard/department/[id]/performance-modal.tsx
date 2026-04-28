@@ -36,6 +36,7 @@ import {
   type KpiIndicatorType,
   type KpiQualitativeCalcType,
   type KpiTargetFillPolicy,
+  updatePerformanceMonthlyCalculatedRates,
   updatePerformanceMonthlyEvidenceUrl,
   uploadEvidenceFile,
   resolveEffectiveIndicatorTypeForUi,
@@ -357,6 +358,33 @@ function cumulativeTargetThroughMonth(
     }
   }
   return sum > 0 ? sum : null;
+}
+
+function resolvePerformanceAggregationType(
+  row: ItemPerformanceRow | null | undefined,
+  fallback: KpiAggregationType | null | undefined
+): KpiAggregationType {
+  return row?.aggregation_type ?? fallback ?? "monthly";
+}
+
+function aggregationTypeLabelKo(value: KpiAggregationType): string {
+  return value === "cumulative" ? "누적 계산" : "당월 단독";
+}
+
+function cumulativeActualThroughPriorMonths(
+  rowByMonth: Map<MonthKey, ItemPerformanceRow>,
+  monthList: MonthKey[],
+  month: MonthKey
+): number {
+  return monthList.reduce((sum, m) => {
+    if (m >= month) return sum;
+    const prior = rowByMonth.get(m)?.actual_value;
+    const priorValue =
+      prior !== null && prior !== undefined && Number.isFinite(Number(prior))
+        ? Number(prior)
+        : 0;
+    return sum + priorValue;
+  }, 0);
 }
 
 function performanceStatusLabelKo(status: string | null | undefined): string {
@@ -733,7 +761,9 @@ export function PerformanceModal({
   const [editorActualPpm, setEditorActualPpm] = useState("");
   const [editorDescription, setEditorDescription] = useState("");
   const [editorBubbleNote, setEditorBubbleNote] = useState("");
-  const [editorFile, setEditorFile] = useState<File | null>(null);
+  const [editorFiles, setEditorFiles] = useState<File[]>([]);
+  const [editorAggregationType, setEditorAggregationType] =
+    useState<KpiAggregationType>("monthly");
   const [uploading, setUploading] = useState(false);
   const [liveRows, setLiveRows] = useState<ItemPerformanceRow[]>([]);
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
@@ -837,6 +867,15 @@ export function PerformanceModal({
     };
   }, [kpiItem, activeMonthList]);
 
+  const rowByMonth = useMemo(() => {
+    const m = new Map<MonthKey, ItemPerformanceRow>();
+    for (const r of liveRows) {
+      const mk = halfTypeLabelToMonth(r.half_type);
+      if (mk !== null && !m.has(mk)) m.set(mk, r);
+    }
+    return m;
+  }, [liveRows]);
+
   const normalMonthlyTargetEditor = useMemo(() => {
     if (
       effectiveIndicatorType !== "normal" ||
@@ -847,8 +886,11 @@ export function PerformanceModal({
       return null;
     }
     const monthlyMap = kpiItem.monthlyTargets ?? {};
-    if (kpiItem.aggregationType === "cumulative") {
-      return cumulativeTargetThroughMonth(monthlyMap, editorMonth);
+    if (editorAggregationType === "cumulative") {
+      return (
+        cumulativeTargetThroughMonth(monthlyMap, editorMonth) ??
+        resolveNormalMonthlyTargetMetric(editorMonth, normalMonthlyContext)
+      );
     }
     const fromMap = resolveMonthlyTargetForMonth(
       monthlyMap,
@@ -860,12 +902,15 @@ export function PerformanceModal({
         ? fromMap
         : resolveNormalMonthlyTargetMetric(editorMonth, normalMonthlyContext);
     return t > 0 ? t : null;
-  }, [effectiveIndicatorType, normalMonthlyContext, editorMonth, kpiItem]);
+  }, [effectiveIndicatorType, normalMonthlyContext, editorMonth, kpiItem, editorAggregationType]);
 
   const computedMonthlyTargetEditor = useMemo(() => {
     if (!isComputedItem || !kpiItem) return null;
-    if (kpiItem.aggregationType === "cumulative") {
-      return cumulativeTargetThroughMonth(kpiItem.monthlyTargets, editorMonth);
+    if (editorAggregationType === "cumulative") {
+      return (
+        cumulativeTargetThroughMonth(kpiItem.monthlyTargets, editorMonth) ??
+        computedTargetMetric
+      );
     }
     const fromMonthly = resolveMonthlyTargetForMonth(
       kpiItem.monthlyTargets,
@@ -874,7 +919,7 @@ export function PerformanceModal({
     );
     if (fromMonthly !== null) return fromMonthly;
     return computedTargetMetric;
-  }, [isComputedItem, kpiItem, editorMonth, computedTargetMetric]);
+  }, [isComputedItem, kpiItem, editorMonth, computedTargetMetric, editorAggregationType]);
 
   const displayedFinalTargetValue = useMemo(() => {
     if (!kpiItem) return null;
@@ -906,9 +951,13 @@ export function PerformanceModal({
     ) {
       const ap = parseNonNegativeDecimal(editorActualPpm);
       if (ap === null) return null;
+      const actualForAchievement =
+        editorAggregationType === "cumulative"
+          ? cumulativeActualThroughPriorMonths(rowByMonth, displayMonthList, editorMonth) + ap
+          : ap;
       if (kpiItem.evaluationType === "qualitative") {
         return qualitativeAchievementPercent(
-          ap,
+          actualForAchievement,
           computedMonthlyTargetEditor,
           kpiItem.qualitativeCalcType ?? "progress",
           kpiItem.achievementCap
@@ -916,7 +965,7 @@ export function PerformanceModal({
       }
       return computedAchievementPercent(
         effectiveIndicatorType,
-        ap,
+        actualForAchievement,
         computedMonthlyTargetEditor,
         kpiItem.targetDirection,
         kpiItem.achievementCap
@@ -930,9 +979,13 @@ export function PerformanceModal({
     ) {
       const ap = parseNonNegativeDecimal(editorRate);
       if (ap === null) return null;
+      const actualForAchievement =
+        editorAggregationType === "cumulative"
+          ? cumulativeActualThroughPriorMonths(rowByMonth, displayMonthList, editorMonth) + ap
+          : ap;
       return computedAchievementPercent(
         "normal",
-        ap,
+        actualForAchievement,
         normalMonthlyTargetEditor,
         kpiItem.targetDirection,
         kpiItem.achievementCap
@@ -948,20 +1001,15 @@ export function PerformanceModal({
     normalMetricEntryActive,
     normalMonthlyTargetEditor,
     editorRate,
+    editorAggregationType,
+    rowByMonth,
+    displayMonthList,
+    editorMonth,
   ]);
 
   const normalLinkedToTargetChart =
     effectiveIndicatorType === "normal" &&
     Boolean(kpiItem && kpiItem.targetDirection !== "na");
-
-  const rowByMonth = useMemo(() => {
-    const m = new Map<MonthKey, ItemPerformanceRow>();
-    for (const r of liveRows) {
-      const mk = halfTypeLabelToMonth(r.half_type);
-      if (mk !== null && !m.has(mk)) m.set(mk, r);
-    }
-    return m;
-  }, [liveRows]);
 
   useEffect(() => {
     if (!isOpen || !kpiItem) return;
@@ -1020,19 +1068,20 @@ export function PerformanceModal({
           : null;
       const monthlyTargetMap = kpiItem.monthlyTargets ?? {};
       const hasMonthlyTargetPlan = Object.keys(monthlyTargetMap).length > 0;
+      const rowAggregationType = resolvePerformanceAggregationType(
+        row,
+        kpiItem.aggregationType
+      );
       const monthTargetNormal =
         effectiveIndicatorType === "normal"
           ? (() => {
-              const exactMonthlyTarget = monthlyTargetMap[m];
-              if (
-                kpiItem.aggregationType === "cumulative" &&
-                typeof exactMonthlyTarget === "number" &&
-                Number.isFinite(exactMonthlyTarget)
-              ) {
-                return exactMonthlyTarget;
-              }
-              if (kpiItem.aggregationType === "cumulative") {
-                return null;
+              if (rowAggregationType === "cumulative") {
+                return (
+                  cumulativeTargetThroughMonth(monthlyTargetMap, m) ??
+                  (normalMonthlyContext
+                    ? resolveNormalMonthlyTargetMetric(m, normalMonthlyContext)
+                    : 0)
+                );
               }
               const fromMap = resolveMonthlyTargetForMonth(
                 monthlyTargetMap,
@@ -1053,16 +1102,8 @@ export function PerformanceModal({
       const monthTargetComputed =
         indicatorUsesComputedAchievement(effectiveIndicatorType)
           ? (() => {
-              const exactMonthlyTarget = monthlyTargetMap[m];
-              if (
-                kpiItem.aggregationType === "cumulative" &&
-                typeof exactMonthlyTarget === "number" &&
-                Number.isFinite(exactMonthlyTarget)
-              ) {
-                return exactMonthlyTarget;
-              }
-              if (kpiItem.aggregationType === "cumulative") {
-                return null;
+              if (rowAggregationType === "cumulative") {
+                return cumulativeTargetThroughMonth(monthlyTargetMap, m) ?? computedTargetMetric ?? 0;
               }
               const fromMonthly = resolveMonthlyTargetForMonth(
                 kpiItem.monthlyTargets,
@@ -1085,10 +1126,20 @@ export function PerformanceModal({
       let actual: number;
       if (indicatorUsesComputedAchievement(effectiveIndicatorType)) {
         actual =
-          visibleOnChart && rawActualMetric !== null ? rawActualMetric : 0;
+          visibleOnChart && rawActualMetric !== null
+            ? rowAggregationType === "cumulative"
+              ? cumulativeActualThroughPriorMonths(rowByMonth, displayMonthList, m) +
+                rawActualMetric
+              : rawActualMetric
+            : 0;
       } else if (normalRowMetricMode) {
         if (rawActualMetric !== null) {
-          actual = visibleOnChart ? rawActualMetric : 0;
+          actual = visibleOnChart
+            ? rowAggregationType === "cumulative"
+              ? cumulativeActualThroughPriorMonths(rowByMonth, displayMonthList, m) +
+                rawActualMetric
+              : rawActualMetric
+            : 0;
         } else {
           actual =
             visibleOnChart && rawSubmitted !== null ? rawSubmitted : 0;
@@ -1170,23 +1221,7 @@ export function PerformanceModal({
             barTopLabel: benchmarkLabel(effectiveIndicatorType, kpiItem.bm),
           }
         : null;
-    if (kpiItem.aggregationType !== "cumulative") {
-      return benchmarkRow ? [benchmarkRow, ...series] : series;
-    }
-    let targetSum = 0;
-    let actualSum = 0;
-    const cumulativeSeries = series.map((row) => {
-      if (row.target !== null) {
-        targetSum += row.target;
-      }
-      actualSum += row.actual;
-      return {
-        ...row,
-        target: targetSum,
-        actual: actualSum,
-      };
-    });
-    return benchmarkRow ? [benchmarkRow, ...cumulativeSeries] : cumulativeSeries;
+    return benchmarkRow ? [benchmarkRow, ...series] : series;
   }, [
     kpiItem,
     rowByMonth,
@@ -1241,6 +1276,10 @@ export function PerformanceModal({
   const selectedChartDatum =
     chartData.find((d) => d.month === selectedMonth && !d.isBenchmark) ?? null;
   const selectedSubmittedPercent = selectedChartDatum?.submittedPercent ?? null;
+  const selectedAggregationType = resolvePerformanceAggregationType(
+    selectedRow,
+    kpiItem?.aggregationType
+  );
   const chartActualSelected =
     chartData.find((d) => d.month === selectedMonth && !d.isBenchmark)?.actual ?? 0;
   const selectedDescription = selectedRow?.description ?? null;
@@ -1248,10 +1287,21 @@ export function PerformanceModal({
     selectedRow?.evidence_path ??
     selectedRow?.evidence_url ??
     null;
-  const selectedEvidencePath = evidencePathFromStoredValue(selectedEvidenceStored);
-  const selectedEvidenceFileName = evidenceFileNameFromStoredValue(
-    selectedEvidenceStored
-  );
+  const selectedEvidenceItems = (
+    selectedRow?.evidence_paths?.length
+      ? selectedRow.evidence_paths
+      : selectedRow?.evidence_urls?.length
+        ? selectedRow.evidence_urls
+        : selectedEvidenceStored
+          ? [selectedEvidenceStored]
+          : []
+  )
+    .map((storedValue) => ({
+      storedValue,
+      path: evidencePathFromStoredValue(storedValue),
+      fileName: evidenceFileNameFromStoredValue(storedValue),
+    }))
+    .filter((item) => Boolean(item.path));
   const selectedStatus = selectedRow?.approval_step ?? null;
   const selectedRejectionReason = selectedRow?.rejection_reason ?? null;
   const selectedMonthWritableByWriter = !monthLockedForEditor(
@@ -1275,14 +1325,14 @@ export function PerformanceModal({
     return () => clearTimeout(t);
   }, [toast.open]);
 
-  async function handleDownloadEvidence() {
-    if (!selectedEvidenceStored) {
+  async function handleDownloadEvidence(storedValue: string) {
+    if (!storedValue) {
       notify("info", "보고서가 없습니다.");
       return;
     }
     try {
       setDownloadingEvidence(true);
-      const downloadableUrl = resolveEvidencePublicUrl(selectedEvidenceStored);
+      const downloadableUrl = resolveEvidencePublicUrl(storedValue);
       if (!downloadableUrl) {
         throw new Error("다운로드 가능한 파일 주소를 생성하지 못했습니다.");
       }
@@ -1317,12 +1367,13 @@ export function PerformanceModal({
     isPrivilegedEditor
   );
   const editorHasStoredEvidence = Boolean(
-    (editorRow?.evidence_path?.trim() ?? "") ||
+    editorRow?.evidence_paths?.some((path) => path.trim()) ||
+      (editorRow?.evidence_path?.trim() ?? "") ||
       (editorRow?.evidence_url?.trim() ?? "")
   );
   /** 관리자는 증빙 없이 저장 가능 */
   const editorHasEvidenceForSave =
-    isAdmin || Boolean(editorFile) || editorHasStoredEvidence;
+    isAdmin || editorFiles.length > 0 || editorHasStoredEvidence;
 
   const syncEditorFromMonth = useCallback(
     (mo: MonthKey) => {
@@ -1351,9 +1402,12 @@ export function PerformanceModal({
       );
       setEditorDescription(row?.description ?? "");
       setEditorBubbleNote(row?.bubble_note ?? "");
-      setEditorFile(null);
+      setEditorAggregationType(
+        resolvePerformanceAggregationType(row, kpiItem?.aggregationType)
+      );
+      setEditorFiles([]);
     },
-    [liveRows, normalMetricEntryActive, rowByMonth, displayMonthList]
+    [liveRows, normalMetricEntryActive, rowByMonth, displayMonthList, kpiItem?.aggregationType]
   );
 
   useEffect(() => {
@@ -1379,6 +1433,85 @@ export function PerformanceModal({
     if (!ok) return;
     setSelectedMonth(nextDelayMonth);
     setEditorMonth(nextDelayMonth);
+  }
+
+  function buildFollowingCumulativeRateUpdates(
+    currentActualValue: number | undefined
+  ): Array<{ month: MonthKey; achievementRate: number }> {
+    if (currentActualValue === undefined || !normalMonthlyContext) return [];
+    const updates: Array<{ month: MonthKey; achievementRate: number }> = [];
+    const actualThroughMonth = (targetMonth: MonthKey) =>
+      displayMonthList.reduce((sum, month) => {
+        if (month > targetMonth) return sum;
+        const raw =
+          month === editorMonth
+            ? currentActualValue
+            : rowByMonth.get(month)?.actual_value;
+        const value =
+          raw !== null && raw !== undefined && Number.isFinite(Number(raw))
+            ? Number(raw)
+            : 0;
+        return sum + value;
+      }, 0);
+
+    for (const month of displayMonthList) {
+      if (month <= editorMonth) continue;
+      const row = rowByMonth.get(month);
+      if (resolvePerformanceAggregationType(row, item.aggregationType) !== "cumulative") {
+        continue;
+      }
+      const ownActual = row?.actual_value;
+      if (
+        ownActual === null ||
+        ownActual === undefined ||
+        !Number.isFinite(Number(ownActual))
+      ) {
+        continue;
+      }
+
+      const actual = actualThroughMonth(month);
+      let target: number | null = null;
+      let rate: number | null = null;
+      if (indicatorUsesComputedAchievement(effectiveIndicatorType)) {
+        target =
+          cumulativeTargetThroughMonth(item.monthlyTargets, month) ??
+          computedTargetMetric;
+        if (target !== null && target > 0) {
+          rate =
+            item.evaluationType === "qualitative"
+              ? qualitativeAchievementPercent(
+                  actual,
+                  target,
+                  item.qualitativeCalcType ?? "progress",
+                  item.achievementCap
+                )
+              : computedAchievementPercent(
+                  effectiveIndicatorType,
+                  actual,
+                  target,
+                  item.targetDirection,
+                  item.achievementCap
+                );
+        }
+      } else if (effectiveIndicatorType === "normal" && item.targetDirection !== "na") {
+        target =
+          cumulativeTargetThroughMonth(item.monthlyTargets, month) ??
+          resolveNormalMonthlyTargetMetric(month, normalMonthlyContext);
+        if (target !== null && target > 0) {
+          rate = computedAchievementPercent(
+            "normal",
+            actual,
+            target,
+            item.targetDirection,
+            item.achievementCap
+          );
+        }
+      }
+      if (rate !== null && Number.isFinite(rate)) {
+        updates.push({ month, achievementRate: rate });
+      }
+    }
+    return updates;
   }
 
   async function handleSaveMonth(options?: { finalizeAfterSave?: boolean }) {
@@ -1414,16 +1547,8 @@ export function PerformanceModal({
       }
       actualMetricSave = ap;
       const actualForAchievement =
-        item.aggregationType === "cumulative"
-          ? displayMonthList.reduce((sum, month) => {
-              if (month >= editorMonth) return sum;
-              const prior = rowByMonth.get(month)?.actual_value;
-              const priorValue =
-                prior !== null && prior !== undefined && Number.isFinite(Number(prior))
-                  ? Number(prior)
-                  : 0;
-              return sum + priorValue;
-            }, 0) + ap
+        editorAggregationType === "cumulative"
+          ? cumulativeActualThroughPriorMonths(rowByMonth, displayMonthList, editorMonth) + ap
           : ap;
       rateNum =
         item.evaluationType === "qualitative"
@@ -1452,16 +1577,8 @@ export function PerformanceModal({
       }
       actualMetricSave = metric;
       const actualForAchievement =
-        item.aggregationType === "cumulative"
-          ? displayMonthList.reduce((sum, month) => {
-              if (month >= editorMonth) return sum;
-              const prior = rowByMonth.get(month)?.actual_value;
-              const priorValue =
-                prior !== null && prior !== undefined && Number.isFinite(Number(prior))
-                  ? Number(prior)
-                  : 0;
-              return sum + priorValue;
-            }, 0) + metric
+        editorAggregationType === "cumulative"
+          ? cumulativeActualThroughPriorMonths(rowByMonth, displayMonthList, editorMonth) + metric
           : metric;
       rateNum = computedAchievementPercent(
         "normal",
@@ -1498,15 +1615,16 @@ export function PerformanceModal({
         ...(actualMetricSave !== undefined
           ? { actualValue: actualMetricSave }
           : {}),
+        aggregationType: editorAggregationType,
         ...(isAdmin ? { adminBypassApprovalLock: true } : {}),
         actorRole: profileRole ?? null,
       });
+      const targetId =
+        saveResult && typeof saveResult.targetId === "string"
+          ? saveResult.targetId
+          : "";
 
-      if (editorFile) {
-        const targetId =
-          saveResult && typeof saveResult.targetId === "string"
-            ? saveResult.targetId
-            : "";
+      if (editorFiles.length > 0) {
         if (!targetId) {
           console.error("[KPI upload] upsert 후 targetId 누락", {
             kpiId: item.id,
@@ -1517,15 +1635,33 @@ export function PerformanceModal({
           );
         }
         setUploading(true);
-        const uploaded = await uploadEvidenceFile(
-          targetId,
-          editorFile,
-          `m${editorMonth}`
-        );
+        const uploadedPaths: string[] = [];
+        for (const file of editorFiles) {
+          const uploaded = await uploadEvidenceFile(
+            targetId,
+            file,
+            `m${editorMonth}`
+          );
+          uploadedPaths.push(uploaded.fullPath);
+        }
         await updatePerformanceMonthlyEvidenceUrl({
           targetId,
           month: editorMonth,
-          evidenceUrl: uploaded.fullPath,
+          evidenceUrls: uploadedPaths,
+        });
+      }
+
+      const followingRateUpdates =
+        buildFollowingCumulativeRateUpdates(actualMetricSave);
+      if (followingRateUpdates.length > 0) {
+        if (!targetId) {
+          throw new Error(
+            "누적 계산 재반영 중 실적 ID를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요."
+          );
+        }
+        await updatePerformanceMonthlyCalculatedRates({
+          targetId,
+          updates: followingRateUpdates,
         });
       }
 
@@ -1540,7 +1676,7 @@ export function PerformanceModal({
 
       const refreshed = await perfQuery.refetch();
       if (refreshed.data) setLiveRows(refreshed.data);
-      setEditorFile(null);
+      setEditorFiles([]);
       const normalizedActor = normalizeRole(profileRole);
       notify(
         "success",
@@ -1960,6 +2096,12 @@ export function PerformanceModal({
                   {performanceStatusLabelKo(selectedStatus)}
                 </p>
               </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <p className="text-[11px] font-semibold text-slate-500">계산 기준</p>
+                <p className="mt-0.5 text-base font-bold text-slate-900">
+                  {aggregationTypeLabelKo(selectedAggregationType)}
+                </p>
+              </div>
             </div>
 
             {selectedRejectionReason?.trim() ? (
@@ -1977,20 +2119,27 @@ export function PerformanceModal({
 
             <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
               <p className="text-[11px] font-semibold text-slate-500">보고서</p>
-              {selectedEvidencePath ? (
-                <div className="mt-1 flex flex-wrap items-center gap-2">
-                  <p className="max-w-full truncate text-sm text-slate-800">
-                    {selectedEvidenceFileName}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => void handleDownloadEvidence()}
-                    disabled={downloadingEvidence}
-                    className="inline-flex items-center gap-1 rounded-lg border border-sky-200 bg-white px-3 py-1.5 text-xs font-semibold text-sky-800 hover:bg-sky-50 disabled:opacity-50"
-                  >
-                    <Download className="h-4 w-4" />
-                    파일 다운로드
-                  </button>
+              {selectedEvidenceItems.length > 0 ? (
+                <div className="mt-1 space-y-2">
+                  {selectedEvidenceItems.map((item, idx) => (
+                    <div
+                      key={`${item.storedValue}-${idx}`}
+                      className="flex flex-wrap items-center gap-2"
+                    >
+                      <p className="max-w-full truncate text-sm text-slate-800">
+                        {item.fileName}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => void handleDownloadEvidence(item.storedValue)}
+                        disabled={downloadingEvidence}
+                        className="inline-flex items-center gap-1 rounded-lg border border-sky-200 bg-white px-3 py-1.5 text-xs font-semibold text-sky-800 hover:bg-sky-50 disabled:opacity-50"
+                      >
+                        <Download className="h-4 w-4" />
+                        파일 다운로드
+                      </button>
+                    </div>
+                  ))}
                 </div>
               ) : (
                 <p className="mt-1 text-sm text-slate-500">보고서가 없습니다</p>
@@ -2107,6 +2256,26 @@ export function PerformanceModal({
                 ) : null}
               </div>
 
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">
+                  계산 기준
+                </label>
+                <select
+                  value={editorAggregationType}
+                  onChange={(e) =>
+                    setEditorAggregationType(e.target.value as KpiAggregationType)
+                  }
+                  disabled={!activeSet.has(editorMonth) || editorMonthLocked}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-[#1a1a1a] outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200 disabled:bg-slate-100"
+                >
+                  <option value="monthly">당월 단독</option>
+                  <option value="cumulative">누적 계산</option>
+                </select>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  기본값은 KPI 항목의 계산 기준입니다. 누적 계산은 이전 월 실적값을 더해 이번 월 달성률을 계산합니다.
+                </p>
+              </div>
+
               {!isComputedItem && !normalMetricEntryActive ? (
                 <div>
                   <label className="mb-1 block text-xs font-medium text-slate-600">
@@ -2148,7 +2317,7 @@ export function PerformanceModal({
                     }
                   />
                   <p className="mt-1 text-[11px] text-slate-500">
-                    이번 달 목표 지표:{" "}
+                    {aggregationTypeLabelKo(editorAggregationType)} 기준 목표 지표:{" "}
                     {normalMonthlyTargetEditor !== null && normalMonthlyTargetEditor > 0
                       ? chartValueLabel("normal", normalMonthlyTargetEditor)
                       : "—"}
@@ -2187,7 +2356,7 @@ export function PerformanceModal({
                   />
                   <p className="mt-1 text-[11px] text-slate-500">
                     {computedKindSummaryKo(effectiveIndicatorType)}는 아래 원값으로부터 달성률을 자동 계산합니다.{" "}
-                    {computedTargetLabel(effectiveIndicatorType)}:{" "}
+                    {aggregationTypeLabelKo(editorAggregationType)} 기준 {computedTargetLabel(effectiveIndicatorType)}:{" "}
                     {computedMonthlyTargetEditor !== null && computedMonthlyTargetEditor > 0
                       ? chartValueLabel(effectiveIndicatorType, computedMonthlyTargetEditor)
                       : "미설정"}
@@ -2246,19 +2415,34 @@ export function PerformanceModal({
                 <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-sky-200 bg-sky-50/60 px-3 py-2 text-sm text-slate-700 hover:bg-sky-50">
                   <Upload className="h-4 w-4 text-sky-600" />
                   <span>
-                    {editorFile ? editorFile.name : "파일 선택(최대50MB)"}
+                    {editorFiles.length > 0
+                      ? `${editorFiles.length}개 파일 선택됨`
+                      : "파일 선택(여러 개 가능, 파일당 최대50MB)"}
                   </span>
                   <input
                     type="file"
+                    multiple
                     className="hidden"
                     disabled={!activeSet.has(editorMonth) || editorMonthLocked}
-                    onChange={(e) => setEditorFile(e.target.files?.[0] ?? null)}
+                    onChange={(e) => {
+                      setEditorFiles(Array.from(e.target.files ?? []));
+                      e.currentTarget.value = "";
+                    }}
                   />
                 </label>
+                {editorFiles.length > 0 ? (
+                  <ul className="mt-2 space-y-1 text-xs text-slate-600">
+                    {editorFiles.map((file, idx) => (
+                      <li key={`${file.name}-${file.lastModified}-${idx}`} className="truncate">
+                        {file.name}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
                 <p className="mt-1 text-[11px] text-slate-500">
                   {isAdmin
                     ? "관리자 계정은 증빙 없이 저장할 수 있습니다. 파일을 선택하면 해당 월 증빙으로 저장됩니다."
-                    : "최초 등록 시 파일 첨부가 필요합니다. 이미 첨부된 증빙이 있는 월은 달성률·코멘트만 바꿀 수 있으며, 파일을 다시 선택하면 교체됩니다."}
+                    : "최초 등록 시 파일 첨부가 필요합니다. 이미 첨부된 증빙이 있는 월은 달성률·코멘트만 바꿀 수 있으며, 파일을 다시 선택하면 선택한 파일 목록으로 교체됩니다."}
                 </p>
               </div>
             </div>

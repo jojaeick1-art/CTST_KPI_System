@@ -537,6 +537,8 @@ type PerformanceMonthlyCell = {
   remarks?: string | null;
   bubble_note?: string | null;
   evidence_url?: string | null;
+  evidence_urls?: string[] | null;
+  aggregation_type?: KpiAggregationType | string | null;
   rejection_reason?: string | null;
 };
 
@@ -1121,6 +1123,44 @@ export function resolveEvidencePublicUrl(
   return toEvidencePublicUrl(supabase, rawUrl);
 }
 
+function normalizeEvidenceStoredValues(rawValues: unknown): string[] {
+  const values = Array.isArray(rawValues) ? rawValues : [rawValues];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+function evidenceStoredValuesFromCell(
+  cell: PerformanceMonthlyCell | undefined
+): string[] {
+  return normalizeEvidenceStoredValues([
+    ...(Array.isArray(cell?.evidence_urls) ? cell.evidence_urls : []),
+    cell?.evidence_url,
+  ]);
+}
+
+function evidencePathsFromStoredValues(rawValues: unknown): string[] {
+  return normalizeEvidenceStoredValues(rawValues)
+    .map((value) => evidencePathFromStoredValue(value))
+    .filter((value): value is string => Boolean(value));
+}
+
+function evidencePublicUrlsFromStoredValues(
+  supabase: ReturnType<typeof createBrowserSupabase>,
+  rawValues: unknown
+): string[] {
+  return normalizeEvidenceStoredValues(rawValues)
+    .map((value) => toEvidencePublicUrl(supabase, value))
+    .filter((value): value is string => Boolean(value));
+}
+
 function pickText(obj: Record<string, unknown>, keys: string[]): string {
   for (const k of keys) {
     const value = obj[k];
@@ -1605,6 +1645,9 @@ export type ItemPerformanceRow = {
   approval_step: string | null;
   evidence_path: string | null;
   evidence_url: string | null;
+  evidence_paths: string[];
+  evidence_urls: string[];
+  aggregation_type: KpiAggregationType | null;
   description: string | null;
   bubble_note: string | null;
   rejection_reason: string | null;
@@ -1798,6 +1841,7 @@ function mapTargetRecordToItemPerformanceRow(
   const rr = t.rejection_reason;
   const remarks =
     typeof t.remarks === "string" ? t.remarks : null;
+  const evidenceValues = normalizeEvidenceStoredValues(t.evidence_url);
   return {
     id,
     half_type: ht,
@@ -1810,6 +1854,9 @@ function mapTargetRecordToItemPerformanceRow(
         ? t.evidence_url.trim()
         : null,
     evidence_url: toEvidencePublicUrl(supabase, t.evidence_url),
+    evidence_paths: evidencePathsFromStoredValues(evidenceValues),
+    evidence_urls: evidencePublicUrlsFromStoredValues(supabase, evidenceValues),
+    aggregation_type: parseAggregationType(t.aggregation_type),
     description: remarks,
     bubble_note: null,
     rejection_reason:
@@ -1883,7 +1930,8 @@ async function buildItemPerformanceRowsFromKpiTargets(
         avRaw !== null && avRaw !== undefined
           ? toNum(avRaw as number | string)
           : null;
-      const ev = cell?.evidence_url;
+      const evidenceValues = evidenceStoredValuesFromCell(cell);
+      const ev = evidenceValues[0] ?? null;
       return {
         id,
         half_type: monthToHalfTypeLabel(m),
@@ -1893,6 +1941,9 @@ async function buildItemPerformanceRowsFromKpiTargets(
         evidence_path:
           typeof ev === "string" && ev.trim() ? ev.trim() : null,
         evidence_url: toEvidencePublicUrl(supabase, ev),
+        evidence_paths: evidencePathsFromStoredValues(evidenceValues),
+        evidence_urls: evidencePublicUrlsFromStoredValues(supabase, evidenceValues),
+        aggregation_type: parseAggregationType(cell?.aggregation_type),
         description:
           typeof cell?.remarks === "string" ? cell.remarks : null,
         bubble_note:
@@ -1910,6 +1961,7 @@ async function buildItemPerformanceRowsFromKpiTargets(
   const h2s = h2Row ?? {};
   return KPI_MONTHS.map((m) => {
     const src = m <= 6 ? h1s : h2s;
+    const evidenceValues = normalizeEvidenceStoredValues(src.evidence_url);
     const q = monthToLegacyQuarter(m) as QuarterLabel;
     const rowId =
       m <= 6
@@ -1936,6 +1988,9 @@ async function buildItemPerformanceRowsFromKpiTargets(
           ? src.evidence_url.trim()
           : null,
       evidence_url: toEvidencePublicUrl(supabase, src.evidence_url),
+      evidence_paths: evidencePathsFromStoredValues(evidenceValues),
+      evidence_urls: evidencePublicUrlsFromStoredValues(supabase, evidenceValues),
+      aggregation_type: parseAggregationType(src.aggregation_type),
       description:
         typeof src.remarks === "string" ? src.remarks : null,
       bubble_note: null,
@@ -2251,6 +2306,7 @@ export async function upsertMonthPerformance(
     indicatorMode?: KpiIndicatorType;
     actualValue?: number | null;
     achievementCap?: KpiAchievementCap;
+    aggregationType?: KpiAggregationType | null;
   },
   options?: {
     adminBypassApprovalLock?: boolean;
@@ -2337,6 +2393,9 @@ export async function upsertMonthPerformance(
         ? input.bubbleNote?.trim() || null
         : prevCell.bubble_note ?? null,
   };
+  if (input.aggregationType) {
+    nextCell.aggregation_type = input.aggregationType;
+  }
   if (indicatorUsesComputedAchievement(mode)) {
     if (
       input.actualValue !== null &&
@@ -2459,13 +2518,20 @@ export async function updateKpiTargetEvidenceUrl(input: {
 export async function updatePerformanceMonthlyEvidenceUrl(input: {
   targetId: string;
   month: MonthKey;
-  evidenceUrl: string;
+  evidenceUrl?: string;
+  evidenceUrls?: string[];
 }): Promise<void> {
   const supabase = createBrowserSupabase();
+  const evidenceUrls = normalizeEvidenceStoredValues([
+    ...(input.evidenceUrls ?? []),
+    input.evidenceUrl,
+  ]);
+  const firstEvidenceUrl = evidenceUrls[0] ?? "";
+  if (!firstEvidenceUrl) throw new Error("증빙 URL이 비어 있습니다.");
   if (!(await getKpiTargetsHasPerformanceMonthlyColumn())) {
     await updateKpiTargetEvidenceUrl({
       targetId: input.targetId,
-      evidenceUrl: input.evidenceUrl,
+      evidenceUrl: firstEvidenceUrl,
     });
     return;
   }
@@ -2491,8 +2557,54 @@ export async function updatePerformanceMonthlyEvidenceUrl(input: {
   const key = String(input.month);
   pm[key] = {
     ...(pm[key] ?? {}),
-    evidence_url: input.evidenceUrl.trim(),
+    evidence_url: firstEvidenceUrl,
+    evidence_urls: evidenceUrls,
   };
+  const filtered = await filterPayloadToExistingKpiTargetColumns({
+    id: tid,
+    performance_monthly: pm,
+  });
+  const { error } = await supabase.from("kpi_targets").update(filtered).eq("id", tid);
+  if (error) throw new Error(error.message);
+}
+
+export async function updatePerformanceMonthlyCalculatedRates(input: {
+  targetId: string;
+  updates: Array<{ month: MonthKey; achievementRate: number }>;
+}): Promise<void> {
+  if (input.updates.length === 0) return;
+  const supabase = createBrowserSupabase();
+  if (!(await getKpiTargetsHasPerformanceMonthlyColumn())) return;
+  const tid = input.targetId.trim();
+  if (!tid) {
+    throw new Error("실적 정보 생성 중입니다. 잠시 후 다시 시도해 주세요.");
+  }
+  const { data: cur, error: selErr } = await supabase
+    .from("kpi_targets")
+    .select("performance_monthly")
+    .eq("id", tid)
+    .maybeSingle();
+  if (selErr) throw new Error(selErr.message);
+  const rec = cur as Record<string, unknown> | null;
+  const pm: Record<string, PerformanceMonthlyCell> = {};
+  const prevPm = rec?.performance_monthly;
+  if (prevPm && typeof prevPm === "object" && !Array.isArray(prevPm)) {
+    const o = prevPm as Record<string, unknown>;
+    for (const k of Object.keys(o)) {
+      const cell = o[k];
+      if (cell && typeof cell === "object" && !Array.isArray(cell)) {
+        pm[k] = { ...(cell as PerformanceMonthlyCell) };
+      }
+    }
+  }
+  for (const update of input.updates) {
+    const key = String(update.month);
+    if (!pm[key]) continue;
+    pm[key] = {
+      ...pm[key],
+      achievement_rate: applyAchievementCap(update.achievementRate, null),
+    };
+  }
   const filtered = await filterPayloadToExistingKpiTargetColumns({
     id: tid,
     performance_monthly: pm,
