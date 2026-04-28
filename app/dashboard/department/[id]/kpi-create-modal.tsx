@@ -1,14 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useState, type CSSProperties, type ReactElement } from "react";
-import type {
-  CreateManualKpiInput,
-  KpiAchievementCap,
-  KpiAggregationType,
-  KpiEvaluationType,
-  KpiIndicatorType,
-  KpiQualitativeCalcType,
-  KpiTargetFillPolicy,
+import {
+  isDefaultMonthlyTargetNote,
+  type CreateManualKpiInput,
+  type KpiAchievementCap,
+  type KpiAggregationType,
+  type KpiEvaluationType,
+  type KpiIndicatorType,
+  type KpiQualitativeCalcType,
+  type KpiTargetFillPolicy,
 } from "@/src/lib/kpi-queries";
 
 type Props = {
@@ -94,6 +95,11 @@ function sanitizeNumericInput(raw: string): string {
       .slice(firstDot + 1)
       .replace(/\./g, "")
   );
+}
+
+function normalizeTargetNoteInput(raw: string | null | undefined): string {
+  const text = String(raw ?? "").trim();
+  return text && !isDefaultMonthlyTargetNote(text) ? text : "";
 }
 
 function targetMapForRange(
@@ -315,7 +321,7 @@ export function KpiCreateModal({
     setMonthlyTargetTextByMonth(baseMap);
     const noteMap = targetMapForRange(start, end, {});
     for (let m = start; m <= end; m += 1) {
-      noteMap[m] = editingItem.monthlyTargetNotes[m] ?? "";
+      noteMap[m] = normalizeTargetNoteInput(editingItem.monthlyTargetNotes[m]);
     }
     setMonthlyTargetNoteByMonth(noteMap);
     setFieldErrors({});
@@ -420,7 +426,7 @@ export function KpiCreateModal({
       monthlyTargets.push({
         month: m,
         targetValue: parsed,
-        note: monthlyTargetNoteByMonth[m]?.trim() || null,
+        note: normalizeTargetNoteInput(monthlyTargetNoteByMonth[m]) || null,
       });
     }
 
@@ -435,9 +441,9 @@ export function KpiCreateModal({
         : targetValue;
     if (
       (indicatorType !== "normal" || evaluationType === "qualitative") &&
-      (autoTargetValue === null || autoTargetValue <= 0)
+      autoTargetValue === null
     ) {
-      errors.targetValue = "자동 계산용 목표값을 0보다 큰 숫자로 입력해 주세요. 목표가 없는 달은 비워둘 수 있지만 최소 1개 목표는 필요합니다.";
+      errors.targetValue = "자동 계산용 목표값을 입력해 주세요. 목표가 없는 달은 비워둘 수 있지만 최소 1개 목표는 필요합니다.";
     }
 
     if (

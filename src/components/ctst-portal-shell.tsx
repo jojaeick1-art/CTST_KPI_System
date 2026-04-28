@@ -31,10 +31,10 @@ export function CtstPortalShell({ children }: { children: React.ReactNode }) {
 
   const summaryStatsQuery = useDashboardSummaryStats(
     profileQuery.isSuccess && profileQuery.data !== null,
-    canViewAllDepartmentCards(resolvedRole ?? "") ? null : userDeptId
+    canViewAllDepartmentCards(resolvedRole ?? "") ? null : userDeptId,
   );
   const appFeatureQuery = useAppFeatureAvailability(
-    profileQuery.isSuccess && profileQuery.data !== null
+    profileQuery.isSuccess && profileQuery.data !== null,
   );
 
   const pendingApprovalCount =
@@ -89,10 +89,14 @@ export function CtstPortalShell({ children }: { children: React.ReactNode }) {
 
   const role = ctx.profile.role;
   const isAdmin = isAdminRole(role);
-  const featureAccessRaw = appFeatureQuery.data ?? { capa: false, voc: false, kpi: false };
+  const featureAccessRaw = appFeatureQuery.data ?? {
+    capa: false,
+    voc: false,
+    kpi: false,
+  };
   const featureAccess = {
     capa: isAdmin || featureAccessRaw.capa,
-    voc: isAdmin || featureAccessRaw.voc,
+    voc: isAdmin || featureAccessRaw.voc || featureAccessRaw.kpi,
     kpi: isAdmin || featureAccessRaw.kpi,
   };
 

@@ -259,8 +259,12 @@ export function quantityLikeAchievementPercent(
   higherIsBetter: boolean,
   cap: KpiAchievementCap = 100
 ): number {
-  if (!Number.isFinite(actual) || !Number.isFinite(target) || target <= 0) {
+  if (!Number.isFinite(actual) || !Number.isFinite(target) || target < 0) {
     return 0;
+  }
+  if (target === 0) {
+    if (actual <= 0) return applyAchievementCap(100, cap);
+    return higherIsBetter ? applyAchievementCap(100, cap) : 0;
   }
   if (higherIsBetter) {
     return applyAchievementCap((actual / target) * 100, cap);
@@ -305,7 +309,7 @@ export function computedAchievementPercent(
    * - 그 외(높을수록/낮을수록): `actual`은 실적 지표값, `target`은 해당 월 목표 지표값 — 수량형과 동일 비율식.
    */
   if (indicator === "normal") {
-    if (targetDirection === "na" || !Number.isFinite(target) || target <= 0) {
+    if (targetDirection === "na" || !Number.isFinite(target) || target < 0) {
       return applyAchievementCap(actual, cap);
     }
     const higher = targetDirection !== "down";
@@ -479,7 +483,7 @@ export function resolveComputedTargetMetric(
     targetPpm !== null &&
     targetPpm !== undefined &&
     Number.isFinite(targetPpm) &&
-    targetPpm > 0
+    targetPpm >= 0
   ) {
     return targetPpm;
   }
@@ -488,7 +492,7 @@ export function resolveComputedTargetMetric(
     targetFinalValue !== null &&
     targetFinalValue !== undefined &&
     Number.isFinite(targetFinalValue) &&
-    targetFinalValue > 0
+    targetFinalValue >= 0
   ) {
     return targetFinalValue;
   }
@@ -542,6 +546,154 @@ type PerformanceMonthlyCell = {
   rejection_reason?: string | null;
 };
 
+type MonthlyAchievementRateContext = {
+  indicatorType: KpiIndicatorType;
+  evaluationType: KpiEvaluationType | null;
+  qualitativeCalcType: KpiQualitativeCalcType | null;
+  targetDirection: "up" | "down" | "na";
+  aggregationType: KpiAggregationType | null;
+  targetFillPolicy: KpiTargetFillPolicy | null;
+  achievementCap: KpiAchievementCap;
+  computedTargetMetric: number | null;
+  monthlyTargets: Partial<Record<number, number>>;
+  normalMonthlyContext: NormalMonthlyTargetContext | null;
+};
+
+function resolveMonthlyTargetFromPlan(
+  monthlyTargets: Partial<Record<number, number>>,
+  month: MonthKey,
+  policy: KpiTargetFillPolicy | null | undefined = "exclude"
+): number | null {
+  const raw = monthlyTargets[month];
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (policy === "carry_forward") {
+    for (let m = month - 1; m >= 1; m -= 1) {
+      const prior = monthlyTargets[m];
+      if (typeof prior === "number" && Number.isFinite(prior)) return prior;
+    }
+  }
+  return null;
+}
+
+function cumulativeTargetThroughMonthFromPlan(
+  monthlyTargets: Partial<Record<number, number>>,
+  month: MonthKey
+): number | null {
+  let sum = 0;
+  let hasTarget = false;
+  for (let m = 1; m <= month; m += 1) {
+    const value = monthlyTargets[m];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      sum += value;
+      hasTarget = true;
+    }
+  }
+  return hasTarget ? sum : null;
+}
+
+function actualThroughMonthFromCells(
+  cells: Record<string, unknown>,
+  month: MonthKey
+): number {
+  let sum = 0;
+  for (let m = 1; m <= month; m += 1) {
+    const cell = cells[String(m)];
+    if (!cell || typeof cell !== "object" || Array.isArray(cell)) continue;
+    const actual = toNum(
+      (cell as PerformanceMonthlyCell).actual_value as number | string | null | undefined
+    );
+    if (actual !== null && Number.isFinite(actual)) sum += actual;
+  }
+  return sum;
+}
+
+function resolveCurrentMonthlyTargetMetric(
+  month: MonthKey,
+  aggregationType: KpiAggregationType,
+  ctx: MonthlyAchievementRateContext
+): number | null {
+  const hasMonthlyTargetPlan = Object.keys(ctx.monthlyTargets).length > 0;
+  if (aggregationType === "cumulative") {
+    const cumulative = cumulativeTargetThroughMonthFromPlan(ctx.monthlyTargets, month);
+    if (cumulative !== null) return cumulative;
+    if (
+      ctx.indicatorType === "normal" &&
+      ctx.targetDirection !== "na" &&
+      ctx.normalMonthlyContext
+    ) {
+      return resolveNormalMonthlyTargetMetric(month, ctx.normalMonthlyContext);
+    }
+    return ctx.computedTargetMetric;
+  }
+
+  const fromMonthly = resolveMonthlyTargetFromPlan(
+    ctx.monthlyTargets,
+    month,
+    ctx.targetFillPolicy
+  );
+  if (fromMonthly !== null) return fromMonthly;
+
+  if (ctx.indicatorType === "normal" && ctx.targetDirection !== "na") {
+    if (hasMonthlyTargetPlan) return null;
+    return ctx.normalMonthlyContext
+      ? resolveNormalMonthlyTargetMetric(month, ctx.normalMonthlyContext)
+      : null;
+  }
+
+  if (hasMonthlyTargetPlan) return null;
+  return ctx.computedTargetMetric;
+}
+
+function monthlyAchievementRateFromCurrentTarget(
+  cells: Record<string, unknown>,
+  month: MonthKey,
+  ctx: MonthlyAchievementRateContext
+): number | null {
+  const cell = cells[String(month)];
+  if (!cell || typeof cell !== "object" || Array.isArray(cell)) return null;
+  const rec = cell as PerformanceMonthlyCell;
+  const stored = toNum(rec.achievement_rate as number | string | null | undefined);
+  const actual = toNum(rec.actual_value as number | string | null | undefined);
+  if (actual === null || !Number.isFinite(actual)) {
+    return stored === null ? null : applyAchievementCap(stored, ctx.achievementCap ?? 100);
+  }
+
+  const aggregationType =
+    parseAggregationType(rec.aggregation_type) ?? ctx.aggregationType ?? "monthly";
+  const target = resolveCurrentMonthlyTargetMetric(month, aggregationType, ctx);
+  if (target === null || target < 0) {
+    return stored === null ? null : applyAchievementCap(stored, ctx.achievementCap ?? 100);
+  }
+
+  const actualForAchievement =
+    aggregationType === "cumulative"
+      ? actualThroughMonthFromCells(cells, month)
+      : actual;
+
+  if (ctx.evaluationType === "qualitative") {
+    return qualitativeAchievementPercent(
+      actualForAchievement,
+      target,
+      ctx.qualitativeCalcType ?? "progress",
+      ctx.achievementCap
+    );
+  }
+  if (
+    indicatorUsesComputedAchievement(ctx.indicatorType) ||
+    (ctx.indicatorType === "normal" && ctx.targetDirection !== "na")
+  ) {
+    return computedAchievementPercent(
+      ctx.indicatorType,
+      actualForAchievement,
+      target,
+      ctx.targetDirection,
+      ctx.achievementCap
+    );
+  }
+
+  return stored === null ? null : applyAchievementCap(stored, ctx.achievementCap ?? 100);
+}
+
 function performanceMonthlyIsNonEmpty(raw: unknown): boolean {
   return (
     raw !== null &&
@@ -556,7 +708,8 @@ function performanceMonthlyIsNonEmpty(raw: unknown): boolean {
  * (%·수량·건·금액 등 공통 — 종합/부서 점수의 항목 대표값).
  */
 function monthlyAchievementRatesLatestRegisteredMonth(
-  t: Record<string, unknown>
+  t: Record<string, unknown>,
+  ctx?: MonthlyAchievementRateContext
 ): number[] {
   const raw = t.performance_monthly;
   if (!performanceMonthlyIsNonEmpty(raw)) return [];
@@ -567,12 +720,15 @@ function monthlyAchievementRatesLatestRegisteredMonth(
     const cell = o[String(mi)];
     if (!cell || typeof cell !== "object" || Array.isArray(cell)) continue;
     const rec = cell as PerformanceMonthlyCell;
-    const rate = toNum(rec.achievement_rate as number | string | null | undefined);
+    const rate =
+      ctx !== undefined
+        ? monthlyAchievementRateFromCurrentTarget(o, mi, ctx)
+        : toNum(rec.achievement_rate as number | string | null | undefined);
     if (rate === null || !Number.isFinite(rate)) continue;
     const miNum = Number(mi);
     if (miNum > bestMonth) {
       bestMonth = miNum;
-      bestRate = clampPercent100(rate);
+      bestRate = applyAchievementCap(rate, ctx?.achievementCap ?? 100);
     }
   }
   if (bestMonth < 0 || bestRate === null) return [];
@@ -580,7 +736,8 @@ function monthlyAchievementRatesLatestRegisteredMonth(
 }
 
 function monthlyAchievementRatesByMonth(
-  targets: Record<string, unknown>[]
+  targets: Record<string, unknown>[],
+  ctx?: MonthlyAchievementRateContext
 ): Partial<Record<number, number>> {
   const out: Partial<Record<number, number>> = {};
   const primaryMonthly = targets.find((t) =>
@@ -594,9 +751,12 @@ function monthlyAchievementRatesByMonth(
     const cell = o[String(mi)];
     if (!cell || typeof cell !== "object" || Array.isArray(cell)) continue;
     const rec = cell as PerformanceMonthlyCell;
-    const rate = toNum(rec.achievement_rate as number | string | null | undefined);
+    const rate =
+      ctx !== undefined
+        ? monthlyAchievementRateFromCurrentTarget(o, mi, ctx)
+        : toNum(rec.achievement_rate as number | string | null | undefined);
     if (rate === null || !Number.isFinite(rate)) continue;
-    out[mi] = clampPercent100(rate);
+    out[mi] = applyAchievementCap(rate, ctx?.achievementCap ?? 100);
   }
   return out;
 }
@@ -686,14 +846,15 @@ function pushApprovedHalfAchievements(
 /** 한 KPI 항목의 `kpi_targets` 행들에서 승인된 분기·반기 실적 달성률(0~100)만 수집 */
 function collectApprovedAchievementRatesForItemTargets(
   targets: Record<string, unknown>[],
-  hasTargetHalf: boolean
+  hasTargetHalf: boolean,
+  ctx?: MonthlyAchievementRateContext
 ): number[] {
   const rates: number[] = [];
   const primaryMonthly = targets.find((t) =>
     performanceMonthlyIsNonEmpty(t.performance_monthly)
   );
   if (primaryMonthly) {
-    rates.push(...monthlyAchievementRatesLatestRegisteredMonth(primaryMonthly));
+    rates.push(...monthlyAchievementRatesLatestRegisteredMonth(primaryMonthly, ctx));
     return rates;
   }
   for (const t of targets) {
@@ -747,6 +908,8 @@ export async function fetchDepartmentKpiSummary(): Promise<
   const supabase = createBrowserSupabase();
   const hasYear = await getKpiTargetsHasYearColumn();
   const hasTargetHalf = await getKpiTargetsHasHalfTypeColumn();
+  const hasH1TargetPctColumn = await getKpiTargetsHasColumn("h1_target_pct");
+  const hasH2TargetPctColumn = await getKpiTargetsHasColumn("h2_target_pct");
 
   const { data: departments, error: deptErr } = await supabase
     .from("departments")
@@ -818,19 +981,6 @@ export async function fetchDepartmentKpiSummary(): Promise<
         CURRENT_KPI_YEAR
       );
     });
-    const list = ratesByDept.get(deptId)!;
-    const itemRates = collectApprovedAchievementRatesForItemTargets(
-      targets,
-      hasTargetHalf
-    );
-    const rep = representativeAchievementPercentForRates(itemRates);
-    if (rep !== null) {
-      scoredCountByDept.set(deptId, (scoredCountByDept.get(deptId) ?? 0) + 1);
-    }
-    // 부서 카드 통합 달성률은 "부서 KPI 전체 항목"을 분모로 계산한다.
-    // 승인 실적이 없는 항목은 0%로 간주해 평균에 포함한다.
-    list.push(rep ?? 0);
-
     const itemRecord = item as unknown as Record<string, unknown>;
     const milestoneRows = Array.isArray(itemRecord.kpi_milestones)
       ? itemRecord.kpi_milestones.map(asRecord)
@@ -849,22 +999,28 @@ export async function fetchDepartmentKpiSummary(): Promise<
       }
       return acc;
     }, {});
-    const monthlyTargetNotes = milestoneRows.reduce<Partial<Record<number, string>>>((acc, row) => {
-      const month = toNum(row.target_month as number | string | null | undefined);
-      const note = typeof row.note === "string" ? row.note.trim() : "";
-      if (
-        month !== null &&
-        Number.isInteger(month) &&
-        month >= 1 &&
-        month <= 15 &&
-        note
-      ) {
-        acc[month] = note;
-      }
-      return acc;
-    }, {});
+    const rateContext = buildMonthlyAchievementRateContext({
+      item: itemRecord,
+      targets,
+      monthlyTargets,
+      hasH1TargetPctColumn,
+      hasH2TargetPctColumn,
+    });
+    const list = ratesByDept.get(deptId)!;
+    const itemRates = collectApprovedAchievementRatesForItemTargets(
+      targets,
+      hasTargetHalf,
+      rateContext
+    );
+    const rep = representativeAchievementPercentForRates(itemRates);
+    if (rep !== null) {
+      scoredCountByDept.set(deptId, (scoredCountByDept.get(deptId) ?? 0) + 1);
+    }
+    // 부서 카드 통합 달성률은 "부서 KPI 전체 항목"을 분모로 계산한다.
+    // 승인 실적이 없는 항목은 0%로 간주해 평균에 포함한다.
+    list.push(rep ?? 0);
     if (itemIsEvaluatedInMonthRecord(itemRecord, monthlyTargets, currentMonth)) {
-      const byMonth = monthlyAchievementRatesByMonth(targets);
+      const byMonth = monthlyAchievementRatesByMonth(targets, rateContext);
       currentMonthByDept.get(deptId)!.push(byMonth[currentMonth] ?? 0);
     }
 
@@ -1186,6 +1342,17 @@ function pickNullableText(obj: Record<string, unknown>, key: string): string | n
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+export function isDefaultMonthlyTargetNote(raw: string | null | undefined): boolean {
+  const text = String(raw ?? "").trim();
+  return /^\d{1,2}월\s*목표$/.test(text) || /^익년\s*\d{1,2}월\s*목표$/.test(text);
+}
+
+function normalizeMonthlyTargetNote(raw: string | null | undefined): string | null {
+  const text = String(raw ?? "").trim();
+  if (!text || isDefaultMonthlyTargetNote(text)) return null;
+  return text;
+}
+
 function parseEvaluationType(raw: unknown): KpiEvaluationType | null {
   const s = String(raw ?? "").trim().toLowerCase();
   if (s === "quantitative") return "quantitative";
@@ -1218,6 +1385,97 @@ function parseAchievementCap(raw: unknown): KpiAchievementCap {
   const n = toNum(raw as number | string | null | undefined);
   if (n === null || !Number.isFinite(n)) return null;
   return n >= 120 ? 120 : 100;
+}
+
+function buildMonthlyAchievementRateContext(input: {
+  item: Record<string, unknown>;
+  targets: Record<string, unknown>[];
+  monthlyTargets: Partial<Record<number, number>>;
+  hasH1TargetPctColumn: boolean;
+  hasH2TargetPctColumn: boolean;
+}): MonthlyAchievementRateContext {
+  const indicatorType = parseKpiIndicatorTypeFromDb(input.item.indicator_type);
+  const targetPpm = pickNumber(input.item, ["target_value", "target_ppm"]);
+  const targetFinalValue = pickNumber(input.item, ["target_final_value"]);
+  const targetDirectionRaw = String(input.item.target_direction ?? "").trim().toLowerCase();
+  const targetDirection: "up" | "down" | "na" =
+    targetDirectionRaw === "down"
+      ? "down"
+      : targetDirectionRaw === "na"
+        ? "na"
+        : "up";
+  const firstDraftRow = input.targets.find(
+    (t) => String(t.approval_step ?? "").trim().toLowerCase() === PERF_STATUS_DRAFT
+  );
+  const firstHalfTargetFromPct =
+    input.targets
+      .map((t) => pickNumber(t, ["h1_target_pct", "h1_target_value"]))
+      .find((v) => v !== null) ?? null;
+  const secondHalfTargetFromPct =
+    input.targets
+      .map((t) => pickNumber(t, ["h2_target_pct", "h2_target_value"]))
+      .find((v) => v !== null) ?? null;
+  const firstHalfTarget = input.hasH1TargetPctColumn
+    ? firstHalfTargetFromPct
+    : pickNumber(firstDraftRow ?? {}, ["h1_rate"]);
+  const secondHalfTarget = input.hasH2TargetPctColumn
+    ? secondHalfTargetFromPct
+    : pickNumber(firstDraftRow ?? {}, ["h2_rate"]);
+  const periodStartMonth = pickNumber(input.item, ["period_start_month"]);
+  const periodEndMonth = pickNumber(input.item, ["period_end_month"]);
+  const sched = scheduleMonthsFromItemDates(
+    pickNullableText(input.item, "h1_target_date"),
+    pickNullableText(input.item, "h2_target_date")
+  );
+  const activeMonths =
+    periodStartMonth !== null &&
+    periodEndMonth !== null &&
+    Number.isInteger(periodStartMonth) &&
+    Number.isInteger(periodEndMonth) &&
+    periodStartMonth >= 1 &&
+    periodEndMonth <= 15 &&
+    periodStartMonth <= periodEndMonth
+      ? Array.from(
+          { length: periodEndMonth - periodStartMonth + 1 },
+          (_, idx) => (periodStartMonth + idx) as MonthKey
+        )
+      : activeMonthsForSchedule(sched);
+
+  return {
+    indicatorType,
+    evaluationType: parseEvaluationType(input.item.evaluation_type),
+    qualitativeCalcType: parseQualitativeCalcType(input.item.qualitative_calc_type),
+    targetDirection,
+    aggregationType: parseAggregationType(input.item.aggregation_type),
+    targetFillPolicy: parseTargetFillPolicy(input.item.target_fill_policy),
+    achievementCap: parseAchievementCap(input.item.achievement_cap),
+    computedTargetMetric: resolveComputedTargetMetric(
+      indicatorType,
+      targetPpm,
+      targetFinalValue
+    ),
+    monthlyTargets: input.monthlyTargets,
+    normalMonthlyContext:
+      activeMonths.length > 0
+        ? {
+            activeFirstMonth: activeMonths[0]!,
+            activeLastMonth: activeMonths[activeMonths.length - 1]!,
+            periodStartMonth,
+            periodEndMonth,
+            firstHalfTarget,
+            firstHalfRate: firstHalfTarget,
+            secondHalfTarget,
+            secondHalfRate: secondHalfTarget,
+            targetFinalValue,
+            challengeTarget: pickNumber(input.item, [
+              "challenge_goal",
+              "target_rate",
+              "goal_rate",
+            ]),
+            targetDirection,
+          }
+        : null,
+  };
 }
 
 export async function fetchDepartmentKpiDetail(
@@ -1315,16 +1573,6 @@ export async function fetchDepartmentKpiDetail(
         CURRENT_KPI_YEAR
       );
     });
-    const rates = collectApprovedAchievementRatesForItemTargets(
-      targets,
-      hasTargetHalf
-    );
-    const averageAchievement =
-      representativeAchievementPercentForRates(rates);
-    // 부서 상단 "전체 평균 달성률"은 대시보드 부서 카드와 동일하게
-    // 등록된 KPI 항목 수를 분모로 하고, 승인 실적 없음은 0%로 포함한다.
-    departmentRates.push(averageAchievement ?? 0);
-
     const firstHalf = targets
       .map((t) => pickText(t, ["h1_target"]))
       .filter((v) => v !== "-")
@@ -1385,7 +1633,9 @@ export async function fetchDepartmentKpiDetail(
     }, {});
     const monthlyTargetNotes = milestoneRows.reduce<Partial<Record<number, string>>>((acc, row) => {
       const month = toNum(row.target_month as number | string | null | undefined);
-      const note = typeof row.note === "string" ? row.note.trim() : "";
+      const note = normalizeMonthlyTargetNote(
+        typeof row.note === "string" ? row.note : null
+      );
       if (
         month !== null &&
         Number.isInteger(month) &&
@@ -1397,7 +1647,24 @@ export async function fetchDepartmentKpiDetail(
       }
       return acc;
     }, {});
-    const monthlyAchievementRates = monthlyAchievementRatesByMonth(targets);
+    const rateContext = buildMonthlyAchievementRateContext({
+      item,
+      targets,
+      monthlyTargets,
+      hasH1TargetPctColumn,
+      hasH2TargetPctColumn,
+    });
+    const rates = collectApprovedAchievementRatesForItemTargets(
+      targets,
+      hasTargetHalf,
+      rateContext
+    );
+    const averageAchievement =
+      representativeAchievementPercentForRates(rates);
+    // 부서 상단 "전체 평균 달성률"은 대시보드 부서 카드와 동일하게
+    // 등록된 KPI 항목 수를 분모로 하고, 승인 실적 없음은 0%로 포함한다.
+    departmentRates.push(averageAchievement ?? 0);
+    const monthlyAchievementRates = monthlyAchievementRatesByMonth(targets, rateContext);
     const firstDraftRow = targetRows.find(
       (t) => String(t.approval_step ?? "").trim().toLowerCase() === PERF_STATUS_DRAFT
     );
@@ -2642,10 +2909,12 @@ export async function fetchPerformancesPendingStage(options: {
   const supabase = createBrowserSupabase();
   const hasYear = await getKpiTargetsHasYearColumn();
   const hasTargetHalf = await getKpiTargetsHasHalfTypeColumn();
+  const hasH1TargetPctColumn = await getKpiTargetsHasColumn("h1_target_pct");
+  const hasH2TargetPctColumn = await getKpiTargetsHasColumn("h2_target_pct");
 
   let tq = supabase
     .from("kpi_targets")
-    .select("*, kpi_items(main_topic, sub_topic, dept_id)");
+    .select("*, kpi_items(*, kpi_milestones(target_month, target_value))");
   if (hasYear) tq = tq.eq("year", CURRENT_KPI_YEAR);
 
   const { data: targetRows, error: te } = await tq;
@@ -2666,6 +2935,30 @@ export async function fetchPerformancesPendingStage(options: {
       typeof itemRec.dept_id === "string" && itemRec.dept_id
         ? itemRec.dept_id
         : null;
+    const milestoneRows = Array.isArray(itemRec.kpi_milestones)
+      ? itemRec.kpi_milestones.map(asRecord)
+      : [];
+    const monthlyTargets = milestoneRows.reduce<Partial<Record<number, number>>>((acc, row) => {
+      const month = toNum(row.target_month as number | string | null | undefined);
+      const value = toNum(row.target_value as number | string | null | undefined);
+      if (
+        month !== null &&
+        value !== null &&
+        Number.isInteger(month) &&
+        month >= 1 &&
+        month <= 15
+      ) {
+        acc[month] = value;
+      }
+      return acc;
+    }, {});
+    const rateContext = buildMonthlyAchievementRateContext({
+      item: itemRec,
+      targets: [t],
+      monthlyTargets,
+      hasH1TargetPctColumn,
+      hasH2TargetPctColumn,
+    });
 
     if (options.filterDeptId && deptId !== options.filterDeptId) {
       continue;
@@ -2721,7 +3014,9 @@ export async function fetchPerformancesPendingStage(options: {
         const wantFinal =
           options.stage === "final" && st === PERF_STATUS_PENDING_FINAL;
         if (!wantPrimary && !wantFinal) continue;
-        const rate = toNum(c.achievement_rate as number | string | null | undefined);
+        const storedRate = toNum(c.achievement_rate as number | string | null | undefined);
+        const rate =
+          monthlyAchievementRateFromCurrentTarget(o, mi, rateContext) ?? storedRate;
         staged.push({
           id: `${tid}:M${mi}`,
           targetRowId: tid,
@@ -3177,6 +3472,269 @@ export const VOC_SETTING_KEY = "VOC_ENABLED";
 export const KPI_SETTING_KEY = "KPI_ENABLED";
 export type AppFeatureKey = "capa" | "voc" | "kpi";
 
+export type KpiVocCategory =
+  | "department"
+  | "permission"
+  | "uiux"
+  | "calculation"
+  | "data"
+  | "approval"
+  | "other";
+
+export type KpiVocStatus =
+  | "submitted"
+  | "received"
+  | "in_progress"
+  | "done"
+  | "rejected";
+
+export type KpiVocPriority = "normal" | "high" | "urgent";
+
+export type KpiVocRequest = {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+  createdByName: string;
+  deptId: string | null;
+  deptName: string | null;
+  category: KpiVocCategory;
+  title: string;
+  description: string;
+  status: KpiVocStatus;
+  priority: KpiVocPriority;
+  adminNote: string | null;
+  handledBy: string | null;
+  handledAt: string | null;
+};
+
+const KPI_VOC_CATEGORIES = new Set<KpiVocCategory>([
+  "department",
+  "permission",
+  "uiux",
+  "calculation",
+  "data",
+  "approval",
+  "other",
+]);
+
+const KPI_VOC_STATUSES = new Set<KpiVocStatus>([
+  "submitted",
+  "received",
+  "in_progress",
+  "done",
+  "rejected",
+]);
+
+const KPI_VOC_PRIORITIES = new Set<KpiVocPriority>([
+  "normal",
+  "high",
+  "urgent",
+]);
+
+function parseKpiVocCategory(raw: unknown): KpiVocCategory {
+  const value = String(raw ?? "").trim() as KpiVocCategory;
+  return KPI_VOC_CATEGORIES.has(value) ? value : "other";
+}
+
+function parseKpiVocStatus(raw: unknown): KpiVocStatus {
+  const value = String(raw ?? "").trim() as KpiVocStatus;
+  return KPI_VOC_STATUSES.has(value) ? value : "submitted";
+}
+
+function parseKpiVocPriority(raw: unknown): KpiVocPriority {
+  const value = String(raw ?? "").trim() as KpiVocPriority;
+  return KPI_VOC_PRIORITIES.has(value) ? value : "normal";
+}
+
+function joinedDepartmentName(raw: unknown): string | null {
+  const rec = Array.isArray(raw) ? raw[0] : raw;
+  if (!rec || typeof rec !== "object") return null;
+  const name = (rec as Record<string, unknown>).name;
+  return typeof name === "string" && name.trim() ? name.trim() : null;
+}
+
+function mapKpiVocRequest(
+  row: Record<string, unknown>,
+  deptNameExplicit?: string | null,
+): KpiVocRequest {
+  const deptName =
+    deptNameExplicit !== undefined
+      ? deptNameExplicit
+      : joinedDepartmentName(row.departments);
+  return {
+    id: typeof row.id === "string" ? row.id : String(row.id ?? ""),
+    createdAt:
+      typeof row.created_at === "string" ? row.created_at : new Date(0).toISOString(),
+    updatedAt:
+      typeof row.updated_at === "string" ? row.updated_at : new Date(0).toISOString(),
+    createdBy: typeof row.created_by === "string" ? row.created_by : "",
+    createdByName:
+      typeof row.created_by_name === "string" && row.created_by_name.trim()
+        ? row.created_by_name.trim()
+        : "-",
+    deptId: typeof row.dept_id === "string" ? row.dept_id : null,
+    deptName,
+    category: parseKpiVocCategory(row.category),
+    title: typeof row.title === "string" ? row.title : "",
+    description: typeof row.description === "string" ? row.description : "",
+    status: parseKpiVocStatus(row.status),
+    priority: parseKpiVocPriority(row.priority),
+    adminNote:
+      typeof row.admin_note === "string" && row.admin_note.trim()
+        ? row.admin_note.trim()
+        : null,
+    handledBy: typeof row.handled_by === "string" ? row.handled_by : null,
+    handledAt: typeof row.handled_at === "string" ? row.handled_at : null,
+  };
+}
+
+export async function fetchKpiVocRequests(): Promise<KpiVocRequest[]> {
+  const supabase = createBrowserSupabase();
+  const { data, error } = await supabase
+    .from("kpi_voc_requests")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) {
+    throw new Error(
+      `${error.message} (kpi_voc_requests 테이블·SELECT RLS 정책을 확인해 주세요.)`
+    );
+  }
+  const rows = (data ?? []).map((row) => asRecord(row));
+  const deptIds = [
+    ...new Set(
+      rows
+        .map((r) => r.dept_id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0),
+    ),
+  ];
+  const deptNameById = new Map<string, string>();
+  if (deptIds.length > 0) {
+    const { data: deptRows, error: deptErr } = await supabase
+      .from("departments")
+      .select("id,name")
+      .in("id", deptIds);
+    if (!deptErr && deptRows) {
+      for (const d of deptRows) {
+        const rec = asRecord(d);
+        const id = typeof rec.id === "string" ? rec.id : "";
+        const name = typeof rec.name === "string" ? rec.name.trim() : "";
+        if (id && name) deptNameById.set(id, name);
+      }
+    }
+  }
+  return rows.map((row) => {
+    const did = typeof row.dept_id === "string" ? row.dept_id : null;
+    const explicit = did ? (deptNameById.get(did) ?? null) : null;
+    return mapKpiVocRequest(row, explicit);
+  });
+}
+
+export async function createKpiVocRequest(input: {
+  profile: {
+    id: string;
+    username: string;
+    full_name?: string | null;
+    dept_id?: string | null;
+  };
+  category: KpiVocCategory;
+  priority: KpiVocPriority;
+  title: string;
+  description: string;
+}): Promise<void> {
+  const title = input.title.trim();
+  const description = input.description.trim();
+  if (!title) throw new Error("제목을 입력해 주세요.");
+  if (!description) throw new Error("상세 내용을 입력해 주세요.");
+  if (title.length > 120) throw new Error("제목은 120자 이하로 입력해 주세요.");
+  if (description.length > 4000) {
+    throw new Error("상세 내용은 4000자 이하로 입력해 주세요.");
+  }
+  const createdByName =
+    input.profile.full_name?.trim() ||
+    input.profile.username?.trim() ||
+    "사용자";
+  const supabase = createBrowserSupabase();
+  const { error } = await supabase.from("kpi_voc_requests").insert({
+    created_by: input.profile.id,
+    created_by_name: createdByName,
+    dept_id: input.profile.dept_id ?? null,
+    category: input.category,
+    priority: input.priority,
+    title,
+    description,
+    status: "submitted",
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function updateKpiVocRequest(input: {
+  id: string;
+  status: KpiVocStatus;
+  adminNote?: string | null;
+}): Promise<void> {
+  const id = input.id.trim();
+  if (!id) throw new Error("VOC ID가 없습니다.");
+  const supabase = createBrowserSupabase();
+  const {
+    data: { session },
+    error: sessionError,
+  } = await supabase.auth.getSession();
+  if (sessionError) throw new Error(sessionError.message);
+  if (!session?.user.id) throw new Error("로그인 세션이 없습니다.");
+
+  const isTerminal = input.status === "done" || input.status === "rejected";
+  const { error } = await supabase
+    .from("kpi_voc_requests")
+    .update({
+      status: input.status,
+      admin_note: input.adminNote?.trim() || null,
+      handled_by: session.user.id,
+      handled_at: isTerminal ? new Date().toISOString() : null,
+    })
+    .eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function updateKpiVocOwnContent(input: {
+  id: string;
+  category: KpiVocCategory;
+  priority: KpiVocPriority;
+  title: string;
+  description: string;
+}): Promise<void> {
+  const id = input.id.trim();
+  if (!id) throw new Error("VOC ID가 없습니다.");
+  const title = input.title.trim();
+  const description = input.description.trim();
+  if (!title) throw new Error("제목을 입력해 주세요.");
+  if (!description) throw new Error("상세 내용을 입력해 주세요.");
+  if (title.length > 120) throw new Error("제목은 120자 이하로 입력해 주세요.");
+  if (description.length > 4000) {
+    throw new Error("상세 내용은 4000자 이하로 입력해 주세요.");
+  }
+  const supabase = createBrowserSupabase();
+  const { error } = await supabase
+    .from("kpi_voc_requests")
+    .update({
+      category: input.category,
+      priority: input.priority,
+      title,
+      description,
+    })
+    .eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+/** 관리자만 호출 가능(RLS). */
+export async function deleteKpiVocRequest(id: string): Promise<void> {
+  const trimmed = id.trim();
+  if (!trimmed) throw new Error("VOC ID가 없습니다.");
+  const supabase = createBrowserSupabase();
+  const { error } = await supabase.from("kpi_voc_requests").delete().eq("id", trimmed);
+  if (error) throw new Error(error.message);
+}
+
 const APP_FEATURE_SETTING_BY_KEY: Record<AppFeatureKey, string> = {
   capa: CAPA_SIMULATOR_SETTING_KEY,
   voc: VOC_SETTING_KEY,
@@ -3434,8 +3992,9 @@ function representativeMonthlyTargetValue(
   aggregationType: KpiAggregationType
 ): number {
   if (aggregationType === "cumulative") {
+    const hasTargetThroughMonth = rows.some((row) => row.month <= month);
     const cumulative = cumulativeMonthlyTargetAt(rows, month);
-    return cumulative > 0 ? cumulative : fallback;
+    return hasTargetThroughMonth ? cumulative : fallback;
   }
   return rows.find((row) => row.month === month)?.targetValue ?? fallback;
 }
@@ -3582,7 +4141,7 @@ export async function createManualKpiItem(
     kpi_id: inserted.id,
     target_month: m.month,
     target_value: m.targetValue,
-    note: m.note?.trim() || null,
+    note: normalizeMonthlyTargetNote(m.note),
   }));
   if (milestoneRows.length > 0) {
     const { error: milestoneErr } = await supabase.from("kpi_milestones").upsert(milestoneRows);
@@ -3738,7 +4297,7 @@ export async function updateManualKpiItem(
     kpi_id: cleanKpiId,
     target_month: m.month,
     target_value: m.targetValue,
-    note: m.note?.trim() || null,
+    note: normalizeMonthlyTargetNote(m.note),
   }));
   const { error: milestoneErr } = await supabase.from("kpi_milestones").upsert(milestoneRows);
   if (milestoneErr) throw new Error(milestoneErr.message);

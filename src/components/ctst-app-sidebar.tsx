@@ -163,15 +163,12 @@ export function CtstAppSidebar({
                 ) : null}
               </Link>
             ) : null}
-          </NavSection>
-        ) : null}
-
-        {access.voc ? (
-          <NavSection title="관리">
-            <Link href="/voc" className={classForLink(vocActive)}>
-              <MessageSquareText className="h-4 w-4 shrink-0 text-sky-600" aria-hidden />
-              VOC
-            </Link>
+            {access.voc ? (
+              <Link href="/voc" className={classForLink(vocActive)}>
+                <MessageSquareText className="h-4 w-4 shrink-0 text-sky-600" aria-hidden />
+                KPI VOC
+              </Link>
+            ) : null}
           </NavSection>
         ) : null}
 

@@ -17,6 +17,7 @@ import {
   fetchDepartmentKpiSummary,
   fetchDashboardSummaryStats,
   fetchPerformancesPendingStage,
+  fetchKpiVocRequests,
   clearAllKpiData,
   extendKpiItemPeriodEndMonth,
   removeKpiItemCascade,
@@ -33,6 +34,10 @@ import {
   type KpiAchievementCap,
   fetchCapaSimulatorEnabled,
   saveAppFeatureAvailability,
+  createKpiVocRequest,
+  updateKpiVocRequest,
+  updateKpiVocOwnContent,
+  deleteKpiVocRequest,
   updateKpiItemIndicatorSettings,
   saveCapaSimulatorEnabled,
   type ApprovalWorkflowStage,
@@ -42,6 +47,9 @@ import {
   type KpiExcelImportRow,
   type KpiAggregationType,
   type KpiIndicatorType,
+  type KpiVocCategory,
+  type KpiVocPriority,
+  type KpiVocStatus,
   type MonthKey,
   type QuarterLabel,
 } from "@/src/lib/kpi-queries";
@@ -354,6 +362,84 @@ export function useWorkflowReviewMutation() {
       });
       void queryClient.invalidateQueries({
         queryKey: ["supabase", "kpi-performances"],
+      });
+    },
+  });
+}
+
+export function useKpiVocRequests(enabled: boolean) {
+  return useQuery({
+    queryKey: ["supabase", "kpi-voc-requests"],
+    queryFn: fetchKpiVocRequests,
+    enabled,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useCreateKpiVocRequestMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: {
+      profile: {
+        id: string;
+        username: string;
+        full_name?: string | null;
+        dept_id?: string | null;
+      };
+      category: KpiVocCategory;
+      priority: KpiVocPriority;
+      title: string;
+      description: string;
+    }) => createKpiVocRequest(args),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "kpi-voc-requests"],
+      });
+    },
+  });
+}
+
+export function useUpdateKpiVocRequestMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: {
+      id: string;
+      status: KpiVocStatus;
+      adminNote?: string | null;
+    }) => updateKpiVocRequest(args),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "kpi-voc-requests"],
+      });
+    },
+  });
+}
+
+export function useUpdateKpiVocOwnContentMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: {
+      id: string;
+      category: KpiVocCategory;
+      priority: KpiVocPriority;
+      title: string;
+      description: string;
+    }) => updateKpiVocOwnContent(args),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "kpi-voc-requests"],
+      });
+    },
+  });
+}
+
+export function useDeleteKpiVocRequestMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => deleteKpiVocRequest(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "kpi-voc-requests"],
       });
     },
   });

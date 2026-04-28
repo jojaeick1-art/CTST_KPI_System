@@ -30,7 +30,6 @@ import {
   approvalNotificationCount,
   approvalNotificationDeptFilter,
   canAccessApprovalsPage,
-  canBulkUploadKpiExcel,
   canConfigureKpiIndicatorType,
   canSubmitMonthlyPerformance,
   DASHBOARD_SHOW_MAIN_SESSION_KEY,
@@ -379,7 +378,6 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     normalizedRole === "group_leader" ||
     normalizedRole === "team_leader" ||
     normalizedRole === "group_team_leader";
-  const canExcel = canBulkUploadKpiExcel(ensuredRole);
   const isOwnDepartment =
     Boolean(ensuredUserDeptId) && ensuredUserDeptId === departmentId;
   const canConfigureIndicator =
@@ -390,8 +388,8 @@ export function DepartmentDetailClient({ departmentId }: Props) {
       (roleCanAlwaysEdit || canSubmitMonthlyPerformance(ensuredRole)));
   const canManageKpiItems = roleCanAlwaysEdit && (isAdmin || isOwnDepartment);
   const canFinalizeKpiItems = roleCanAlwaysEdit && (isAdmin || isOwnDepartment);
-  /** 관리자·그룹장: 엑셀 일괄 등록 후 소속 부서 또는(관리자만) 모든 부서에서 항목 추가 가능 */
-  const canCreateKpi = canExcel && (isAdmin || isOwnDepartment);
+  /** 관리자: 모든 부서, 그룹장·팀장: 본인 부서 KPI 항목 추가/수정/삭제 가능 */
+  const canCreateKpi = canManageKpiItems;
   const detailItems = detailQuery.data?.items ?? [];
   const totalWeight = detailItems.reduce((sum, item) => {
     const n = Number(String(item.weight ?? "").trim());
@@ -503,31 +501,44 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     }
   }
 
-  async function handleFinalizeKpiItem(kpiItemId: string): Promise<boolean> {
+  async function handleFinalizeKpiItem(
+    kpiItemId: string,
+    completed = true
+  ): Promise<boolean> {
     if (!canFinalizeKpiItems) {
-      window.alert("최종 완료 처리는 관리자·팀장·그룹장만 가능합니다.");
+      window.alert("최종 완료/철회 처리는 관리자·팀장·그룹장만 가능합니다.");
       return false;
     }
     const ok = window.confirm(
-      "이 KPI 항목을 최종 완료로 표시하시겠습니까? 대시보드의 '최종 완료 KPI'에 반영됩니다."
+      completed
+        ? "이 KPI 항목을 최종 완료로 표시하시겠습니까? 대시보드의 '최종 완료 KPI'에 반영됩니다."
+        : "이 KPI 항목의 최종 완료를 철회하시겠습니까? 대시보드의 '최종 완료 KPI'에서 제외됩니다."
     );
     if (!ok) return false;
     try {
       await updateFinalCompletionMutation.mutateAsync({
         kpiItemId,
-        completed: true,
+        completed,
       });
       await detailQuery.refetch();
       setSelectedKpi((prev) =>
         prev && prev.id === kpiItemId
-          ? { ...prev, status: "closed", isFinalCompleted: true }
+          ? {
+              ...prev,
+              status: completed ? "closed" : "active",
+              isFinalCompleted: completed,
+            }
           : prev
       );
-      window.alert("KPI 항목이 최종 완료 처리되었습니다.");
+      window.alert(
+        completed
+          ? "KPI 항목이 최종 완료 처리되었습니다."
+          : "KPI 항목 최종 완료가 철회되었습니다."
+      );
       return true;
     } catch (e) {
       window.alert(
-        e instanceof Error ? e.message : "최종 완료 처리 중 오류가 발생했습니다."
+        e instanceof Error ? e.message : "최종 완료/철회 처리 중 오류가 발생했습니다."
       );
       return false;
     }
@@ -941,7 +952,9 @@ export function DepartmentDetailClient({ departmentId }: Props) {
         canDeleteKpiItem={canManageKpiItems}
         onDeleteKpiItem={(kpiId) => handleDeleteKpiItem(kpiId)}
         canFinalizeKpiItem={canFinalizeKpiItems}
-        onFinalizeKpiItem={(kpiId) => handleFinalizeKpiItem(kpiId)}
+        onFinalizeKpiItem={(kpiId, completed) =>
+          handleFinalizeKpiItem(kpiId, completed)
+        }
         onExtendPeriodEndMonth={(kpiId) => handleExtendKpiItemPeriodEndMonth(kpiId)}
         onClose={() => setSelectedKpi(null)}
       />

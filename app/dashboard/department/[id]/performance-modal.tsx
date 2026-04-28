@@ -9,6 +9,7 @@ import {
   LabelList,
   Legend,
   Line,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -264,7 +265,10 @@ type Props = {
   canDeleteKpiItem?: boolean;
   onDeleteKpiItem?: (kpiId: string) => Promise<void> | void;
   canFinalizeKpiItem?: boolean;
-  onFinalizeKpiItem?: (kpiId: string) => Promise<boolean> | boolean;
+  onFinalizeKpiItem?: (
+    kpiId: string,
+    completed?: boolean
+  ) => Promise<boolean> | boolean;
   onExtendPeriodEndMonth?: (kpiId: string) => Promise<boolean> | boolean;
 };
 
@@ -351,13 +355,15 @@ function cumulativeTargetThroughMonth(
   month: MonthKey
 ): number | null {
   let sum = 0;
+  let hasTarget = false;
   for (let m = 1; m <= month; m += 1) {
     const value = monthlyTargets?.[m];
     if (typeof value === "number" && Number.isFinite(value)) {
       sum += value;
+      hasTarget = true;
     }
   }
-  return sum > 0 ? sum : null;
+  return hasTarget ? sum : null;
 }
 
 function resolvePerformanceAggregationType(
@@ -683,16 +689,16 @@ function centeredChartYDomain(
 ): ChartYDomain {
   const finiteValues = values.filter((v) => Number.isFinite(v));
   if (finiteValues.length === 0) {
-    return { min: 0, max: percentClamped ? 120 : 100 };
+    return { min: percentClamped ? -6 : -2, max: percentClamped ? 120 : 100 };
   }
 
   const rawMax = Math.max(...finiteValues);
   if (!Number.isFinite(rawMax) || rawMax <= 0) {
-    return { min: 0, max: percentClamped ? 120 : 1 };
+    return { min: percentClamped ? -6 : -0.1, max: percentClamped ? 120 : 1 };
   }
 
   if (percentClamped) {
-    return { min: 0, max: 120 };
+    return { min: -6, max: 120 };
   }
 
   const desiredTop =
@@ -709,7 +715,7 @@ function centeredChartYDomain(
     max = step;
   }
 
-  return { min: 0, max };
+  return { min: -step * 0.25, max };
 }
 
 /** 차트 세로축 단위 안내 — % 그래프 설명과 혼동 방지 */
@@ -901,7 +907,7 @@ export function PerformanceModal({
       typeof fromMap === "number" && Number.isFinite(fromMap)
         ? fromMap
         : resolveNormalMonthlyTargetMetric(editorMonth, normalMonthlyContext);
-    return t > 0 ? t : null;
+    return t >= 0 ? t : null;
   }, [effectiveIndicatorType, normalMonthlyContext, editorMonth, kpiItem, editorAggregationType]);
 
   const computedMonthlyTargetEditor = useMemo(() => {
@@ -939,7 +945,7 @@ export function PerformanceModal({
       kpiItem &&
       kpiItem.targetDirection !== "na" &&
       normalMonthlyTargetEditor !== null &&
-      normalMonthlyTargetEditor > 0
+      normalMonthlyTargetEditor >= 0
   );
 
   const computedEditorPreviewPercent = useMemo(() => {
@@ -947,7 +953,7 @@ export function PerformanceModal({
       isComputedItem &&
       kpiItem &&
       computedMonthlyTargetEditor !== null &&
-      computedMonthlyTargetEditor > 0
+      computedMonthlyTargetEditor >= 0
     ) {
       const ap = parseNonNegativeDecimal(editorActualPpm);
       if (ap === null) return null;
@@ -975,7 +981,7 @@ export function PerformanceModal({
       normalMetricEntryActive &&
       kpiItem &&
       normalMonthlyTargetEditor !== null &&
-      normalMonthlyTargetEditor > 0
+      normalMonthlyTargetEditor >= 0
     ) {
       const ap = parseNonNegativeDecimal(editorRate);
       if (ap === null) return null;
@@ -1121,7 +1127,7 @@ export function PerformanceModal({
         effectiveIndicatorType === "normal" &&
         kpiItem.targetDirection !== "na" &&
         monthTargetNormal !== null &&
-        monthTargetNormal > 0;
+        monthTargetNormal >= 0;
 
       let actual: number;
       if (indicatorUsesComputedAchievement(effectiveIndicatorType)) {
@@ -1162,6 +1168,34 @@ export function PerformanceModal({
         target = 0;
       }
 
+      let submittedPercent = rawSubmitted;
+      if (row !== undefined && rawActualMetric !== null && target !== null && target >= 0) {
+        const actualForAchievement =
+          rowAggregationType === "cumulative"
+            ? cumulativeActualThroughPriorMonths(rowByMonth, displayMonthList, m) +
+              rawActualMetric
+            : rawActualMetric;
+        if (kpiItem.evaluationType === "qualitative") {
+          submittedPercent = qualitativeAchievementPercent(
+            actualForAchievement,
+            target,
+            kpiItem.qualitativeCalcType ?? "progress",
+            kpiItem.achievementCap
+          );
+        } else if (
+          indicatorUsesComputedAchievement(effectiveIndicatorType) ||
+          normalRowMetricMode
+        ) {
+          submittedPercent = computedAchievementPercent(
+            effectiveIndicatorType,
+            actualForAchievement,
+            target,
+            kpiItem.targetDirection,
+            kpiItem.achievementCap
+          );
+        }
+      }
+
       const showBarTopLabel =
         visibleOnChart ||
         monthHasSubmittedPerformanceInput(
@@ -1180,16 +1214,16 @@ export function PerformanceModal({
         month: m,
         target,
         actual,
-        submittedPercent: rawSubmitted,
+        submittedPercent,
         description,
         bubbleNote,
         evidence_url: row?.evidence_url ?? null,
         hasComment: Boolean(description?.trim()),
         challengeMet:
-          rawSubmitted !== null &&
+          submittedPercent !== null &&
           kpiItem.challengeTarget !== null &&
           kpiItem.challengeTarget !== undefined &&
-          rawSubmitted >= kpiItem.challengeTarget,
+          submittedPercent >= kpiItem.challengeTarget,
         ...(copied ? { copiedFromMonth: copied.month } : {}),
         ...(topLabel ? { barTopLabel: topLabel } : {}),
         ...(bubbleNote?.trim() ? { commentLabel: bubbleNote } : {}),
@@ -1476,7 +1510,7 @@ export function PerformanceModal({
         target =
           cumulativeTargetThroughMonth(item.monthlyTargets, month) ??
           computedTargetMetric;
-        if (target !== null && target > 0) {
+        if (target !== null && target >= 0) {
           rate =
             item.evaluationType === "qualitative"
               ? qualitativeAchievementPercent(
@@ -1497,7 +1531,7 @@ export function PerformanceModal({
         target =
           cumulativeTargetThroughMonth(item.monthlyTargets, month) ??
           resolveNormalMonthlyTargetMetric(month, normalMonthlyContext);
-        if (target !== null && target > 0) {
+        if (target !== null && target >= 0) {
           rate = computedAchievementPercent(
             "normal",
             actual,
@@ -1530,7 +1564,7 @@ export function PerformanceModal({
     let rateNum: number;
     let actualMetricSave: number | undefined;
     if (isComputed) {
-      if (computedMonthlyTargetEditor === null || !(computedMonthlyTargetEditor > 0)) {
+      if (computedMonthlyTargetEditor === null || computedMonthlyTargetEditor < 0) {
         notify(
           "error",
           `${computedKindSummaryKo(effectiveIndicatorType)} 항목에는 해당 월의 목표값이 필요합니다. 월별 목표값을 확인해 주세요.`
@@ -1568,7 +1602,7 @@ export function PerformanceModal({
     } else if (
       normalMetricEntryActive &&
       normalMonthlyTargetEditor !== null &&
-      normalMonthlyTargetEditor > 0
+      normalMonthlyTargetEditor >= 0
     ) {
       const metric = parseNonNegativeDecimal(editorRate);
       if (metric === null) {
@@ -1671,7 +1705,7 @@ export function PerformanceModal({
           notify("error", "최종 완료 처리 권한이 없거나 이미 완료된 항목입니다.");
           return;
         }
-        finalized = await onFinalizeKpiItem(item.id);
+        finalized = await onFinalizeKpiItem(item.id, true);
       }
 
       const refreshed = await perfQuery.refetch();
@@ -1777,6 +1811,12 @@ export function PerformanceModal({
     onClose();
   }
 
+  async function handleWithdrawFinalCompletionInModal() {
+    if (!kpiItem || !canFinalComplete || !onFinalizeKpiItem) return;
+    const ok = await onFinalizeKpiItem(kpiItem.id, false);
+    if (!ok) return;
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3">
       <AppToast
@@ -1850,6 +1890,15 @@ export function PerformanceModal({
                   삭제
                 </button>
               ) : null}
+              {canFinalComplete && item.isFinalCompleted ? (
+                <button
+                  type="button"
+                  onClick={() => void handleWithdrawFinalCompletionInModal()}
+                  className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-amber-700 shadow-sm hover:bg-amber-50"
+                >
+                  최종 철회
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={onClose}
@@ -1918,7 +1967,9 @@ export function PerformanceModal({
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart
                 data={chartData}
-                margin={{ top: 26, right: 16, left: 4, bottom: 4 }}
+                accessibilityLayer={false}
+                style={{ outline: "none" }}
+                margin={{ top: 24, right: 16, left: 4, bottom: 8 }}
                 onClick={(state) => {
                   const label = state?.activeLabel;
                   if (typeof label !== "string") return;
@@ -1929,24 +1980,36 @@ export function PerformanceModal({
                 }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="#dbeafe" />
-                <XAxis dataKey="periodLabel" tick={{ fill: "#334155", fontSize: 11 }} />
+                <XAxis
+                  dataKey="periodLabel"
+                  axisLine={{ stroke: "#94a3b8", strokeWidth: 1 }}
+                  tickLine={{ stroke: "#94a3b8" }}
+                  tickMargin={8}
+                  tick={{ fill: "#334155", fontSize: 11 }}
+                />
                 <YAxis
                   domain={[chartYDomain.min, chartYDomain.max]}
                   allowDataOverflow
                   ticks={hidePercentHeadroomTick ? [20, 40, 60, 80, 100] : undefined}
                   tickFormatter={(v) => {
                     const numeric = typeof v === "number" ? v : Number(v);
+                    if (numeric < 0) return "";
                     if (hidePercentHeadroomTick && numeric > 100) return "";
                     return chartValueLabel(effectiveIndicatorType, numeric);
                   }}
-                  tick={{ fontSize: 11 }}
+                  axisLine={{ stroke: "#94a3b8", strokeWidth: 1 }}
+                  tickLine={{ stroke: "#94a3b8" }}
+                  tickMargin={6}
+                  tick={{ fill: "#64748b", fontSize: 11 }}
                 />
                 <Tooltip content={<KpiChartTooltip indicatorType={effectiveIndicatorType} />} />
                 <Legend content={KpiComposedLegend} />
+                <ReferenceLine y={0} stroke="#dbeafe" strokeDasharray="3 3" strokeWidth={1} />
                 <Bar
                   dataKey="actual"
                   name="실적"
                   fill={CHART_BAR_LEGEND_FILL}
+                  activeBar={false}
                   maxBarSize={44}
                   radius={[6, 6, 0, 0]}
                   minPointSize={(value, index) => {
@@ -2060,8 +2123,9 @@ export function PerformanceModal({
                   </p>
                   <p className="mt-0.5 text-base font-bold text-slate-900">
                     {selectedChartDatum &&
-                    Number.isFinite(Number(selectedChartDatum.actual)) &&
-                    selectedChartDatum.actual !== 0
+                    selectedRow?.actual_value !== null &&
+                    selectedRow?.actual_value !== undefined &&
+                    Number.isFinite(Number(selectedChartDatum.actual))
                       ? chartValueLabel(
                           effectiveIndicatorType,
                           Number(selectedChartDatum.actual)
@@ -2318,7 +2382,7 @@ export function PerformanceModal({
                   />
                   <p className="mt-1 text-[11px] text-slate-500">
                     {aggregationTypeLabelKo(editorAggregationType)} 기준 목표 지표:{" "}
-                    {normalMonthlyTargetEditor !== null && normalMonthlyTargetEditor > 0
+                    {normalMonthlyTargetEditor !== null && normalMonthlyTargetEditor >= 0
                       ? chartValueLabel("normal", normalMonthlyTargetEditor)
                       : "—"}
                     . 계산 달성률:{" "}
@@ -2357,7 +2421,7 @@ export function PerformanceModal({
                   <p className="mt-1 text-[11px] text-slate-500">
                     {computedKindSummaryKo(effectiveIndicatorType)}는 아래 원값으로부터 달성률을 자동 계산합니다.{" "}
                     {aggregationTypeLabelKo(editorAggregationType)} 기준 {computedTargetLabel(effectiveIndicatorType)}:{" "}
-                    {computedMonthlyTargetEditor !== null && computedMonthlyTargetEditor > 0
+                    {computedMonthlyTargetEditor !== null && computedMonthlyTargetEditor >= 0
                       ? chartValueLabel(effectiveIndicatorType, computedMonthlyTargetEditor)
                       : "미설정"}
                     . 계산 달성률:{" "}

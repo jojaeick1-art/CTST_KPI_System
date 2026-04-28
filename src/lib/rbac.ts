@@ -152,10 +152,16 @@ export function canGroupLeaderApprove(role: string | null | undefined): boolean 
   return n === "admin" || n === "ceo" || n === "group_leader" || n === "group_team_leader";
 }
 
-/** 최종 승인/반려 (팀장·관리자) */
+/** 최종 승인/반려 (그룹장·팀장·관리자) */
 export function canTeamLeaderFinalApprove(role: string | null | undefined): boolean {
   const n = normalizeRole(role);
-  return n === "admin" || n === "ceo" || n === "team_leader" || n === "group_team_leader";
+  return (
+    n === "admin" ||
+    n === "ceo" ||
+    n === "group_leader" ||
+    n === "team_leader" ||
+    n === "group_team_leader"
+  );
 }
 
 /** 실적 승인 관리 메뉴·페이지 — 그룹장·팀장·관리자 */
@@ -194,8 +200,9 @@ export function approvalNotificationCount(
   if (n === "admin" || n === "ceo") {
     return pendingPrimaryCount + pendingFinalCount;
   }
-  if (n === "group_team_leader") return pendingPrimaryCount + pendingFinalCount;
-  if (n === "group_leader") return pendingPrimaryCount;
+  if (n === "group_team_leader" || n === "group_leader") {
+    return pendingPrimaryCount + pendingFinalCount;
+  }
   if (n === "team_leader") return pendingFinalCount;
   return 0;
 }

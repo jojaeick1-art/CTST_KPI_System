@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import { VocPlaceholderContent } from "./voc-placeholder";
 
 export const metadata: Metadata = {
-  title: "VOC",
-  description: "CTST 통합 시스템 — VOC",
+  title: "KPI VOC",
+  description: "CTST KPI — KPI VOC",
 };
 
 export default function VocPage() {
