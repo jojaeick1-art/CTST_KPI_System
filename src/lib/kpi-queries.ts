@@ -1279,6 +1279,19 @@ export function resolveEvidencePublicUrl(
   return toEvidencePublicUrl(supabase, rawUrl);
 }
 
+/** 임의 스토리지 버킷 · 상대 경로에 대한 public URL (버킷이 public 일 때). */
+export function storageObjectPublicUrl(
+  bucket: string,
+  relativePath: string | null | undefined
+): string | null {
+  const b = bucket.trim();
+  if (!b || !relativePath?.trim()) return null;
+  const supabase = createBrowserSupabase();
+  const encodedPath = encodeStoragePath(relativePath.trim());
+  const { data } = supabase.storage.from(b).getPublicUrl(encodedPath);
+  return data.publicUrl?.trim() ? data.publicUrl : null;
+}
+
 function normalizeEvidenceStoredValues(rawValues: unknown): string[] {
   const values = Array.isArray(rawValues) ? rawValues : [rawValues];
   const out: string[] = [];

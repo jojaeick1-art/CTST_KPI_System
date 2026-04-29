@@ -26,6 +26,7 @@ import {
   evidenceFileNameFromStoredValue,
   evidencePathFromStoredValue,
   resolveEvidencePublicUrl,
+  storageObjectPublicUrl,
   getKpiTargetsHasPerformanceMonthlyColumn,
   computedAchievementPercent,
   qualitativeAchievementPercent,
@@ -45,6 +46,10 @@ import {
   resolveNormalMonthlyTargetMetric,
   type NormalMonthlyTargetContext,
 } from "@/src/lib/kpi-queries";
+import {
+  getKpiWebBridgeTestBucket,
+  notifyWidgetUploadToTest,
+} from "@/src/lib/kpi-web-bridge";
 import {
   KPI_MONTHS,
   activeMonthsForSchedule,
@@ -1364,13 +1369,44 @@ export function PerformanceModal({
       notify("info", "보고서가 없습니다.");
       return;
     }
+    const relPath = evidencePathFromStoredValue(storedValue);
+    if (!relPath) {
+      notify("error", "다운로드용 저장 경로를 확인할 수 없습니다.");
+      return;
+    }
     try {
       setDownloadingEvidence(true);
-      const downloadableUrl = resolveEvidencePublicUrl(storedValue);
-      if (!downloadableUrl) {
-        throw new Error("다운로드 가능한 파일 주소를 생성하지 못했습니다.");
+      const bridge = await notifyWidgetUploadToTest(relPath);
+      if (bridge.ok) {
+        const bucket =
+          bridge.bucket.trim() || getKpiWebBridgeTestBucket();
+        const testUrl = storageObjectPublicUrl(bucket, bridge.path);
+        if (testUrl) {
+          window.open(testUrl, "_blank", "noopener,noreferrer");
+          return;
+        }
+      } else if (bridge.status === 409) {
+        notify("error", bridge.error);
+        return;
       }
-      window.open(downloadableUrl, "_blank", "noopener,noreferrer");
+
+      const fallbackUrl = resolveEvidencePublicUrl(storedValue);
+      if (fallbackUrl) {
+        window.open(fallbackUrl, "_blank", "noopener,noreferrer");
+        if (!bridge.ok) {
+          notify(
+            "info",
+            "웹 브리지를 쓰지 못해 Supabase(kpi-evidence) 원본 링크로 열었습니다."
+          );
+        }
+        return;
+      }
+
+      throw new Error(
+        bridge.ok
+          ? "test 버킷 공개 URL을 만들 수 없습니다."
+          : bridge.error
+      );
     } catch (e) {
       notify("error", e instanceof Error ? e.message : "파일 다운로드 중 오류가 발생했습니다.");
     } finally {
@@ -1963,7 +1999,7 @@ export function PerformanceModal({
             </div>
           </div>
 
-          <div className="h-[320px] rounded-xl border border-sky-100 bg-white p-2 sm:h-[360px]">
+          <div className="h-[320px] rounded-xl border border-sky-100 bg-white p-2 sm:h-[360px] [&_.recharts-wrapper]:outline-none [&_svg]:outline-none">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart
                 data={chartData}
@@ -2002,7 +2038,10 @@ export function PerformanceModal({
                   tickMargin={6}
                   tick={{ fill: "#64748b", fontSize: 11 }}
                 />
-                <Tooltip content={<KpiChartTooltip indicatorType={effectiveIndicatorType} />} />
+                <Tooltip
+                  cursor={false}
+                  content={<KpiChartTooltip indicatorType={effectiveIndicatorType} />}
+                />
                 <Legend content={KpiComposedLegend} />
                 <ReferenceLine y={0} stroke="#dbeafe" strokeDasharray="3 3" strokeWidth={1} />
                 <Bar

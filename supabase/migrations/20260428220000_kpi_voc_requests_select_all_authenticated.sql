@@ -2,6 +2,7 @@
 -- 기존: 본인 건 또는 관리자만 SELECT.
 
 drop policy if exists kpi_voc_requests_select_own_or_admin on public.kpi_voc_requests;
+drop policy if exists kpi_voc_requests_select_authenticated on public.kpi_voc_requests;
 
 create policy kpi_voc_requests_select_authenticated
 on public.kpi_voc_requests for select

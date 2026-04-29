@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CTST 통합 시스템 · KPI 안내서</title>
+  <style>
+    :root {
+      --border: #bae6fd;
+      --text: #1e293b;
+      --muted: #64748b;
+      --card: #fff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, "Segoe UI", "Malgun Gothic", sans-serif;
+      line-height: 1.68;
+      color: var(--text);
+      max-width: 48rem;
+      margin: 0 auto;
+      padding: 1.75rem 1.25rem 4rem;
+      background: #f8fafc;
+    }
+    h1 { font-size: 1.4rem; margin: 0 0 0.55rem; font-weight: 700; }
+    .lead-wrap p {
+      font-size: 0.98rem;
+      color: var(--muted);
+      margin: 0.65rem 0;
+      max-width: 42rem;
+      word-break: keep-all;
+    }
+    h2 {
+      font-size: 1.08rem;
+      margin: 2.25rem 0 0.65rem;
+      padding-bottom: 0.35rem;
+      border-bottom: 2px solid var(--border);
+      font-weight: 650;
+    }
+    h3 { font-size: 0.98rem; margin: 1.2rem 0 0.5rem; font-weight: 600; }
+    h4 { font-size: 0.93rem; margin: 0.85rem 0 0.4rem; font-weight: 600; }
+    p { margin: 0.5rem 0; word-break: keep-all; }
+    ul { margin: 0.4rem 0 0.6rem; padding-left: 1.25rem; }
+    li { margin: 0.3rem 0; }
+    .note {
+      background: var(--card);
+      border-left: 4px solid #38bdf8;
+      padding: 0.75rem 1rem;
+      margin: 0.95rem 0;
+      font-size: 0.93rem;
+      border-radius: 0 8px 8px 0;
+      box-shadow: 0 1px 2px rgb(15 23 42 / 0.06);
+      max-width: 42rem;
+    }
+    figure { margin: 1.05rem 0; padding: 0; }
+    figure img {
+      display: block;
+      width: 100%;
+      max-width: 100%;
+      height: auto;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      background: #f1f5f9;
+      object-fit: contain;
+    }
+    figcaption {
+      margin-top: 0.45rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    table.guide {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+      margin: 0.75rem 0;
+    }
+    table.guide th,
+    table.guide td {
+      border: 1px solid #cbd5e1;
+      padding: 0.45rem 0.55rem;
+      text-align: left;
+      vertical-align: top;
+    }
+    table.guide th { background: #f1f5f9; }
+    table.guide code { font-size: 0.78em; background: #e2e8f0; padding: 0.1em 0.35em; border-radius: 4px; }
+    table.calc {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+      margin: 0.7rem 0;
+      table-layout: fixed;
+    }
+    table.calc th,
+    table.calc td {
+      border: 1px solid #e2e8f0;
+      padding: 0.65rem 0.72rem;
+      vertical-align: top;
+    }
+    table.calc th {
+      background: #f8fafc;
+      width: 30%;
+      min-width: 7.5rem;
+      font-weight: 600;
+      font-size: 0.84rem;
+      line-height: 1.55;
+    }
+    table.calc td {
+      font-size: 0.875rem;
+      line-height: 1.72;
+      word-break: keep-all;
+    }
+    table.calc td p.cell-p {
+      margin: 0.35rem 0;
+    }
+    table.calc td p.cell-p:first-child { margin-top: 0; }
+    table.calc td p.cell-p:last-child { margin-bottom: 0; }
+    nav.read-order {
+      margin: 1rem 0 2rem;
+      font-size: 0.9rem;
+      color: var(--muted);
+      max-width: 42rem;
+      line-height: 1.72;
+      word-break: keep-all;
+    }
+    details.preface {
+      margin: 1.5rem 0 2rem;
+      padding: 1rem 1.15rem;
+      background: var(--card);
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      box-shadow: 0 1px 3px rgb(15 23 42 / 0.06);
+    }
+    details.preface summary {
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.98rem;
+    }
+    details.preface[open] summary { margin-bottom: 0.75rem; }
+    .scenario {
+      background: var(--card);
+      padding: 0.9rem 1.05rem;
+      border-radius: 10px;
+      margin: 0.85rem 0;
+      border: 1px solid #e2e8f0;
+      max-width: 42rem;
+    }
+    .scenario h4 { margin: 0 0 0.45rem; font-size: 0.92rem; line-height: 1.45; }
+    .scenario p { margin: 0.45rem 0; max-width: 40rem; }
+    .formula {
+      font-size: 0.86rem;
+      color: #334155;
+      padding: 0.5rem 0.62rem;
+      background: #f1f5f9;
+      border-radius: 8px;
+      margin: 0.45rem 0 0;
+      font-family: ui-monospace, Consolas, "Malgun Gothic", sans-serif;
+      line-height: 1.58;
+      overflow-x: auto;
+      word-break: break-word;
+    }
+    footer.manual-footer {
+      margin-top: 2.75rem;
+      padding-top: 1.1rem;
+      border-top: 1px solid #e2e8f0;
+      font-size: 0.85rem;
+      color: var(--muted);
+      max-width: 42rem;
+      line-height: 1.75;
+      word-break: keep-all;
+    }
+    footer.manual-footer p { margin: 0.45rem 0; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>CTST 통합 시스템 · KPI 안내서</h1>
+    <div class="lead-wrap">
+      <p>
+        로그인부터 실적·승인·VOC까지, <strong>화면에 나오는 수치가 무엇을 뜻하는지</strong>를 중심으로 정리했습니다.
+      </p>
+      <p>
+        배포용 <strong>단일 HTML</strong>입니다.<br />
+        스크린샷이 파일 안에 포함되어 있으므로 이 파일 하나만 전달해도 그림까지 함께 볼 수 있습니다.
+      </p>
+      <p>
+        문서를 고칠 때는 같은 폴더의 <code>index-src.html</code>을 편집한 뒤,<br />
+        <code>node embed-images.mjs</code>로 <code>index.html</code>을 다시 만들면 됩니다.
+      </p>
+    </div>
+  </header>
+
+  <details class="preface">
+    <summary>스크린샷 파일명·등장 위치 (참고)</summary>
+    <table class="guide">
+      <thead><tr><th>#</th><th>파일</th><th>섹션</th></tr></thead>
+      <tbody>
+        <tr><td>①</td><td><code>assets/captures/01-login.png</code></td><td><a href="#ch-login">로그인</a></td></tr>
+        <tr><td>②</td><td><code>02-dashboard.png</code></td><td><a href="#ch-dashboard">KPI 대시보드</a> + <a href="#calc-dash">수치 계산</a></td></tr>
+        <tr><td>③</td><td><code>03-department-list.png</code></td><td><a href="#ch-dept">부서 KPI</a> + <a href="#calc-dept">달성률 계산</a></td></tr>
+        <tr><td>④</td><td><code>04-month-toggle.png</code></td><td><a href="#calc-dept">전체보기와 월별</a></td></tr>
+        <tr><td>⑤</td><td><code>05-kpi-create-modal.png</code></td><td><a href="#ch-examples">지표 예시</a></td></tr>
+        <tr><td>⑥</td><td><code>06-performance-modal.png</code></td><td><a href="#ch-performance">실적 입력</a></td></tr>
+        <tr><td>⑦–⑧</td><td><code>07…</code> · <code>08…</code></td><td><a href="#ch-approve">승인</a></td></tr>
+        <tr><td>⑨</td><td><code>09-voc.png</code></td><td><a href="#ch-voc">VOC</a></td></tr>
+      </tbody>
+    </table>
+  </details>
+
+  <nav class="read-order">
+    <strong>읽기 순서:</strong><br />
+    로그인 → 대시보드와 <strong>상단 카드 숫자</strong> 의미 → 부서 화면과 <strong>전체보기·월별</strong> 의미 → KPI 유형별 산출 → 실적 입력 → 승인 → VOC
+  </nav>
+
+  <section id="ch-login">
+    <h2>로그인</h2>
+    <figure>
+      <img src="assets/captures/01-login.png" alt="로그인 화면" decoding="async" />
+      <figcaption>로그인 화면 캡처</figcaption>
+    </figure>
+    <ul>
+      <li>사내에서 받은 <strong>계정 ID</strong>(<strong>@ 없음</strong>)와 비밀번호로 들어갑니다.</li>
+      <li>성공 후 기본 진입 화면은 <strong>KPI 대시보드</strong>입니다.</li>
+      <li>KPI 기능이 운영 설정에서 꺼져 있으면 로그인은 되지만, KPI 화면 자리에 <strong>「관리자 잠금 상태」</strong> 안내 카드만 보이고 메뉴도 들어가지 않습니다.</li>
+    </ul>
+  </section>
+
+  <section id="ch-dashboard">
+    <h2>KPI 대시보드 화면</h2>
+    <figure>
+      <img src="assets/captures/02-dashboard.png" alt="KPI 대시보드" decoding="async" />
+      <figcaption>KPI 대시보드 · 상단 카드와 부서별 카드</figcaption>
+    </figure>
+    <p>위쪽 카드 세 개에는 전체 요약이 들어갑니다.</p>
+    <p>아래에는 <strong>부서별 통합 성과 요약</strong> 카드가 나열됩니다.</p>
+    <p>각 수치의 정의는 바로 다음 절을 참고하세요.</p>
+  </section>
+
+  <section id="calc-dash">
+    <h2>KPI 대시보드에서 보이는 각 수치 — 어떻게 정해지나</h2>
+    <p>
+      아래 표는 <strong>같은 기준 연도의 KPI 데이터</strong>를 모아 계산한다는 전제입니다.
+    </p>
+    <p>
+      「전체 KPI 수」는 <strong>KPI가 하나 이상 등록된 부서</strong>에 속한 KPI 줄만 세어 더한 값입니다.
+    </p>
+
+    <table class="calc">
+      <tbody>
+        <tr>
+          <th>전체 KPI 수</th>
+          <td>
+            <p class="cell-p">부서마다 등록된 KPI 줄 수를 모두 더한 값입니다.</p>
+            <p class="cell-p">KPI가 <strong>한 건도 없는 부서</strong>는 이 합계에 넣지 않습니다.</p>
+          </td>
+        </tr>
+        <tr>
+          <th>전체 평균 달성률</th>
+          <td>
+            <p class="cell-p">먼저 <strong>각 부서 카드에 나오는 퍼센트(부서별 통합 달성률)</strong>를 구합니다.</p>
+            <p class="cell-p">그다음 KPI가 존재하는 부서들끼리, 그 퍼센트를 <strong>부서 단위로 산술 평균</strong>한 숫자입니다.</p>
+            <p class="cell-p">즉 「부서 대표값들의 평균」이며, 항목 개수가 아니라 <strong>부서 개수</strong>로 나눕니다.</p>
+          </td>
+        </tr>
+        <tr>
+          <th>최종 완료 KPI<br />(분자·분모)</th>
+          <td>
+            <p class="cell-p">「최종 완료(마감)」로 처리해 둔 KPI 항목 개수와, 전체 KPI 항목 수를 함께 보여 줍니다.</p>
+            <p class="cell-p">분자는 상태가 「최종 완료(마감)」로 처리된 항목 수, 분모는 전체 KPI 항목 수입니다.</p>
+          </td>
+        </tr>
+        <tr>
+          <th>부서 카드<br />오른쪽 큰 %</th>
+          <td>
+            <p class="cell-p"><strong>한마디로:</strong> 그 부서 KPI 표에 있는 <strong>각 줄의 달성률을 다 더한 것 ÷ 줄 개수</strong>입니다. (성적표에서 과목 평균 내는 것과 같습니다.)</p>
+            <p class="cell-p"><strong>예:</strong> 같은 부서에 KPI가 셋이고, 줄별 달성률이 각각 80%, 60%, 아직 실적 없음 → 0%로 보면 (<strong>80 + 60 + 0</strong>) ÷ <strong>3</strong> ≈ <strong>46.7%</strong>처럼 카드에 나옵니다.</p>
+            <p class="cell-p">아직 숫자가 안 올라온 줄은 <strong>0%로 간주</strong>하고 평균에 <strong>반드시 포함</strong>합니다. 실적 없는 줄이 있으면 그만큼 합계는 그대로이고 줄 수는 늘어나므로, 평균값은 동일 실적이라도 <strong>더 낮게</strong> 나옵니다.</p>
+          </td>
+        </tr>
+        <tr>
+          <th>카드 안<br />○월 달성률 문구</th>
+          <td>
+            <p class="cell-p">달력상 「그 달」에 해당하는 KPI만 고릅니다.</p>
+            <p class="cell-p">항목별로 그 달 달성률을 읽은 뒤, <strong>다시 평균을 낸 값</strong>입니다.</p>
+            <p class="cell-p">그 달에 평가할 대상만 모아서 분모처럼 쓰는 셈입니다.</p>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="note">
+      부서 카드 우측 %는 <strong>부서 상세 화면 상단의 「전체보기」에서 보이는 줄 평균</strong>과 맞추어져 있습니다.
+    </p>
+  </section>
+
+  <section id="ch-menu">
+    <h2>왼쪽 메뉴</h2>
+    <p>②번 스크린샷에 왼쪽 사이드바가 함께 들어 있습니다.</p>
+    <ul>
+      <li><strong>KPI 대시보드</strong> — 부서별 요약</li>
+      <li><strong>실적 승인 관리</strong> — 그룹장·팀장·대표·관리자 등, 시스템에서 승인 메뉴가 허용된 역할에게만 표시·처리 가능</li>
+      <li><strong>KPI VOC</strong> — 의견·개선 접수. 메뉴는 <strong>KPI 기능이 켜져 있으면서</strong> VOC도 허용된 계정 또는 <strong>관리자</strong>에게 노출됩니다.</li>
+      <li><strong>시스템 설정</strong> — <strong>관리자</strong> 역할만 메뉴에 나타남</li>
+      <li><strong>CAPA Simulator</strong> — 메뉴에 넣어두려면 계정이 <strong>관리자</strong>이거나 조직 기능 설정에서 해당 계정에 <strong>CAPA를 쓸 수 있는 플래그</strong>가 켜져 있어야 합니다. 조건을 만족하지 않으면 이 항목 자체가 사이드바에 없습니다.</li>
+    </ul>
+  </section>
+
+  <section id="ch-dept">
+    <h2>부서 KPI 목록 화면</h2>
+    <figure>
+      <img src="assets/captures/03-department-list.png" alt="부서 KPI 목록" decoding="async" />
+      <figcaption>부서별 KPI 목록 표</figcaption>
+    </figure>
+    <p>표의 각 줄은 한 개의 KPI 항목입니다.</p>
+    <p>가중치 합이 100을 넘기면 화면 안내에 따라 <strong>신규 KPI 항목 저장이 차단</strong>됩니다. 부서 내 합계는 상단에 숫자로 표시됩니다.</p>
+
+    <h3 id="calc-dept">전체보기와 특정 월 — 행마다 %와 상단 「평균」</h3>
+    <figure>
+      <img src="assets/captures/04-month-toggle.png" alt="월별 달성률 보기" decoding="async" />
+      <figcaption>전체보기 · 월 선택 · 월별 달성률 평균 영역</figcaption>
+    </figure>
+
+    <table class="calc">
+      <tbody>
+        <tr>
+          <th>전체보기</th>
+          <td>
+            <p class="cell-p">각 줄에는 항목마다 하나의 <strong>대표 달성률 (%)</strong>가 붙습니다(여러 기간 성과가 한 값으로 묶입니다).</p>
+            <p class="cell-p">항목이 <strong>최종 완료</strong> 처리되면 같은 열에는 퍼센트 대신 <strong>「완료」</strong> 뱃지가 나옵니다.</p>
+            <p class="cell-p">상단 「평균」은 선택한 표시 모드(전체보기) 기준으로, 현재 표에 나온 줄들만 골라 산술 평균을 냅니다.</p>
+          </td>
+        </tr>
+        <tr>
+          <th>특정 월<br />(예: 6월)</th>
+          <td>
+            <p class="cell-p">먼저 <strong>선택한 달이 KPI 평가 구간 안에 속하는 줄</strong>만 남깁니다.</p>
+            <p class="cell-p">선택한 달이 KPI <strong>평가 구간 밖</strong>이면 그 행은 「전체보기」에 있던 달성률 숫자 대신 <strong>「평가 제외」</strong>처럼 보이며, 위쪽 월별 평균을 낼 때 <strong>그 행은 끼우지 않습니다.</strong></p>
+            <p class="cell-p">남은 각 줄에는 <strong>그 달 하나</strong>의 목표와 실적으로 계산된 달성률이 붙습니다.</p>
+            <p class="cell-p">상단 「평균」은 남아 있는 줄만으로 다시 산술 평균을 냅니다.</p>
+          </td>
+        </tr>
+        <tr>
+          <th>월별 평균에서<br />0% 포함</th>
+          <td>
+            <p class="cell-p">그 달 평가 대상인데 실적이 없거나 0이면 해당 줄은 <strong>0%</strong>로 잡히고 상단 평균에 포함됩니다.</p>
+            <p class="cell-p">이 내용은 부서 화면 아래쪽 안내 문구(월별 평균 규칙)와 동일한 기준입니다.</p>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <ul>
+      <li><strong>실적 등록</strong> — 숫자·증빙을 넣어 제출</li>
+      <li><strong>KPI 수정</strong> — 줄 자체 속성 변경(허용된 역할만)</li>
+      <li><strong>KPI 항목 추가</strong> — 같은 부서에 새 줄</li>
+    </ul>
+    <p>
+      <strong>프로필 부서와 화면에 연 부서가 다르고, 계정이 관리자가 아니면</strong> 상단에 <strong>노란 안내 블록</strong>이 뜨며, 그 부서 KPI는 읽기만 하고 「실적 등록」「KPI 수정」「삭제」는 쓰지 못합니다.</p>
+    <p><strong>관리자</strong>는 타 부서 화면에서도 실적·항목 수정·삭제 같은 조작이 가능합니다.</p>
+  </section>
+
+  <section id="ch-examples">
+    <h2>KPI 종류별 — 설정에 따른 계산(핵심)</h2>
+    <figure>
+      <img src="assets/captures/05-kpi-create-modal.png" alt="KPI 항목 추가" decoding="async" />
+      <figcaption>KPI 추가·설정 예시 화면</figcaption>
+    </figure>
+    <p>크게 나누면 다음이 맞물립니다.</p>
+    <ul>
+      <li>정량인지 정성인지</li>
+      <li>단위와 방향(많을수록 좋음 / 적을수록 좋음)</li>
+      <li>그 달만 볼지, 누적으로 볼지</li>
+    </ul>
+
+    <div class="scenario">
+      <h4>예시 A — 많을수록 좋은 목표량(예: 매출)</h4>
+      <p>
+        정량형이며 방향이 「높을수록 좋음」일 때, 시스템은 해당 월 목표량과 실적량을 이용해 달성률을 만들고 기본 형태는 <strong>실적 ÷ 목표 × 100</strong>입니다.
+      </p>
+      <p>
+        항목에 <strong>달성률 상한</strong>을 100%·120%·제한 없음 중 지정했다면 계산 결과는 지정된 한도를 넘지 않게 자릅니다.
+      </p>
+      <div class="formula">달성률 = min(실적 ÷ 목표 × 100, 상한)</div>
+    </div>
+
+    <div class="scenario">
+      <h4>예시 B — PPM처럼 적을수록 좋은 지표</h4>
+      <p>측정 기준을 PPM으로 두고 방향을 「낮을수록 좋음」으로 둔 경우, 입력한 목표 PPM·실적 PPM 두 값과 방향에 따라 다음과 같이 처리됩니다.</p>
+      <p>실적 PPM이 목표보다 <strong>낮을수록</strong>(불량이 적을수록) 달성률 숫자는 <strong>높게</strong>, 반대면 <strong>낮게</strong> 계산되며, 선택한 상한값이 있으면 그 안에서 표시합니다.</p>
+      <div class="formula">PPM 역지표: 높음/낮음 방향 플래그에 따라 목표·실적 비율로 0%~상한까지 산출</div>
+    </div>
+
+    <div class="scenario">
+      <h4>예시 C — k·건·억·시간 등 다른 단위</h4>
+      <p>단위(k, 건, 억 등)별로 「많을수록 좋음」이면 <strong>A</strong>, 「적을수록 좋음」이면 <strong>B</strong>와 같은 패턴입니다. 실제 식에는 입력한 목표값·실적값·달성 상한값이 바로 들어갑니다.</p>
+    </div>
+
+    <div class="scenario">
+      <h4>예시 D — 퍼센트(%)만으로 목표·실적을 두는 줄</h4>
+      <p>%만 쓸 때도 목표 %와 결과 % 두 값과 방향 설정에 따라 A와 같은 비율식으로 달성률이 채워집니다(방향·상한 포함).</p>
+    </div>
+
+    <div class="scenario">
+      <h4>예시 E — 정성 · 진행률(진척형)</h4>
+      <p>진척형에서는 입력된 <strong>현재 진행률</strong>과 <strong>목표 진행률</strong>을 같은 방식대로 넣어, 위 정량 예시와 동일하게 비교해 달성률을 표시합니다.</p>
+    </div>
+
+    <div class="scenario">
+      <h4>예시 F — 정성 · 완료형</h4>
+      <p>완료형은 목표일·완료 플래그 기준으로 <strong>이미 충족이면 100%</strong>, 아니면 <strong>0%</strong>로 두 갈래로 집계됩니다.</p>
+    </div>
+
+    <div class="scenario">
+      <h4>당월만 vs 누적</h4>
+      <ul>
+        <li><strong>당월 단독:</strong> 그 달 목표값과 결과만 묶습니다.</li>
+        <li><strong>누적:</strong> 연초부터 그 달까지 쌓인 값으로 목표 대비를 봅니다.</li>
+      </ul>
+      <p>
+        헤더의 「월별 달성률 보기」는 <strong>표 전체를 어느 달 관점으로 읽을지</strong>만 바꿉니다. 각 KPI 줄 내부의 「당월/누적」설정과는 별도이므로, 두 위치에서 고른 설정을 함께 확인합니다.
+      </p>
+    </div>
+
+    <p class="note">
+      대시보드·부서 요약표에 들어가는 달성률은 먼저 <strong>승인까지 완료된 실적 행</strong>에서 계산합니다.<br />
+      제출 대기 중이거나 반려된 월 행은 집계에 넣기 전 상태로 두며, 수정 후 재승인되어야 위 수치 공식 대상에 포함됩니다.
+    </p>
+  </section>
+
+  <section id="ch-performance">
+    <h2>실적 입력</h2>
+    <figure>
+      <img src="assets/captures/06-performance-modal.png" alt="실적 등록" decoding="async" />
+      <figcaption>실적 등록 예시 화면</figcaption>
+    </figure>
+    <p>항목을 열면 월을 바꿔 다니며 값을 넣습니다.</p>
+    <p>지표 종류와 당월/누적 설정에 따라 노출되는 입력 필드 종류와 저장되는 값의 의미가 정해져 있습니다.</p>
+    <ul>
+      <li>설명글·증빙 등을 근거로 넣어두면 승인에 도움이 됩니다.</li>
+      <li>반려되면 적힌 사유를 본 뒤 고치면 됩니다.</li>
+    </ul>
+  </section>
+
+  <section id="ch-approve">
+    <h2>실적 승인</h2>
+    <figure>
+      <img src="assets/captures/07-approvals.png" alt="실적 승인 관리" decoding="async" />
+      <figcaption>실적 승인 목록 예시 화면</figcaption>
+    </figure>
+    <p><strong>흐름:</strong> 제출 → 필요하면 1차 승인 → 최종 승인입니다.</p>
+    <p><strong>반려:</strong> 작성 상태가 되며, 작성자가 사유를 보고 다시 수정·재제출합니다.</p>
+    <p><strong>1차 「승인 대기」표</strong>는 다음 역할에게만 해당합니다: 관리자, 대표, 그룹장, 그룹장/팀장 복합. 이 역할에는 화면에 1차 표가 채워집니다.</p>
+    <p><strong>최종 「승인 대기」표</strong>는 다음 역할에게 열립니다: 관리자, 대표, 그룹장, 팀장, 그룹장/팀장 복합.</p>
+    <p><strong>팀장</strong> 단일 역할 계정에는 <strong>최종 승인 표만</strong> 보입니다. 1차 승인 권한에 해당하지 않으므로 1차 표는 빈 목록으로 남습니다.</p>
+    <p>두 단계 모두 권한이 있는 사람(예: 관리자·그룹장·대표)은 두 표가 같이 출력됩니다. 승인 대기 숫자 뱃지도 본인이 처리해야 할 줄만 더합니다.</p>
+    <figure>
+      <img src="assets/captures/08-reject-modal.png" alt="반려 사유 입력" decoding="async" />
+      <figcaption>반려 사유 입력 예시 창</figcaption>
+    </figure>
+  </section>
+
+  <section id="ch-voc">
+    <h2>KPI VOC</h2>
+    <figure>
+      <img src="assets/captures/09-voc.png" alt="KPI VOC" decoding="async" />
+      <figcaption>KPI VOC 화면 예시</figcaption>
+    </figure>
+    <p>카테고리·긴급도 등을 선택한 뒤 제목·내용으로 접수하면 목록 행 하나로 등록되고,</p>
+    <p>상태 라벨(접수 대기 · 조치 진행 중 · 적용 완료 · 반려/보류)로 진행 순서가 표시됩니다.</p>
+  </section>
+
+  <footer class="manual-footer">
+    <p>
+      수정 시 <code>index-src.html</code>만 편집한 뒤, 같은 폴더에서 <code>node embed-images.mjs</code>를 실행하면 새 <code>index.html</code>이 만들어져 <strong>이미지가 모두 포함된 단일 파일</strong>을 다시 만듭니다.
+    </p>
+    <p>
+      조직에서 별도로 정한 KPI 운영 규칙이 있으면 그 문서를 우선합니다.
+    </p>
+  </footer>
+</body>
+</html>
