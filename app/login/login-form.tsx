@@ -178,15 +178,12 @@ export function LoginForm() {
   return (
     <form
       onSubmit={handleFormSubmit}
-      className="flex w-full max-w-md flex-col gap-5 rounded-2xl border border-sky-100/80 bg-white/90 p-8 shadow-lg shadow-sky-100/50 backdrop-blur-sm"
+      className="flex w-full max-w-md flex-col gap-5 rounded-2xl border border-sky-200/80 bg-white/90 p-8 shadow-lg shadow-sky-100/50 backdrop-blur-sm"
     >
-      <div className="space-y-1 text-center">
+      <div className="text-center">
         <h1 className="text-lg font-semibold tracking-tight text-slate-800">
           통합 계정 로그인
         </h1>
-        <p className="text-sm text-slate-500">
-          통합 계정 아이디와 비밀번호를 입력해 주세요
-        </p>
       </div>
 
       {error ? (
@@ -229,17 +226,6 @@ export function LoginForm() {
           </p>
         </div>
 
-        <label className="flex w-fit cursor-pointer items-center gap-2 text-sm font-medium text-slate-600">
-          <input
-            type="checkbox"
-            checked={rememberId}
-            onChange={(e) => setRememberId(e.target.checked)}
-            disabled={loading}
-            className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
-          />
-          ID 저장
-        </label>
-
         <div>
           <label
             htmlFor="password"
@@ -277,6 +263,17 @@ export function LoginForm() {
             </button>
           </div>
         </div>
+
+        <label className="flex w-fit cursor-pointer items-center gap-2 text-sm font-medium text-slate-600">
+          <input
+            type="checkbox"
+            checked={rememberId}
+            onChange={(e) => setRememberId(e.target.checked)}
+            disabled={loading}
+            className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+          />
+          ID 저장
+        </label>
       </div>
 
       <button

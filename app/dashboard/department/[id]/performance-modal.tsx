@@ -7,7 +7,6 @@ import {
   Cell,
   ComposedChart,
   LabelList,
-  Legend,
   Line,
   ReferenceLine,
   ResponsiveContainer,
@@ -15,7 +14,6 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { Props as RechartsLegendContentProps } from "recharts/types/component/DefaultLegendContent";
 import { Download, Eye, FilePenLine, ImageIcon, Loader2, Upload, X } from "lucide-react";
 import {
   PERF_LEGACY_PENDING,
@@ -116,6 +114,7 @@ function computedActualLabel(t: KpiIndicatorType): string {
   if (t === "headcount") return "실적 인원(명)";
   if (t === "money") return "실적(억)";
   if (t === "time") return "실적 시간(h)";
+  if (t === "minutes") return "실적 시간(분)";
   if (t === "uph") return "실적 UPH";
   return "실적";
 }
@@ -127,6 +126,7 @@ function computedTargetLabel(t: KpiIndicatorType): string {
   if (t === "headcount") return "목표 인원(명)";
   if (t === "money") return "목표(억)";
   if (t === "time") return "목표 시간(h)";
+  if (t === "minutes") return "목표 시간(분)";
   if (t === "uph") return "목표 UPH";
   return "목표";
 }
@@ -148,6 +148,9 @@ function computedFormulaHint(t: KpiIndicatorType): string {
   if (t === "time") {
     return "시간(h): 높을수록 좋음이면 실적÷목표×100, 낮을수록 좋음이면 목표÷실적×100 (상한 100%).";
   }
+  if (t === "minutes") {
+    return "분(min): 시간(h)과 동일. 높을수록 좋음이면 실적÷목표×100, 낮을수록 좋음이면 목표÷실적×100 (상한 100%).";
+  }
   if (t === "uph") {
     return "UPH: 높을수록 좋음이면 실적÷목표×100, 낮을수록 좋음이면 목표÷실적×100 (상한 100%).";
   }
@@ -161,6 +164,7 @@ function computedKindSummaryKo(t: KpiIndicatorType): string {
   if (t === "headcount") return "인원(명)";
   if (t === "money") return "금액(억)";
   if (t === "time") return "시간(h)";
+  if (t === "minutes") return "분(min)";
   if (t === "uph") return "생산성(UPH)";
   return "";
 }
@@ -231,6 +235,7 @@ function chartBarTopLabel(
         if (indicatorType === "headcount") return `${formatKoMax2Decimals(n)}명`;
         if (indicatorType === "money") return `${formatKoMax2Decimals(n)}억`;
         if (indicatorType === "time") return `${formatKoMax2Decimals(n)}h`;
+        if (indicatorType === "minutes") return `${formatKoMax2Decimals(n)} min`;
         if (indicatorType === "uph") return `${formatKoMax2Decimals(n)} UPH`;
       }
     }
@@ -466,7 +471,7 @@ function KpiChartTooltip({
         </>
       )}
       {d.hasComment && d.description ? (
-        <p className="mt-1 max-w-[220px] border-t border-sky-100 pt-1 text-[11px] leading-snug text-slate-500">
+        <p className="mt-1 max-w-[220px] border-t border-sky-200 pt-1 text-[11px] leading-snug text-slate-500">
           {previewComment(d.description, 72)}
         </p>
       ) : (
@@ -479,57 +484,81 @@ function KpiChartTooltip({
 const CHART_BAR_LEGEND_FILL = "#0284c7";
 const CHART_TARGET_LINE_STROKE = "#dc2626";
 
-function legendDataKeyString(dataKey: unknown): string {
-  if (typeof dataKey === "function") return "";
-  if (dataKey === null || dataKey === undefined) return "";
-  return String(dataKey);
-}
-
-/** 기본 Legend는 시리즈 색으로 글자색·막대 아이콘이 잡혀 보기 어려움 → 라벨은 검정, 실적 아이콘은 차트 막대색 */
-function KpiComposedLegend({ payload }: RechartsLegendContentProps) {
-  if (!payload?.length) return null;
+/** 차트 아래 범례 (순서 고정) */
+function KpiChartFullLegend() {
   return (
-    <ul className="flex list-none flex-wrap items-center justify-center gap-x-8 gap-y-1 pt-1 text-sm">
-      {payload.map((entry) => {
-        const dk = legendDataKeyString(entry.dataKey);
-        const isTarget = dk === "target";
-        const label = entry.value ?? "";
-        return (
-          <li key={`${dk}-${label}`} className="flex items-center gap-2">
-            {isTarget ? (
-              <span className="inline-flex shrink-0 items-center" aria-hidden>
-                <svg width={28} height={10} viewBox="0 0 28 10">
-                  <line
-                    x1={1}
-                    y1={5}
-                    x2={27}
-                    y2={5}
-                    stroke={CHART_TARGET_LINE_STROKE}
-                    strokeWidth={2}
-                    strokeDasharray="5 4"
-                  />
-                  <circle
-                    cx={14}
-                    cy={5}
-                    r={3}
-                    fill="#fff"
-                    stroke={CHART_TARGET_LINE_STROKE}
-                    strokeWidth={1.5}
-                  />
-                </svg>
-              </span>
-            ) : (
-              <span
-                className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
-                style={{ backgroundColor: CHART_BAR_LEGEND_FILL }}
-                aria-hidden
+    <div
+      className="mt-2 rounded-lg border border-sky-200 bg-white/90 px-2 py-2 shadow-sm shadow-slate-200/40 sm:px-3"
+      role="group"
+      aria-label="차트 범례"
+    >
+      <ul className="flex list-none flex-wrap items-center justify-center gap-x-4 gap-y-2 text-[11px] font-medium text-slate-800 sm:gap-x-5">
+        <li className="flex items-center gap-1.5">
+          <span
+            className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
+            style={{ backgroundColor: "#6366f1" }}
+            aria-hidden
+          />
+          <span>B/M</span>
+        </li>
+        <li className="flex items-center gap-1.5">
+          <span className="inline-flex shrink-0" aria-hidden>
+            <svg width={28} height={10} viewBox="0 0 28 10">
+              <line
+                x1={1}
+                y1={5}
+                x2={27}
+                y2={5}
+                stroke={CHART_TARGET_LINE_STROKE}
+                strokeWidth={2}
+                strokeDasharray="5 4"
               />
-            )}
-            <span className="font-medium text-slate-900">{label}</span>
-          </li>
-        );
-      })}
-    </ul>
+              <circle
+                cx={14}
+                cy={5}
+                r={3}
+                fill="#fff"
+                stroke={CHART_TARGET_LINE_STROKE}
+                strokeWidth={1.5}
+              />
+            </svg>
+          </span>
+          <span>목표</span>
+        </li>
+        <li className="flex items-center gap-1.5">
+          <span
+            className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
+            style={{ backgroundColor: "#ef4444" }}
+            aria-hidden
+          />
+          <span>실적 &lt;80%</span>
+        </li>
+        <li className="flex items-center gap-1.5">
+          <span
+            className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
+            style={{ backgroundColor: "#f59e0b" }}
+            aria-hidden
+          />
+          <span>실적 80~95%</span>
+        </li>
+        <li className="flex items-center gap-1.5">
+          <span
+            className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
+            style={{ backgroundColor: "#10b981" }}
+            aria-hidden
+          />
+          <span>실적 ≥95%</span>
+        </li>
+        <li className="flex items-center gap-1.5">
+          <span
+            className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
+            style={{ backgroundColor: "#0284c7" }}
+            aria-hidden
+          />
+          <span>집계 전</span>
+        </li>
+      </ul>
+    </div>
   );
 }
 
@@ -665,6 +694,7 @@ function chartValueLabel(indicatorType: KpiIndicatorType, value: number): string
   if (indicatorType === "headcount") return `${formatKoMax2Decimals(value)} 명`;
   if (indicatorType === "money") return `${formatKoMax2Decimals(value)}억`;
   if (indicatorType === "time") return `${formatKoMax2Decimals(value)} h`;
+  if (indicatorType === "minutes") return `${formatKoMax2Decimals(value)} min`;
   if (indicatorType === "uph") return `${formatKoMax2Decimals(value)} UPH`;
   return formatKoPercentMax2(value);
 }
@@ -740,6 +770,7 @@ function chartVerticalAxisHint(
   if (t === "headcount") return "세로축: 인원(명).";
   if (t === "money") return "세로축: 금액(억).";
   if (t === "time") return "세로축: 시간(h).";
+  if (t === "minutes") return "세로축: 분(min).";
   if (t === "uph") return "세로축: 생산성(UPH).";
   return "";
 }
@@ -1017,10 +1048,6 @@ export function PerformanceModal({
     displayMonthList,
     editorMonth,
   ]);
-
-  const normalLinkedToTargetChart =
-    effectiveIndicatorType === "normal" &&
-    Boolean(kpiItem && kpiItem.targetDirection !== "na");
 
   useEffect(() => {
     if (!isOpen || !kpiItem) return;
@@ -1860,8 +1887,8 @@ export function PerformanceModal({
         onClose={() => setToast((prev) => ({ ...prev, open: false }))}
         position="top-center"
       />
-      <div className="relative flex max-h-[95vh] w-full max-w-7xl flex-col overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-2xl shadow-sky-200/50">
-        <div className="shrink-0 border-b border-sky-100 bg-gradient-to-br from-sky-600 to-sky-700 px-5 py-5 text-white">
+      <div className="relative flex max-h-[95vh] w-full max-w-7xl flex-col overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-2xl shadow-sky-200/50">
+        <div className="shrink-0 border-b border-sky-200 bg-gradient-to-br from-sky-600 to-sky-700 px-5 py-5 text-white">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <p className="text-[11px] font-bold uppercase tracking-wider text-sky-100/90">
@@ -1950,7 +1977,7 @@ export function PerformanceModal({
         <div className="flex min-h-0 flex-1 flex-col lg:flex-row lg:overflow-hidden">
           <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5">
 
-          <div className="mb-4 rounded-xl border border-sky-100 bg-white p-4">
+          <div className="mb-4 rounded-xl border border-sky-200 bg-white p-4">
             {item.needsStructureReview ? (
               <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
                 KPI 평가 구조가 Rev02 이전 형식입니다. 수정 화면에서 평가 유형, 단위, 계산 기준, 목표 공백 처리, 달성률 상한을 확인해 저장해 주세요.
@@ -1999,7 +2026,7 @@ export function PerformanceModal({
             </div>
           </div>
 
-          <div className="h-[320px] rounded-xl border border-sky-100 bg-white p-2 sm:h-[360px] [&_.recharts-wrapper]:outline-none [&_svg]:outline-none">
+          <div className="kpi-modal-composed-chart h-[320px] rounded-xl border border-sky-200 bg-white p-2 sm:h-[360px] [&_.recharts-wrapper]:outline-none [&_.recharts-surface]:outline-none [&_svg]:outline-none">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart
                 data={chartData}
@@ -2042,7 +2069,6 @@ export function PerformanceModal({
                   cursor={false}
                   content={<KpiChartTooltip indicatorType={effectiveIndicatorType} />}
                 />
-                <Legend content={KpiComposedLegend} />
                 <ReferenceLine y={0} stroke="#dbeafe" strokeDasharray="3 3" strokeWidth={1} />
                 <Bar
                   dataKey="actual"
@@ -2051,6 +2077,7 @@ export function PerformanceModal({
                   activeBar={false}
                   maxBarSize={44}
                   radius={[6, 6, 0, 0]}
+                  style={{ outline: "none" }}
                   minPointSize={(value, index) => {
                     const d = chartData[index];
                     if (!d?.barTopLabel) return 0;
@@ -2076,7 +2103,8 @@ export function PerformanceModal({
                         }
                         stroke={entry.challengeMet ? "#b45309" : undefined}
                         strokeWidth={entry.challengeMet ? 2 : undefined}
-                        className="cursor-pointer outline-none"
+                        className="cursor-pointer outline-none focus:outline-none"
+                        style={{ outline: "none" }}
                       />
                     );
                   })}
@@ -2098,8 +2126,15 @@ export function PerformanceModal({
                   strokeWidth={2}
                   strokeDasharray="6 5"
                   connectNulls
-                  dot={{ r: 3, fill: CHART_TARGET_LINE_STROKE, strokeWidth: 0 }}
-                  activeDot={{ r: 5, fill: CHART_TARGET_LINE_STROKE }}
+                  isAnimationActive={false}
+                  dot={{
+                    r: 3,
+                    fill: CHART_TARGET_LINE_STROKE,
+                    strokeWidth: 0,
+                    style: { outline: "none" },
+                  }}
+                  activeDot={false}
+                  style={{ outline: "none" }}
                 >
                   {hasTargetNoteLabels ? (
                     <LabelList dataKey="targetNoteLabel" content={KpiTargetBubbleLabel} />
@@ -2107,22 +2142,7 @@ export function PerformanceModal({
                 </Line>
               </ComposedChart>
             </ResponsiveContainer>
-            <p className="mt-2 px-1 text-[11px] leading-snug text-slate-500">
-              목표는 <span className="font-medium text-red-600">점선</span>, 실적은{" "}
-              <span className="font-medium text-sky-700">막대</span>로 표시됩니다.{" "}
-              <span className="font-medium text-indigo-600">B/M 막대</span>는 1월 왼쪽에 표시됩니다. 실적 막대는 승인 반영값 기준입니다.{" "}
-              도전 목표를 달성한 월은 <span className="font-medium text-amber-600">금색 막대</span>로 강조됩니다.{" "}
-              {chartVerticalAxisHint(effectiveIndicatorType, {
-                normalLinkedToTarget: normalLinkedToTargetChart,
-              })}
-              {!indicatorUsesComputedAchievement(effectiveIndicatorType) &&
-              !normalLinkedToTargetChart ? (
-                <>
-                  {" "}
-                  높을수록 좋은 % 그래프는 0~100% 기준으로, 낮을수록 좋은 목표 연동 그래프는 목표값이 중간 높이에 오도록 표시됩니다.
-                </>
-              ) : null}
-            </p>
+            <KpiChartFullLegend />
           </div>
 
           <div className="mt-4">
@@ -2150,7 +2170,7 @@ export function PerformanceModal({
             </div>
           </div>
 
-          <div className="mt-5 rounded-xl border border-sky-100 bg-white p-4">
+          <div className="mt-5 rounded-xl border border-sky-200 bg-white p-4">
             <h4 className="mb-2 text-sm font-semibold text-slate-800">
               {formatAxisLabel(selectedMonth)} 상세
             </h4>
@@ -2293,8 +2313,8 @@ export function PerformanceModal({
         </div>
 
         {mode === "editor" && canEditPerformance ? (
-          <div className="absolute inset-y-0 right-0 z-20 flex w-full max-w-md flex-col border-l border-sky-100 bg-white shadow-2xl">
-            <div className="flex shrink-0 items-center justify-between border-b border-sky-100 px-4 py-3">
+          <div className="absolute inset-y-0 right-0 z-20 flex w-full max-w-md flex-col border-l border-sky-200 bg-white shadow-2xl">
+            <div className="flex shrink-0 items-center justify-between border-b border-sky-200 px-4 py-3">
               <div className="flex items-center gap-2">
                 <ImageIcon className="h-4 w-4 text-sky-600" />
                 <h4 className="text-sm font-semibold text-slate-800">실적 등록</h4>
@@ -2450,7 +2470,9 @@ export function PerformanceModal({
                         ? "k(천) 단위 숫자"
                         : effectiveIndicatorType === "time"
                           ? "시간(h) 단위 숫자"
-                          : effectiveIndicatorType === "uph"
+                          : effectiveIndicatorType === "minutes"
+                            ? "분(min) 단위 숫자"
+                            : effectiveIndicatorType === "uph"
                             ? "UPH 숫자"
                         : effectiveIndicatorType === "money"
                           ? "억 단위 숫자"
@@ -2550,7 +2572,7 @@ export function PerformanceModal({
               </div>
             </div>
 
-            <div className="flex shrink-0 justify-end gap-2 border-t border-sky-100 bg-white px-4 py-3">
+            <div className="flex shrink-0 justify-end gap-2 border-t border-sky-200 bg-white px-4 py-3">
               <button
                 type="button"
                 onClick={() => setMode("viewer")}
@@ -2631,7 +2653,7 @@ export function PerformanceModal({
               role="dialog"
               aria-modal="true"
               aria-labelledby="reject-modal-title"
-              className="w-full max-w-md rounded-2xl border border-sky-100 bg-white p-5 shadow-2xl"
+              className="w-full max-w-md rounded-2xl border border-sky-200 bg-white p-5 shadow-2xl"
               onClick={(e) => e.stopPropagation()}
             >
               <h4 id="reject-modal-title" className="text-base font-semibold text-slate-900">

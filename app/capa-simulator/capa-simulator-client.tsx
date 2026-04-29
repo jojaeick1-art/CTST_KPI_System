@@ -240,7 +240,7 @@ export function CapaSimulatorClient() {
     return (
       <CtstPortalShell>
         <div className="flex min-h-full flex-col items-center justify-center px-4 py-16">
-          <div className="w-full max-w-md rounded-2xl border border-sky-100 bg-white p-8 text-center shadow-lg shadow-sky-100/50">
+          <div className="w-full max-w-md rounded-2xl border border-sky-200 bg-white p-8 text-center shadow-lg shadow-sky-100/50">
             <img
               src="/c-one%20logo.png?v=4"
               alt="C-ONE 로고"
@@ -254,7 +254,7 @@ export function CapaSimulatorClient() {
             <p className="mt-1 text-sm text-slate-600">
               준비가 완료되면 이 경로에서 이용할 수 있습니다.
             </p>
-            <p className="mt-4 inline-flex items-center gap-1.5 rounded-full border border-sky-100 bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
+            <p className="mt-4 inline-flex items-center gap-1.5 rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
               <Lock className="h-3.5 w-3.5" aria-hidden />
               관리자 잠금 상태
             </p>
@@ -266,7 +266,7 @@ export function CapaSimulatorClient() {
 
   return (
     <CtstPortalShell>
-      <div className="min-h-full border-b border-sky-100 bg-white/70 px-4 py-6 sm:px-8">
+      <div className="min-h-full border-b border-sky-200 bg-white/70 px-4 py-6 sm:px-8">
         <header className="mb-8 flex flex-wrap items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-slate-900">
@@ -297,7 +297,7 @@ export function CapaSimulatorClient() {
               조건 설정
             </h2>
 
-            <div className="rounded-2xl border border-sky-100 bg-white p-5 shadow-sm shadow-sky-100/40">
+            <div className="rounded-2xl border border-sky-200 bg-white p-5 shadow-sm shadow-sky-100/40">
               <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
                 모델 선택
               </label>
@@ -347,7 +347,7 @@ export function CapaSimulatorClient() {
               ) : null}
             </div>
 
-            <div className="rounded-2xl border border-sky-100 bg-white p-5 shadow-sm shadow-sky-100/40">
+            <div className="rounded-2xl border border-sky-200 bg-white p-5 shadow-sm shadow-sky-100/40">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 근무 프리셋 · 기간
               </p>
@@ -487,7 +487,7 @@ function SummaryCard({
   demandNum: number | null;
 }) {
   return (
-    <div className="rounded-2xl border border-sky-100 bg-gradient-to-br from-sky-50 to-white p-6 shadow-lg shadow-sky-100/50">
+    <div className="rounded-2xl border border-sky-200 bg-gradient-to-br from-sky-50 to-white p-6 shadow-lg shadow-sky-100/50">
       <div className="flex flex-wrap items-center gap-3">
         <span
           className={`inline-block h-4 w-4 rounded-full ${trafficColor(lineLight)}`}
@@ -533,7 +533,7 @@ function ResultColumn({
   periodEnd: Date;
 }) {
   return (
-    <div className="rounded-2xl border border-sky-100 bg-white p-5 shadow-sm">
+    <div className="rounded-2xl border border-sky-200 bg-white p-5 shadow-sm">
       <p className="text-xs font-semibold uppercase tracking-wide text-sky-700">{label}</p>
       <div className="mt-2 flex items-center gap-2">
         <span className={`h-3 w-3 rounded-full ${trafficColor(result.lineLight)}`} />
@@ -580,7 +580,7 @@ function ProcessResultGrid({
       {rows.map((r, i) => (
         <div
           key={`${r.processName}-${i}`}
-          className="rounded-2xl border border-sky-100 bg-white p-4 shadow-sm shadow-sky-100/30"
+          className="rounded-2xl border border-sky-200 bg-white p-4 shadow-sm shadow-sky-100/30"
         >
           <p className="text-sm font-semibold text-slate-800">{r.processName}</p>
           <dl className="mt-3 space-y-1 text-xs text-slate-600">
@@ -635,7 +635,7 @@ function ProcessSelectList({
   onAddEquipment: (processId: string, modelId: string) => void | Promise<void>;
 }) {
   return (
-    <div className="rounded-2xl border border-sky-100 bg-white p-5 shadow-sm shadow-sky-100/40">
+    <div className="rounded-2xl border border-sky-200 bg-white p-5 shadow-sm shadow-sky-100/40">
       <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</p>
       <ul className="mt-3 space-y-2">
         {processes.map((p) => {

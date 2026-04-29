@@ -2,9 +2,20 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
-import { Loader2, Lock, Send, Trash2, X } from "lucide-react";
+import {
+  ListChecks,
+  Loader2,
+  Lock,
+  PenLine,
+  Send,
+  Shield,
+  Trash2,
+  User,
+  X,
+} from "lucide-react";
 
 import { CtstPortalShell } from "@/src/components/ctst-portal-shell";
+import { ChangePasswordButton } from "@/app/dashboard/change-password-modal";
 
 import {
   useAppFeatureAvailability,
@@ -23,7 +34,7 @@ import type {
   KpiVocStatus,
 } from "@/src/lib/kpi-queries";
 
-import { isAdminRole } from "@/src/lib/rbac";
+import { isAdminRole, roleLabelKo } from "@/src/lib/rbac";
 
 const VOC_VIEW_SCOPE_STORAGE_KEY = "ctst-kpi-voc-view-scope";
 
@@ -84,7 +95,7 @@ function statusBadgeClass(status: KpiVocStatus): string {
 }
 
 const inputClass =
-  "w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200 disabled:bg-slate-100";
+  "w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-200/60 disabled:bg-slate-100";
 
 function labelFor<T extends string>(
   options: Array<{ value: T; label: string }>,
@@ -129,6 +140,27 @@ function formatVocListMeta(item: KpiVocRequest): string {
       : "—";
 
   return `${datePart} / ${timePart} / ${deptPart} / ${namePart}`;
+}
+
+function displayNameFromVocSession(
+  profileFullName: string | null | undefined,
+  username: string,
+  userMetadata: Record<string, unknown> | undefined
+): string {
+  const profileName =
+    typeof profileFullName === "string" ? profileFullName.trim() : "";
+  if (profileName) return profileName;
+  const full =
+    typeof userMetadata?.full_name === "string"
+      ? userMetadata.full_name
+      : typeof userMetadata?.name === "string"
+        ? userMetadata.name
+        : typeof userMetadata?.display_name === "string"
+          ? userMetadata.display_name
+          : null;
+  const t = full?.trim();
+  if (t) return t;
+  return username;
 }
 
 function VocDetailModal({
@@ -339,7 +371,7 @@ function VocDetailModal({
       }}
     >
       <div
-        className="relative max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-sky-100 bg-white p-5 shadow-xl"
+        className="relative max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-sky-200 bg-white p-5 shadow-xl"
         role="dialog"
         aria-modal="true"
         aria-labelledby="voc-modal-title"
@@ -510,8 +542,8 @@ function VocDetailModal({
           </div>
         ) : (
           <div
-            className={`mt-4 rounded-xl border bg-white p-4 shadow-sm ring-1 ring-sky-100/90 ${
-              isAdmin ? "border-sky-100" : "border-slate-100 bg-slate-50/70 ring-0"
+            className={`mt-4 rounded-xl border bg-white p-4 shadow-sm ring-1 ring-sky-200/90 ${
+              isAdmin ? "border-sky-200" : "border-slate-100 bg-slate-50/70 ring-0"
             }`}
           >
             <p
@@ -653,7 +685,7 @@ function VocListRow({
     <button
       type="button"
       onClick={onSelect}
-      className="flex w-full items-start gap-3 rounded-xl border border-sky-100 bg-white p-4 text-left transition hover:border-sky-200 hover:bg-sky-50/40"
+      className="flex w-full items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm outline-none transition hover:border-slate-300 focus-visible:border-sky-400 focus-visible:ring-2 focus-visible:ring-sky-200/60"
     >
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-semibold text-slate-900">
@@ -747,6 +779,17 @@ export function VocPlaceholderContent() {
     return allVocs.filter((r) => r.createdBy === profileId);
   }, [allVocs, vocViewScope, profileId]);
 
+  const vocCounts = useMemo(() => {
+    const rows = displayedVocs;
+    return {
+      total: rows.length,
+      registered: rows.filter((r) => isVocPendingReceipt(r.status)).length,
+      inProgress: rows.filter((r) => r.status === "in_progress").length,
+      done: rows.filter((r) => r.status === "done").length,
+      rejected: rows.filter((r) => r.status === "rejected").length,
+    };
+  }, [displayedVocs]);
+
   const selectedItem = useMemo(() => {
     if (!selectedId) return null;
 
@@ -763,7 +806,24 @@ export function VocPlaceholderContent() {
     );
   }
 
-  const profile = profileQ.data?.profile ?? null;
+  if (!profileQ.data) {
+    return (
+      <CtstPortalShell>
+        <div className="flex min-h-full items-center justify-center px-4 py-16">
+          <p className="text-sm text-slate-600">프로필 정보를 불러오지 못했습니다.</p>
+        </div>
+      </CtstPortalShell>
+    );
+  }
+
+  const ctx = profileQ.data;
+  const profile = ctx.profile;
+  const displayName = displayNameFromVocSession(
+    profile.full_name,
+    profile.username,
+    ctx.session.user.user_metadata as Record<string, unknown> | undefined
+  );
+  const role = profile.role;
 
   async function handleCreate(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -807,25 +867,57 @@ export function VocPlaceholderContent() {
 
   return (
     <CtstPortalShell>
-      <div className="min-h-full px-4 py-6 sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-6xl">
-          <header className="rounded-2xl border border-sky-100 bg-white p-5">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-700/90">
-              CTST KPI
-            </p>
-
-            <h1 className="mt-2 text-2xl font-bold text-slate-900">KPI VOC</h1>
-
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              부서 증설, 계정 권한, UI/UX, 계산식, 데이터, 승인 흐름 등 KPI 운영
-              관련 개선 요청을 접수하고 처리 상태를 확인합니다. 목록은 전체 접수
-              건 또는 내 접수 건만 보도록 전환할 수 있습니다.
-            </p>
+      <>
+        {canAccessVoc ? (
+          <header className="h-[95px] border-b border-sky-200 bg-white/80 px-4 backdrop-blur-sm sm:px-8">
+            <div className="flex h-full items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h1 className="text-xl font-bold tracking-tight text-slate-800 sm:text-2xl">
+                  KPI VOC
+                </h1>
+                <p className="mt-0.5 text-sm text-slate-500">
+                  운영 개선 요청을 접수하고 처리 현황을 확인합니다.
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <ChangePasswordButton profileUsername={profile.username} />
+                <div className="flex items-center gap-3 rounded-xl border border-sky-200 bg-white px-4 py-2.5 shadow-sm shadow-sky-100/50">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-100 text-sky-700">
+                    <User className="h-5 w-5" aria-hidden />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-slate-800">
+                      <span className="sr-only">접속자 </span>
+                      {displayName}
+                      <span className="font-normal text-slate-400"> 님</span>
+                    </p>
+                    <div className="mt-0.5 flex items-center gap-1.5">
+                      <Shield
+                        className="h-3.5 w-3.5 text-sky-600"
+                        aria-hidden
+                      />
+                      <span className="text-xs font-medium text-sky-700">
+                        {roleLabelKo(role)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </header>
+        ) : null}
 
-          {!canAccessVoc ? (
-            <div className="mt-5 rounded-2xl border border-sky-100 bg-white p-8 text-center">
-              <p className="inline-flex items-center gap-1.5 rounded-full border border-sky-100 bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
+        <div
+          className={
+            canAccessVoc
+              ? "px-4 py-6 sm:p-8"
+              : "flex min-h-full flex-col items-center justify-center px-4 py-16"
+          }
+        >
+          <div className={canAccessVoc ? "mx-auto max-w-7xl" : "w-full"}>
+            {!canAccessVoc ? (
+              <div className="w-full max-w-md rounded-2xl border border-sky-200 bg-white p-8 text-center shadow-lg shadow-sky-100/50">
+              <p className="inline-flex items-center gap-1.5 rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
                 <Lock className="h-3.5 w-3.5" aria-hidden />
                 관리자 잠금 상태
               </p>
@@ -834,216 +926,283 @@ export function VocPlaceholderContent() {
                 관리자 설정에서 공개되면 이 메뉴를 이용할 수 있습니다.
               </p>
             </div>
-          ) : (
-            <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.25fr)]">
-              <section className="rounded-2xl border border-sky-100 bg-white p-5">
-                <h2 className="text-base font-bold text-slate-900">VOC 접수</h2>
-
-                <form
-                  className="mt-4 space-y-4"
-                  onSubmit={(e) => void handleCreate(e)}
-                >
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <label className="block">
-                      <span className="mb-1 block text-xs font-semibold text-slate-600">
-                        유형
-                      </span>
-
-                      <select
-                        className={inputClass}
-                        value={category}
-                        onChange={(e) =>
-                          setCategory(e.target.value as KpiVocCategory)
-                        }
-                      >
-                        {CATEGORY_OPTIONS.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-
-                    <label className="block">
-                      <span className="mb-1 block text-xs font-semibold text-slate-600">
-                        우선순위
-                      </span>
-
-                      <select
-                        className={inputClass}
-                        value={priority}
-                        onChange={(e) =>
-                          setPriority(e.target.value as KpiVocPriority)
-                        }
-                      >
-                        {PRIORITY_OPTIONS.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-
-                  <label className="block">
-                    <span className="mb-1 block text-xs font-semibold text-slate-600">
-                      제목
-                    </span>
-
-                    <input
-                      className={inputClass}
-                      maxLength={120}
-                      value={title}
-                      onChange={(e) => setTitle(e.target.value)}
-                      placeholder="예: KPI 달성률 계산 기준 확인 요청"
-                    />
-                  </label>
-
-                  <label className="block">
-                    <span className="mb-1 block text-xs font-semibold text-slate-600">
-                      상세 내용
-                    </span>
-
-                    <textarea
-                      className={`${inputClass} min-h-36 resize-y`}
-                      maxLength={4000}
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                      placeholder="요청 배경, 현재 문제, 기대하는 변경 내용을 적어 주세요."
-                    />
-                  </label>
-
-                  <button
-                    type="submit"
-                    disabled={createMutation.isPending}
-                    className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-60"
+            ) : (
+            <div className="space-y-6">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                {(
+                  [
+                    {
+                      key: "total",
+                      label: "전체",
+                      hint: "건수",
+                      value: vocCounts.total,
+                      borderClass: "border-slate-200",
+                    },
+                    {
+                      key: "registered",
+                      label: "등록",
+                      hint: "접수·대기",
+                      value: vocCounts.registered,
+                      borderClass: "border-sky-200",
+                    },
+                    {
+                      key: "progress",
+                      label: "조치 진행 중",
+                      hint: "진행",
+                      value: vocCounts.inProgress,
+                      borderClass: "border-amber-200",
+                    },
+                    {
+                      key: "done",
+                      label: "완료",
+                      hint: "적용 완료",
+                      value: vocCounts.done,
+                      borderClass: "border-emerald-200",
+                    },
+                    {
+                      key: "rejected",
+                      label: "반려",
+                      hint: "반려·보류",
+                      value: vocCounts.rejected,
+                      borderClass: "border-red-200",
+                    },
+                  ] as const
+                ).map((card) => (
+                  <div
+                    key={card.key}
+                    className={`rounded-2xl border bg-white p-4 shadow-sm shadow-sky-100/40 ${card.borderClass}`}
                   >
-                    {createMutation.isPending ? (
-                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                    ) : (
-                      <Send className="h-4 w-4" aria-hidden />
-                    )}
-                    VOC 접수
-                  </button>
-                </form>
-
-                {message ? (
-                  <p
-                    className={`mt-4 rounded-lg px-3 py-2 text-sm ${
-                      message.tone === "success"
-                        ? "bg-emerald-50 text-emerald-700"
-                        : "bg-red-50 text-red-700"
-                    }`}
-                  >
-                    {message.text}
-                  </p>
-                ) : null}
-              </section>
-
-              <section className="space-y-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0 flex-1">
-                    <h2 className="text-base font-bold text-slate-900">
-                      {vocViewScope === "mine" ? "내 VOC" : "접수 VOC"}
-                    </h2>
-
-                    <p className="mt-1 text-xs text-slate-500">
-                      {vocViewScope === "mine"
-                        ? "내가 접수한 건만 표시합니다."
-                        : isAdmin
-                          ? "전체 접수 건입니다. 목록에서 항목을 눌러 상세·답변·처리 단계를 변경합니다."
-                          : "전체 접수 건입니다. 항목을 눌러 상세와 처리 현황을 확인합니다."}
+                    <p className="text-xs font-medium text-slate-600">{card.label}</p>
+                    <p className="mt-2 text-2xl font-bold tabular-nums tracking-tight text-slate-900">
+                      {vocQuery.isPending ? "—" : card.value}
                     </p>
+                    <p className="mt-0.5 text-[11px] text-slate-500">{card.hint}</p>
                   </div>
+                ))}
+              </div>
 
-                  <div className="flex shrink-0 flex-wrap items-center gap-2">
-                    <div
-                      className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold shadow-sm"
-                      role="group"
-                      aria-label="목록 보기 범위"
+              <div className="grid gap-6 lg:grid-cols-[minmax(0,42%)_minmax(0,58%)] lg:items-start">
+                <div>
+                  <div className="mb-4 flex flex-wrap items-center gap-2 text-slate-700">
+                    <PenLine className="h-5 w-5 shrink-0 text-sky-600" aria-hidden />
+                    <h2 className="text-base font-semibold">VOC 접수</h2>
+                  </div>
+                  <div className="rounded-2xl border border-sky-200 bg-white p-4 shadow-sm shadow-sky-100/40 sm:p-5">
+                    <form
+                      className="space-y-4"
+                      onSubmit={(e) => void handleCreate(e)}
                     >
-                      <button
-                        type="button"
-                        onClick={() => setVocViewScope("all")}
-                        aria-pressed={vocViewScope === "all"}
-                        className={`rounded-md px-3 py-1.5 transition ${
-                          vocViewScope === "all"
-                            ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200/80"
-                            : "text-slate-600 hover:text-slate-900"
-                        }`}
-                      >
-                        모든 VOC
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setVocViewScope("mine")}
-                        aria-pressed={vocViewScope === "mine"}
-                        className={`rounded-md px-3 py-1.5 transition ${
-                          vocViewScope === "mine"
-                            ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200/80"
-                            : "text-slate-600 hover:text-slate-900"
-                        }`}
-                      >
-                        내 VOC만
-                      </button>
-                    </div>
+                      <div className="grid gap-4 sm:grid-cols-2">
+                          <label className="block">
+                            <span className="mb-1.5 block text-xs font-medium text-slate-500">
+                              유형
+                            </span>
 
-                    {vocQuery.isFetching ? (
-                      <Loader2
-                        className="h-4 w-4 animate-spin text-sky-600"
-                        aria-hidden
-                      />
+                            <select
+                              className={inputClass}
+                              value={category}
+                              onChange={(e) =>
+                                setCategory(e.target.value as KpiVocCategory)
+                              }
+                            >
+                              {CATEGORY_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label className="block">
+                            <span className="mb-1.5 block text-xs font-medium text-slate-500">
+                              우선순위
+                            </span>
+
+                            <select
+                              className={inputClass}
+                              value={priority}
+                              onChange={(e) =>
+                                setPriority(e.target.value as KpiVocPriority)
+                              }
+                            >
+                              {PRIORITY_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+
+                      <label className="block">
+                        <span className="mb-1.5 block text-xs font-medium text-slate-500">
+                          제목
+                        </span>
+
+                        <input
+                          className={inputClass}
+                          maxLength={120}
+                          value={title}
+                          onChange={(e) => setTitle(e.target.value)}
+                          placeholder="예: KPI 달성률 계산 기준 확인 요청"
+                        />
+                      </label>
+
+                      <label className="block">
+                        <span className="mb-1.5 block text-xs font-medium text-slate-500">
+                          상세 내용
+                        </span>
+
+                        <textarea
+                          className={`${inputClass} min-h-36 resize-y`}
+                          maxLength={4000}
+                          value={description}
+                          onChange={(e) => setDescription(e.target.value)}
+                          placeholder="요청 배경, 현재 문제, 기대하는 변경 내용을 적어 주세요."
+                        />
+                      </label>
+
+                      <button
+                        type="submit"
+                        disabled={createMutation.isPending}
+                        className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-sky-600/20 transition hover:bg-sky-700 disabled:opacity-60"
+                      >
+                        {createMutation.isPending ? (
+                          <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                        ) : (
+                          <Send className="h-4 w-4" aria-hidden />
+                        )}
+                        VOC 접수
+                      </button>
+                    </form>
+
+                    {message ? (
+                      <p
+                        className={`mt-4 rounded-xl px-3 py-2.5 text-sm ${
+                          message.tone === "success"
+                            ? "bg-emerald-50 text-emerald-800"
+                            : "bg-red-50 text-red-800"
+                        }`}
+                      >
+                        {message.text}
+                      </p>
                     ) : null}
                   </div>
                 </div>
 
-                {vocQuery.isPending ? (
-                  <div className="rounded-xl border border-sky-100 bg-white p-8 text-center">
-                    <Loader2 className="mx-auto h-6 w-6 animate-spin text-sky-600" />
-                  </div>
-                ) : vocQuery.isError ? (
-                  <div className="rounded-xl border border-red-100 bg-red-50 p-4 text-sm text-red-700">
-                    {vocQuery.error instanceof Error
-                      ? vocQuery.error.message
-                      : "VOC 목록을 불러오지 못했습니다."}
-                  </div>
-                ) : allVocs.length === 0 ? (
-                  <div className="rounded-xl border border-sky-100 bg-white p-8 text-center text-sm text-slate-500">
-                    등록된 VOC가 없습니다.
-                  </div>
-                ) : displayedVocs.length === 0 ? (
-                  <div className="rounded-xl border border-sky-100 bg-white p-8 text-center text-sm text-slate-500">
-                    표시할 내 VOC가 없습니다. 상단에서「모든 VOC」를 선택해
-                    보세요.
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {displayedVocs.map((item) => (
-                      <VocListRow
-                        key={item.id}
-                        item={item}
-                        onSelect={() => setSelectedId(item.id)}
+                <div>
+                  <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex flex-wrap items-center gap-2 text-slate-700">
+                      <ListChecks
+                        className="h-5 w-5 shrink-0 text-sky-600"
+                        aria-hidden
                       />
-                    ))}
-                  </div>
-                )}
-              </section>
-            </div>
-          )}
-        </div>
-      </div>
+                      <h2 className="text-base font-semibold">
+                        {vocViewScope === "mine" ? "내 VOC 목록" : "접수 VOC 목록"}
+                      </h2>
+                      <span className="text-sm font-normal text-slate-500">
+                        ·{" "}
+                        {vocViewScope === "mine"
+                          ? "내가 접수한 건만"
+                          : isAdmin
+                            ? "항목을 눌러 상세·처리"
+                            : "항목을 눌러 진행 현황 확인"}
+                      </span>
+                    </div>
 
-      <VocDetailModal
-        item={selectedItem}
-        open={selectedId !== null && selectedItem !== null}
-        onClose={() => setSelectedId(null)}
-        isAdmin={isAdmin}
-        profileUserId={profile?.id ?? null}
-        updateMutation={updateMutation}
-        updateOwnMutation={updateOwnMutation}
-        deleteMutation={deleteMutation}
-        onToast={(tone, text) => setMessage({ tone, text })}
-      />
+                    <div className="flex shrink-0 flex-wrap items-center gap-2">
+                      <div
+                        className="inline-flex rounded-xl border border-slate-200 bg-slate-50/80 p-0.5 text-xs font-semibold shadow-sm"
+                        role="group"
+                        aria-label="목록 보기 범위"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setVocViewScope("all")}
+                          aria-pressed={vocViewScope === "all"}
+                          className={`rounded-lg px-3 py-1.5 transition ${
+                            vocViewScope === "all"
+                              ? "bg-white text-slate-900 shadow-sm ring-1 ring-sky-200/80"
+                              : "text-slate-600 hover:text-slate-900"
+                          }`}
+                        >
+                          모든 VOC
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setVocViewScope("mine")}
+                          aria-pressed={vocViewScope === "mine"}
+                          className={`rounded-lg px-3 py-1.5 transition ${
+                            vocViewScope === "mine"
+                              ? "bg-white text-slate-900 shadow-sm ring-1 ring-sky-200/80"
+                              : "text-slate-600 hover:text-slate-900"
+                          }`}
+                        >
+                          내 VOC만
+                        </button>
+                      </div>
+
+                      {vocQuery.isFetching ? (
+                        <Loader2
+                          className="h-4 w-4 animate-spin text-sky-600"
+                          aria-hidden
+                        />
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-sky-200 bg-white p-4 shadow-sm shadow-sky-100/40 sm:p-5">
+                    {vocQuery.isPending ? (
+                      <div className="py-12 text-center">
+                        <Loader2 className="mx-auto h-7 w-7 animate-spin text-sky-600" />
+                        <p className="mt-2 text-sm text-slate-500">목록 불러오는 중…</p>
+                      </div>
+                    ) : vocQuery.isError ? (
+                      <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+                        {vocQuery.error instanceof Error
+                          ? vocQuery.error.message
+                          : "VOC 목록을 불러오지 못했습니다."}
+                      </div>
+                    ) : allVocs.length === 0 ? (
+                      <p className="py-10 text-center text-sm text-slate-500">
+                        등록된 VOC가 없습니다.
+                      </p>
+                    ) : displayedVocs.length === 0 ? (
+                      <p className="py-10 text-center text-sm text-slate-500">
+                        표시할 내 VOC가 없습니다. 상단에서「모든 VOC」를 선택해
+                        보세요.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {displayedVocs.map((item) => (
+                          <VocListRow
+                            key={item.id}
+                            item={item}
+                            onSelect={() => setSelectedId(item.id)}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+            )}
+          </div>
+        </div>
+
+        <VocDetailModal
+          item={selectedItem}
+          open={selectedId !== null && selectedItem !== null}
+          onClose={() => setSelectedId(null)}
+          isAdmin={isAdmin}
+          profileUserId={profile.id}
+          updateMutation={updateMutation}
+          updateOwnMutation={updateOwnMutation}
+          deleteMutation={deleteMutation}
+          onToast={(tone, text) => setMessage({ tone, text })}
+        />
+      </>
     </CtstPortalShell>
   );
 }

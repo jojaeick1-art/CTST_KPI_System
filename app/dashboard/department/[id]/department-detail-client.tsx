@@ -68,6 +68,8 @@ function indicatorBadgeClass(t: KpiIndicatorType): string {
       return "bg-teal-50 text-teal-900 ring-teal-200";
     case "time":
       return "bg-orange-50 text-orange-800 ring-orange-200";
+    case "minutes":
+      return "bg-rose-50 text-rose-800 ring-rose-200";
     case "uph":
       return "bg-cyan-50 text-cyan-800 ring-cyan-200";
     case "headcount":
@@ -84,6 +86,7 @@ function indicatorModeShortLabel(t: KpiIndicatorType): string {
   if (t === "count") return "건수";
   if (t === "money") return "금액(억)";
   if (t === "time") return "시간(h)";
+  if (t === "minutes") return "분(min)";
   if (t === "uph") return "생산성(UPH)";
   if (t === "headcount") return "인원(명)";
   return "—";
@@ -153,6 +156,7 @@ function benchmarkValueLabel(item: DepartmentKpiDetailItem): string {
   if (indicatorType === "headcount") return `${formatKoMax2Decimals(parsed)} 명`;
   if (indicatorType === "money") return `${formatKoMax2Decimals(parsed)}억`;
   if (indicatorType === "time") return `${formatKoMax2Decimals(parsed)} h`;
+  if (indicatorType === "minutes") return `${formatKoMax2Decimals(parsed)} min`;
   if (indicatorType === "uph") return `${formatKoMax2Decimals(parsed)} UPH`;
   return formatKoPercentMax2(parsed);
 }
@@ -606,7 +610,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
       <main className="min-w-0 flex-1 px-4 py-6 sm:p-8">
         {!featureAccess.kpi ? (
           <div className="flex min-h-full flex-col items-center justify-center px-4 py-16">
-            <div className="w-full max-w-md rounded-2xl border border-sky-100 bg-white p-8 text-center shadow-lg shadow-sky-100/50">
+            <div className="w-full max-w-md rounded-2xl border border-sky-200 bg-white p-8 text-center shadow-lg shadow-sky-100/50">
               <img
                 src="/c-one%20logo.png?v=4"
                 alt="C-ONE 로고"
@@ -659,7 +663,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                     {detailQuery.data.department.name}
                   </h1>
                   <div className="mt-2 flex items-center gap-2">
-                    <span className="rounded-full bg-sky-50 px-2.5 py-0.5 text-[11px] font-semibold text-sky-700 ring-1 ring-sky-100">
+                    <span className="rounded-full bg-sky-50 px-2.5 py-0.5 text-[11px] font-semibold text-sky-700 ring-1 ring-sky-200">
                       기준 연도: {CURRENT_KPI_YEAR}
                     </span>
                     <span className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[11px] text-slate-500">
@@ -702,7 +706,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                   {detailQuery.data.department.name} 기준 합계입니다. 100점 초과 시 신규 항목 저장이 차단됩니다.
                 </p>
               </div>
-              <div className="mt-4 rounded-2xl border border-sky-100 bg-white p-3 shadow-sm shadow-sky-100/40">
+              <div className="mt-4 rounded-2xl border border-sky-200 bg-white p-3 shadow-sm shadow-sky-100/40">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="text-xs font-semibold text-slate-500">월별 달성률 보기</p>
@@ -725,7 +729,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                       className={`rounded-full px-2.5 py-1 text-xs font-semibold transition ${
                         selectedAchievementMonth === "all"
                           ? "bg-sky-600 text-white shadow-sm"
-                          : "bg-sky-50 text-sky-700 ring-1 ring-sky-100 hover:bg-sky-100"
+                          : "bg-sky-50 text-sky-700 ring-1 ring-sky-200 hover:bg-sky-100"
                       }`}
                     >
                       전체보기
@@ -740,7 +744,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                           className={`rounded-full px-2.5 py-1 text-xs font-semibold transition ${
                             active
                               ? "bg-sky-600 text-white shadow-sm"
-                              : "bg-sky-50 text-sky-700 ring-1 ring-sky-100 hover:bg-sky-100"
+                              : "bg-sky-50 text-sky-700 ring-1 ring-sky-200 hover:bg-sky-100"
                           }`}
                         >
                           {monthLabel(month)}
@@ -756,11 +760,11 @@ export function DepartmentDetailClient({ departmentId }: Props) {
             </header>
 
             {!detailItems.length ? (
-              <p className="rounded-xl border border-sky-100 bg-white px-4 py-8 text-center text-sm text-slate-600">
+              <p className="rounded-xl border border-sky-200 bg-white px-4 py-8 text-center text-sm text-slate-600">
                 이 부서에 등록된 KPI 항목이 없습니다.
               </p>
             ) : (
-              <div className="overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-sm shadow-sky-100/40">
+              <div className="overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-sm shadow-sky-100/40">
                 <div className="overflow-x-auto">
                   <table className="min-w-[1100px] w-full border-collapse text-sm">
                     <thead className="bg-sky-50/80 text-slate-700">
@@ -874,7 +878,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                                 className={`inline-flex flex-col items-start gap-0.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${
                                   item.isFinalCompleted
                                     ? "bg-emerald-50 text-emerald-700 ring-emerald-100"
-                                    : "bg-sky-50 text-sky-700 ring-sky-100"
+                                    : "bg-sky-50 text-sky-700 ring-sky-200"
                                 }`}
                               >
                                 {item.isFinalCompleted ? (

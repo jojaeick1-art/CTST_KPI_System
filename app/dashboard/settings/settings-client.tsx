@@ -272,7 +272,7 @@ export function SettingsClient() {
       />
 
       <main className="min-w-0 flex-1">
-        <header className="border-b border-sky-100 bg-white/80 px-4 py-4 backdrop-blur-sm sm:px-8">
+        <header className="border-b border-sky-200 bg-white/80 px-4 py-4 backdrop-blur-sm sm:px-8">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h1 className="text-xl font-bold tracking-tight text-slate-800 sm:text-2xl">
@@ -284,7 +284,7 @@ export function SettingsClient() {
             </div>
             <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:gap-3">
               <ChangePasswordButton profileUsername={ctx.profile.username} />
-            <div className="flex items-center gap-3 rounded-xl border border-sky-100 bg-white px-4 py-2.5 shadow-sm shadow-sky-100/50">
+            <div className="flex items-center gap-3 rounded-xl border border-sky-200 bg-white px-4 py-2.5 shadow-sm shadow-sky-100/50">
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-100 text-sky-700">
                 <User className="h-5 w-5" aria-hidden />
               </div>
@@ -306,7 +306,7 @@ export function SettingsClient() {
         </header>
 
         <div className="grid gap-5 px-4 py-6 sm:p-8 xl:grid-cols-2">
-          <section className="rounded-2xl border border-sky-100 bg-white p-4 shadow-sm shadow-sky-100/40">
+          <section className="rounded-2xl border border-sky-200 bg-white p-4 shadow-sm shadow-sky-100/40">
             <h2 className="mb-3 flex items-center gap-2 text-base font-semibold text-slate-800">
               <Building2 className="h-4 w-4 text-sky-600" />
               부서 관리
@@ -338,7 +338,7 @@ export function SettingsClient() {
                     추가
                   </button>
                 </div>
-                <div className="overflow-hidden rounded-xl border border-sky-100">
+                <div className="overflow-hidden rounded-xl border border-sky-200">
                   <table className="w-full border-collapse text-sm">
                     <thead className="bg-sky-50/80 text-slate-700">
                       <tr>
@@ -415,7 +415,7 @@ export function SettingsClient() {
             )}
           </section>
 
-          <section className="rounded-2xl border border-sky-100 bg-white p-4 shadow-sm shadow-sky-100/40">
+          <section className="rounded-2xl border border-sky-200 bg-white p-4 shadow-sm shadow-sky-100/40">
             <h2 className="mb-3 flex items-center gap-2 text-base font-semibold text-slate-800">
               <Save className="h-4 w-4 text-sky-600" />
               월별 입력 마감 설정
@@ -431,7 +431,7 @@ export function SettingsClient() {
                 {KPI_MONTHS.map((m) => (
                   <div
                     key={m}
-                    className="flex items-center justify-between rounded-lg border border-sky-100 bg-sky-50/40 px-3 py-2"
+                    className="flex items-center justify-between rounded-lg border border-sky-200 bg-sky-50/40 px-3 py-2"
                   >
                     <span className="w-24 text-sm font-medium text-slate-700">{m}월</span>
                     <input
@@ -461,7 +461,7 @@ export function SettingsClient() {
             )}
           </section>
 
-          <section className="rounded-2xl border border-sky-100 bg-white p-4 shadow-sm shadow-sky-100/40">
+          <section className="rounded-2xl border border-sky-200 bg-white p-4 shadow-sm shadow-sky-100/40">
             <h2 className="mb-3 flex items-center gap-2 text-base font-semibold text-slate-800">
               <Settings className="h-4 w-4 text-sky-600" />
               앱 메뉴 공개 설정
@@ -490,7 +490,7 @@ export function SettingsClient() {
                 ] as const).map((feature) => (
                   <div
                     key={feature.key}
-                    className="flex items-center justify-between rounded-lg border border-sky-100 bg-sky-50/40 px-3 py-2.5"
+                    className="flex items-center justify-between rounded-lg border border-sky-200 bg-sky-50/40 px-3 py-2.5"
                   >
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-slate-700">{feature.label}</span>
@@ -531,17 +531,17 @@ export function SettingsClient() {
             )}
           </section>
 
-          <section className="rounded-2xl border border-sky-100 bg-white p-4 shadow-sm shadow-sky-100/40 xl:col-span-2">
+          <section className="rounded-2xl border border-sky-200 bg-white p-4 shadow-sm shadow-sky-100/40 xl:col-span-2">
             <h2 className="mb-3 flex items-center gap-2 text-base font-semibold text-slate-800">
               <Users className="h-4 w-4 text-sky-600" />
               사용자 권한 요약
             </h2>
             <div className="grid gap-3 sm:grid-cols-3">
-              <div className="rounded-xl border border-sky-100 bg-sky-50/40 p-3">
+              <div className="rounded-xl border border-sky-200 bg-sky-50/40 p-3">
                 <p className="text-xs text-slate-500">현재 사용자</p>
                 <p className="mt-1 text-sm font-semibold text-slate-800">{displayName}</p>
               </div>
-              <div className="rounded-xl border border-sky-100 bg-sky-50/40 p-3">
+              <div className="rounded-xl border border-sky-200 bg-sky-50/40 p-3">
                 <p className="text-xs text-slate-500">권한</p>
                 <p className="mt-1 text-sm font-semibold text-sky-700">
                   {roleLabelKo(ctx.profile.role)}

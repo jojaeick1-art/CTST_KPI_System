@@ -36,10 +36,6 @@ export default function LoginPage() {
         </div>
 
         <LoginForm />
-
-        <p className="text-center text-xs text-slate-400">
-          표시되는 메뉴와 접근 범위는 역할·권한에 따라 달라질 수 있습니다
-        </p>
       </div>
     </div>
   );

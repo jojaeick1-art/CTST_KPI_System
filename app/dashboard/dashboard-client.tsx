@@ -8,11 +8,6 @@ import {
   User,
   Loader2,
   TrendingUp,
-  Building2,
-  Cpu,
-  Factory,
-  ClipboardCheck,
-  type LucideIcon,
 } from "lucide-react";
 import { CtstAppSidebar } from "@/src/components/ctst-app-sidebar";
 import { createBrowserSupabase } from "@/src/lib/supabase";
@@ -38,8 +33,6 @@ import {
 import { CURRENT_KPI_YEAR } from "@/src/lib/kpi-queries";
 import { ChangePasswordButton } from "./change-password-modal";
 
-const DEPT_ICONS: LucideIcon[] = [Building2, Cpu, Factory, ClipboardCheck];
-
 function displayNameFromSession(
   profileFullName: string | null | undefined,
   username: string,
@@ -64,14 +57,7 @@ function currentMonthLabel(): string {
   return `${new Date().getMonth() + 1}월`;
 }
 
-function DepartmentCard({
-  card,
-  index,
-}: {
-  card: DepartmentKpiSummary;
-  index: number;
-}) {
-  const Icon = DEPT_ICONS[index % DEPT_ICONS.length]!;
+function DepartmentCard({ card }: { card: DepartmentKpiSummary }) {
   const hasAverage = card.averageAchievement !== null;
   const displayPercent = hasAverage ? Number(card.averageAchievement!.toFixed(1)) : 0;
   const progressWidth = Math.max(0, Math.min(100, displayPercent));
@@ -83,16 +69,13 @@ function DepartmentCard({
   return (
     <Link
       href={`/dashboard/department/${card.id}`}
-      className="block rounded-2xl border border-sky-100 bg-white p-5 shadow-sm shadow-sky-100/40 outline-none ring-sky-300 transition hover:shadow-md hover:shadow-sky-100/60 focus-visible:ring-2"
+      className="block rounded-2xl border border-sky-200 bg-white p-5 shadow-sm shadow-sky-100/40 outline-none ring-sky-300 transition hover:shadow-md hover:shadow-sky-100/60 focus-visible:ring-2"
     >
       <article>
-        <div className="mb-3 flex items-start justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-50 text-sky-600">
-              <Icon className="h-5 w-5" aria-hidden />
-            </div>
-            <h3 className="truncate text-base font-semibold text-slate-800">{card.name}</h3>
-          </div>
+        <div className="flex items-start justify-between gap-3">
+          <h3 className="min-w-0 truncate text-base font-semibold text-slate-800">
+            {card.name}
+          </h3>
           <span className="text-2xl font-bold tabular-nums text-slate-800">
             {hasAverage ? (
               <>
@@ -104,15 +87,8 @@ function DepartmentCard({
             )}
           </span>
         </div>
-        <p className="mt-0.5 text-sm text-slate-600">
-          KPI 항목 {card.kpiItemCount}건 · 실적 입력 {card.scoredKpiCount}건
-        </p>
-        <p className="mt-2 rounded-lg bg-sky-50 px-2.5 py-1.5 text-xs font-semibold text-sky-800 ring-1 ring-sky-100">
-          {currentMonthLabel()} 달성률:{" "}
-          {currentMonthPercent === null ? "평가 대상 없음" : `${currentMonthPercent}%`}
-        </p>
         <div
-          className="mt-4 h-2 overflow-hidden rounded-full bg-sky-100"
+          className="mt-2.5 h-2 overflow-hidden rounded-full bg-sky-100"
           role="progressbar"
           aria-valuenow={hasAverage ? displayPercent : 0}
           aria-valuemin={0}
@@ -126,6 +102,13 @@ function DepartmentCard({
             style={{ width: `${progressWidth}%` }}
           />
         </div>
+        <p className="mt-3 text-sm text-slate-600">
+          KPI 항목 {card.kpiItemCount}건 · 실적 입력 {card.scoredKpiCount}건
+        </p>
+        <p className="mt-2 rounded-lg bg-sky-50 px-2.5 py-1.5 text-xs font-semibold text-sky-800 ring-1 ring-sky-200">
+          {currentMonthLabel()} 달성률:{" "}
+          {currentMonthPercent === null ? "평가 대상 없음" : `${currentMonthPercent}%`}
+        </p>
       </article>
     </Link>
   );
@@ -300,7 +283,7 @@ export function DashboardClient() {
       <main className="min-w-0 flex-1">
         {!featureAccess.kpi ? (
           <div className="flex min-h-full flex-col items-center justify-center px-4 py-16">
-            <div className="w-full max-w-md rounded-2xl border border-sky-100 bg-white p-8 text-center shadow-lg shadow-sky-100/50">
+            <div className="w-full max-w-md rounded-2xl border border-sky-200 bg-white p-8 text-center shadow-lg shadow-sky-100/50">
               <img
                 src="/c-one%20logo.png?v=4"
                 alt="C-ONE 로고"
@@ -318,7 +301,7 @@ export function DashboardClient() {
           </div>
         ) : (
         <>
-        <header className="h-[95px] border-b border-sky-100 bg-white/80 px-4 backdrop-blur-sm sm:px-8">
+        <header className="h-[95px] border-b border-sky-200 bg-white/80 px-4 backdrop-blur-sm sm:px-8">
           <div className="flex h-full items-center justify-between gap-3">
             <div className="min-w-0">
               <h1 className="text-xl font-bold tracking-tight text-slate-800 sm:text-2xl">
@@ -326,7 +309,7 @@ export function DashboardClient() {
               </h1>
               <div className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-slate-500">
                 <p>부서별 진행 현황을 한눈에 확인하세요</p>
-                <span className="rounded-full bg-sky-50 px-2.5 py-0.5 text-[11px] font-semibold text-sky-700 ring-1 ring-sky-100">
+                <span className="rounded-full bg-sky-50 px-2.5 py-0.5 text-[11px] font-semibold text-sky-700 ring-1 ring-sky-200">
                   기준 연도: {CURRENT_KPI_YEAR}
                 </span>
                 <span className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[11px] text-slate-500">
@@ -336,7 +319,7 @@ export function DashboardClient() {
             </div>
             <div className="flex items-center gap-3">
               <ChangePasswordButton profileUsername={ctx.profile.username} />
-            <div className="flex items-center gap-3 rounded-xl border border-sky-100 bg-white px-4 py-2.5 shadow-sm shadow-sky-100/50">
+            <div className="flex items-center gap-3 rounded-xl border border-sky-200 bg-white px-4 py-2.5 shadow-sm shadow-sky-100/50">
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-100 text-sky-700">
                 <User className="h-5 w-5" aria-hidden />
               </div>
@@ -367,9 +350,6 @@ export function DashboardClient() {
             <h2 className="text-base font-semibold">
               부서별 KPI 종합점수
             </h2>
-            <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-sky-800 ring-1 ring-sky-100">
-              Supabase 실시간 갱신(30초)
-            </span>
           </div>
 
           <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -377,7 +357,7 @@ export function DashboardClient() {
               ? [0, 1, 2].map((idx) => (
                   <div
                     key={`stats-skeleton-${idx}`}
-                    className="h-[90px] animate-pulse rounded-2xl border border-sky-100 bg-sky-100/60"
+                    className="h-[90px] animate-pulse rounded-2xl border border-sky-200 bg-sky-100/60"
                   />
                 ))
               : [
@@ -396,7 +376,7 @@ export function DashboardClient() {
                 ].map((card) => (
                   <div
                     key={card.label}
-                    className="rounded-2xl border border-sky-100 bg-white p-4 shadow-sm shadow-sky-100/40"
+                    className="rounded-2xl border border-sky-200 bg-white p-4 shadow-sm shadow-sky-100/40"
                   >
                     <p className="text-xs font-medium text-slate-500">{card.label}</p>
                     <p className="mt-2 text-2xl font-bold tracking-tight text-slate-800">
@@ -407,7 +387,7 @@ export function DashboardClient() {
           </div>
 
           {!canViewAllDepartmentCards(role) ? (
-            <p className="mb-4 rounded-xl border border-sky-100 bg-sky-50/50 px-4 py-3 text-sm text-slate-700">
+            <p className="mb-4 rounded-xl border border-sky-200 bg-sky-50/50 px-4 py-3 text-sm text-slate-700">
               전사 부서 목록은 대표·관리자에게 표시됩니다. 그룹장·팀장은 소속 부서만
               표시되며, 승인 처리는{" "}
               {canAccessApprovalsPage(role) ? (
@@ -439,15 +419,15 @@ export function DashboardClient() {
               확인해 주세요.
             </p>
           ) : !visibleDepartments.length ? (
-            <p className="rounded-xl border border-sky-100 bg-white px-4 py-6 text-center text-sm text-slate-600">
+            <p className="rounded-xl border border-sky-200 bg-white px-4 py-6 text-center text-sm text-slate-600">
               {deptQuery.data?.length
                 ? "표시할 부서가 없습니다. profiles.dept_id에 소속 부서 UUID가 올바르게 연결되어 있는지 확인해 주세요."
                 : "등록된 부서가 없습니다. Supabase `departments` 테이블에 행을 추가해 주세요."}
             </p>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {visibleDepartments.map((card, index) => (
-                <DepartmentCard key={card.id} card={card} index={index} />
+              {visibleDepartments.map((card) => (
+                <DepartmentCard key={card.id} card={card} />
               ))}
             </div>
           )}

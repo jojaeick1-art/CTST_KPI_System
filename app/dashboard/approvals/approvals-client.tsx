@@ -80,11 +80,11 @@ function PendingTable({
         <p className="text-sm text-slate-500">{subtitle}</p>
       </div>
       {!rows.length ? (
-        <p className="rounded-xl border border-sky-100 bg-white px-6 py-8 text-center text-sm text-slate-600">
+        <p className="rounded-xl border border-sky-200 bg-white px-6 py-8 text-center text-sm text-slate-600">
           대기 중인 실적이 없습니다
         </p>
       ) : (
-        <div className="overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-sm shadow-sky-100/40">
+        <div className="overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-sm shadow-sky-100/40">
           <div className="overflow-x-auto">
             <table className="min-w-[960px] w-full border-collapse text-sm">
               <thead className="bg-sky-50/90 text-left text-slate-700">
@@ -397,7 +397,7 @@ export function ApprovalsClient() {
       <main className="min-w-0 flex-1">
         {!featureAccess.kpi ? (
           <div className="flex min-h-full flex-col items-center justify-center px-4 py-16">
-            <div className="w-full max-w-md rounded-2xl border border-sky-100 bg-white p-8 text-center shadow-lg shadow-sky-100/50">
+            <div className="w-full max-w-md rounded-2xl border border-sky-200 bg-white p-8 text-center shadow-lg shadow-sky-100/50">
               <img
                 src="/c-one%20logo.png?v=4"
                 alt="C-ONE 로고"
@@ -415,7 +415,7 @@ export function ApprovalsClient() {
           </div>
         ) : (
         <>
-        <header className="border-b border-sky-100 bg-white/80 px-4 py-4 backdrop-blur-sm sm:px-8">
+        <header className="border-b border-sky-200 bg-white/80 px-4 py-4 backdrop-blur-sm sm:px-8">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h1 className="text-xl font-bold tracking-tight text-slate-800 sm:text-2xl">
@@ -429,7 +429,7 @@ export function ApprovalsClient() {
             </div>
             <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:gap-3">
               <ChangePasswordButton profileUsername={ctx.profile.username} />
-              <div className="flex items-center gap-3 rounded-xl border border-sky-100 bg-white px-4 py-2.5 shadow-sm shadow-sky-100/50">
+              <div className="flex items-center gap-3 rounded-xl border border-sky-200 bg-white px-4 py-2.5 shadow-sm shadow-sky-100/50">
                 <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-100 text-sky-700">
                   <User className="h-5 w-5" aria-hidden />
                 </div>
@@ -511,7 +511,7 @@ export function ApprovalsClient() {
       {rejectForId ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
           <div
-            className="w-full max-w-md rounded-2xl border border-sky-100 bg-white p-5 shadow-2xl"
+            className="w-full max-w-md rounded-2xl border border-sky-200 bg-white p-5 shadow-2xl"
             role="dialog"
             aria-labelledby="reject-title"
             aria-modal="true"

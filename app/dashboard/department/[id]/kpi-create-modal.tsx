@@ -46,18 +46,32 @@ type Props = {
   submitting: boolean;
 };
 
-type BaselineOption = "%" | "PPM" | "ea" | "건" | "명" | "k" | "억" | "시간" | "UPH";
+type BaselineOption =
+  | "%"
+  | "수율(%)"
+  | "PPM"
+  | "ea"
+  | "건"
+  | "명"
+  | "k"
+  | "억"
+  | "분(min)"
+  | "시간(hr)"
+  | "UPH";
+
 type DirectionOption = "higher" | "lower";
 
 const BASELINE_OPTIONS: BaselineOption[] = [
   "%",
+  "수율(%)",
   "PPM",
   "ea",
   "건",
   "명",
   "k",
   "억",
-  "시간",
+  "분(min)",
+  "시간(hr)",
   "UPH",
 ];
 const PERIOD_MONTH_OPTIONS = Array.from({ length: 15 }, (_, i) => i + 1);
@@ -115,12 +129,14 @@ function targetMapForRange(
 }
 
 function baselineToIndicatorType(baseline: BaselineOption): KpiIndicatorType {
+  if (baseline === "수율(%)") return "normal";
   if (baseline === "PPM") return "ppm";
   if (baseline === "ea" || baseline === "k") return "quantity";
   if (baseline === "건") return "count";
   if (baseline === "명") return "headcount";
   if (baseline === "억") return "money";
-  if (baseline === "시간") return "time";
+  if (baseline === "분(min)") return "minutes";
+  if (baseline === "시간(hr)") return "time";
   if (baseline === "UPH") return "uph";
   return "normal";
 }
@@ -132,13 +148,20 @@ function indicatorTypeToBaseline(
   if (unit && BASELINE_OPTIONS.includes(unit as BaselineOption)) {
     return unit as BaselineOption;
   }
+  if (unit === "시간") return "시간(hr)";
   if (indicatorType === "ppm") return "PPM";
   if (indicatorType === "quantity") return "k";
   if (indicatorType === "count") return "건";
   if (indicatorType === "headcount") return "명";
   if (indicatorType === "money") return "억";
-  if (indicatorType === "time") return "시간";
+  if (indicatorType === "time") return "시간(hr)";
+  if (indicatorType === "minutes") return "분(min)";
   if (indicatorType === "uph") return "UPH";
+  if (indicatorType === "normal") {
+    const u = String(unit ?? "").trim();
+    if (/수율|yield/i.test(u)) return "수율(%)";
+    return "%";
+  }
   return "%";
 }
 
@@ -363,7 +386,8 @@ export function KpiCreateModal({
     baseline === "건" ||
     baseline === "명" ||
     baseline === "억" ||
-    baseline === "시간" ||
+    baseline === "분(min)" ||
+    baseline === "시간(hr)" ||
     baseline === "UPH" ||
     evaluationType === "qualitative";
   const isQualitative = evaluationType === "qualitative";
@@ -534,8 +558,8 @@ export function KpiCreateModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-      <div className="flex max-h-[94vh] w-full max-w-[96rem] flex-col overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-2xl">
-        <div className="shrink-0 border-b border-sky-100 px-5 py-4">
+      <div className="flex max-h-[94vh] w-full max-w-[96rem] flex-col overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-2xl">
+        <div className="shrink-0 border-b border-sky-200 px-5 py-4">
           <h3 className="text-lg font-semibold text-slate-800">
             {isEditMode ? "KPI 항목 수정" : "KPI 항목 추가"}
           </h3>
@@ -604,7 +628,7 @@ export function KpiCreateModal({
               <div className={compactControlClass}>
                 <label className="mb-1 block text-xs font-medium text-slate-600">
                   측정 기준
-                  <FieldHint text="%, PPM, ea, 건, 명, k, 억 등 엑셀에 나온 단위를 그대로 선택합니다." />
+                  <FieldHint text="%, 수율(%), PPM, ea·건·명·k·억, 분(min), 시간(hr), UPH 등 프로젝트 단위에 맞게 선택합니다." />
                 </label>
                 <select
                   className={`${selectClass} w-full ${selectDisabledClass}`}
@@ -612,7 +636,13 @@ export function KpiCreateModal({
                   onChange={(e) => {
                     const nextBaseline = e.target.value as BaselineOption;
                     setBaseline(nextBaseline);
-                    setDirection(nextBaseline === "PPM" || nextBaseline === "시간" ? "lower" : "higher");
+                    setDirection(
+                      nextBaseline === "PPM" ||
+                        nextBaseline === "시간(hr)" ||
+                        nextBaseline === "분(min)"
+                        ? "lower"
+                        : "higher",
+                    );
                     const nextUsesComputed = nextBaseline !== "%";
                     if (nextUsesComputed) {
                       setTargetValueText(monthlyTargetTextByMonth[periodEndMonth] ?? "");
@@ -820,7 +850,7 @@ export function KpiCreateModal({
               ) : null}
             </div>
 
-            <div className="rounded-xl border border-sky-100 bg-sky-50/30 p-4">
+            <div className="rounded-xl border border-sky-200 bg-sky-50/30 p-4">
               <div className="mb-3">
                 <p className="text-xs font-semibold text-slate-600">월별 목표값 설정</p>
                 <p className="mt-1 text-[11px] text-slate-500">
@@ -917,7 +947,7 @@ export function KpiCreateModal({
           <p className="mt-1 text-[11px] text-slate-500">100 초과는 저장할 수 없고, 100 미만은 저장 가능(경고)합니다.</p>
         </div>
 
-        <div className="shrink-0 flex justify-end gap-2 border-t border-sky-100 px-5 py-4">
+        <div className="shrink-0 flex justify-end gap-2 border-t border-sky-200 px-5 py-4">
           {!isEditMode ? (
             <label className="mr-auto inline-flex items-center gap-2 text-xs text-slate-600">
               <input

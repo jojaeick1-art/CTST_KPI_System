@@ -226,6 +226,7 @@ export type KpiIndicatorType =
   | "count"
   | "money"
   | "time"
+  | "minutes"
   | "uph"
   | "headcount";
 
@@ -237,7 +238,15 @@ export type KpiAchievementCap = 100 | 120 | null;
 
 export function indicatorUsesComputedAchievement(
   t: KpiIndicatorType
-): t is "ppm" | "quantity" | "count" | "money" | "time" | "uph" | "headcount" {
+): t is
+  | "ppm"
+  | "quantity"
+  | "count"
+  | "money"
+  | "time"
+  | "minutes"
+  | "uph"
+  | "headcount" {
   return t !== "normal";
 }
 
@@ -249,7 +258,7 @@ function applyAchievementCap(n: number, cap: KpiAchievementCap = 100): number {
 }
 
 /**
- * 수량(k)·건수·금액(억)·시간·UPH: 목표 대비 달성률 0~100%.
+ * 수량(k)·건수·금액(억)·시간(h)·분(min)·UPH: 목표 대비 달성률 0~100%.
  * - 높을수록 좋음: 실적÷목표×100 (목표 이상이면 100% 캡)
  * - 낮을수록 좋음: 목표÷실적×100 (실적이 목표 이하면 100%에 가깝게)
  */
@@ -297,6 +306,7 @@ export function computedAchievementPercent(
     indicator === "count" ||
     indicator === "money" ||
     indicator === "time" ||
+    indicator === "minutes" ||
     indicator === "uph" ||
     indicator === "headcount"
   ) {
@@ -450,6 +460,14 @@ function parseKpiIndicatorTypeFromDb(raw: unknown): KpiIndicatorType {
   if (s === "headcount" || s === "명" || s === "인원") return "headcount";
   if (s === "time" || s === "시간" || s === "hr" || s === "hour" || s === "hours") {
     return "time";
+  }
+  if (
+    s === "minutes" ||
+    s === "minute" ||
+    s === "min" ||
+    s === "분"
+  ) {
+    return "minutes";
   }
   if (s === "uph" || s === "생산성" || s === "생산성(uph)") return "uph";
   return "normal";

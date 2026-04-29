@@ -161,9 +161,9 @@ export function ChangePasswordModal({ open, onClose, profileUsername }: Props) {
           role="dialog"
           aria-modal="true"
           aria-labelledby={titleId}
-          className="max-h-[min(90dvh,640px)] w-full max-w-md overflow-y-auto rounded-2xl border border-sky-100 bg-white shadow-xl shadow-slate-900/15"
+          className="max-h-[min(90dvh,640px)] w-full max-w-md overflow-y-auto rounded-2xl border border-sky-200 bg-white shadow-xl shadow-slate-900/15"
         >
-        <div className="flex items-start justify-between gap-3 border-b border-sky-100 px-5 py-4">
+        <div className="flex items-start justify-between gap-3 border-b border-sky-200 px-5 py-4">
           <div className="flex items-center gap-2">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-sky-50 text-sky-700">
               <KeyRound className="h-4 w-4" aria-hidden />

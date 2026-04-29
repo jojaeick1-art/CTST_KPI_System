@@ -24,3 +24,15 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Recharts KPI 차트: 막대·점선 클릭 시 브라우저/SVG 포커스 검은 테두리 제거 */
+.kpi-modal-composed-chart .recharts-wrapper,
+.kpi-modal-composed-chart .recharts-surface,
+.kpi-modal-composed-chart svg {
+  outline: none !important;
+}
+
+.kpi-modal-composed-chart svg *:focus,
+.kpi-modal-composed-chart svg *:focus-visible {
+  outline: none !important;
+}
