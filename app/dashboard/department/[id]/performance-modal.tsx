@@ -487,12 +487,10 @@ const CHART_TARGET_LINE_STROKE = "#dc2626";
 /** 차트 아래 범례 (순서 고정) */
 function KpiChartFullLegend() {
   return (
-    <div
-      className="mt-2 rounded-lg border border-sky-200 bg-white/90 px-2 py-2 shadow-sm shadow-slate-200/40 sm:px-3"
-      role="group"
+    <ul
+      className="mt-4 flex list-none flex-wrap items-center justify-center gap-x-4 gap-y-2 text-[11px] font-medium text-slate-800 sm:gap-x-5"
       aria-label="차트 범례"
     >
-      <ul className="flex list-none flex-wrap items-center justify-center gap-x-4 gap-y-2 text-[11px] font-medium text-slate-800 sm:gap-x-5">
         <li className="flex items-center gap-1.5">
           <span
             className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
@@ -557,8 +555,7 @@ function KpiChartFullLegend() {
           />
           <span>집계 전</span>
         </li>
-      </ul>
-    </div>
+    </ul>
   );
 }
 
@@ -1984,25 +1981,25 @@ export function PerformanceModal({
               </p>
             ) : null}
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
-              <div className="rounded-lg bg-slate-50 px-3 py-2">
+              <div className="rounded-lg bg-sky-100 px-3 py-2">
                 <p className="text-[11px] font-semibold text-slate-500">평가 유형</p>
                 <p className="mt-0.5 text-sm font-semibold text-slate-800">
                   {item.evaluationType === "qualitative" ? "정성 평가" : "정량 평가"}
                 </p>
               </div>
-              <div className="rounded-lg bg-slate-50 px-3 py-2">
+              <div className="rounded-lg bg-sky-100 px-3 py-2">
                 <p className="text-[11px] font-semibold text-slate-500">B/M</p>
                 <p className="mt-0.5 text-sm font-semibold text-slate-800">
                   {item.bm ? benchmarkLabel(effectiveIndicatorType, item.bm) : "—"}
                 </p>
               </div>
-              <div className="rounded-lg bg-slate-50 px-3 py-2">
+              <div className="rounded-lg bg-sky-100 px-3 py-2">
                 <p className="text-[11px] font-semibold text-slate-500">평가 기간</p>
                 <p className="mt-0.5 text-sm font-semibold text-slate-800">
                   {periodRangeLabel(item.periodStartMonth, item.periodEndMonth)}
                 </p>
               </div>
-              <div className="rounded-lg bg-slate-50 px-3 py-2">
+              <div className="rounded-lg bg-sky-100 px-3 py-2">
                 <p className="text-[11px] font-semibold text-slate-500">최종 목표값</p>
                 <p className="mt-0.5 text-sm font-semibold text-slate-800">
                   {displayedFinalTargetValue !== null &&
@@ -2011,13 +2008,13 @@ export function PerformanceModal({
                     : "—"}
                 </p>
               </div>
-              <div className="rounded-lg bg-slate-50 px-3 py-2">
+              <div className="rounded-lg bg-sky-100 px-3 py-2">
                 <p className="text-[11px] font-semibold text-slate-500">가중치</p>
                 <p className="mt-0.5 text-sm font-semibold text-slate-800">
                   {item.weight || "—"}
                 </p>
               </div>
-              <div className="rounded-lg bg-slate-50 px-3 py-2">
+              <div className="rounded-lg bg-sky-100 px-3 py-2">
                 <p className="text-[11px] font-semibold text-slate-500">담당자</p>
                 <p className="mt-0.5 text-sm font-semibold text-slate-800">
                   {item.owner || "—"}
