@@ -21,6 +21,7 @@ const KO_ROLE: Record<string, ProfileRole> = {
   대표: "ceo",
   팀장: "team_leader",
   그룹장: "group_leader",
+  "그룹장/팀장": "group_team_leader",
   수석: "principal",
   책임: "manager",
   선임: "senior",

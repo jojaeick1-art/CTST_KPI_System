@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bar,
   CartesianGrid,
@@ -312,6 +312,15 @@ function findRowByMonth(
   m: MonthKey
 ): ItemPerformanceRow | null {
   return rows.find((r) => halfTypeLabelToMonth(r.half_type) === m) ?? null;
+}
+
+function buildRowByMonthMap(rows: ItemPerformanceRow[]): Map<MonthKey, ItemPerformanceRow> {
+  const map = new Map<MonthKey, ItemPerformanceRow>();
+  for (const r of rows) {
+    const mk = halfTypeLabelToMonth(r.half_type);
+    if (mk !== null && !map.has(mk)) map.set(mk, r);
+  }
+  return map;
 }
 
 function findLatestPriorRowWithSubmittedValue(
@@ -805,6 +814,8 @@ export function PerformanceModal({
     useState<KpiAggregationType>("monthly");
   const [uploading, setUploading] = useState(false);
   const [liveRows, setLiveRows] = useState<ItemPerformanceRow[]>([]);
+  const liveRowsRef = useRef<ItemPerformanceRow[]>([]);
+  liveRowsRef.current = liveRows;
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [rejectReasonDraft, setRejectReasonDraft] = useState("");
   const [downloadingEvidence, setDownloadingEvidence] = useState(false);
@@ -817,7 +828,11 @@ export function PerformanceModal({
   const effectiveIndicatorType = useMemo(
     () =>
       kpiItem
-        ? resolveEffectiveIndicatorTypeForUi(kpiItem.indicatorType, kpiItem.bm)
+        ? resolveEffectiveIndicatorTypeForUi(
+            kpiItem.indicatorType,
+            kpiItem.bm,
+            kpiItem.unit
+          )
         : "normal",
     [kpiItem]
   );
@@ -1471,10 +1486,12 @@ export function PerformanceModal({
 
   const syncEditorFromMonth = useCallback(
     (mo: MonthKey) => {
-      const row = findRowByMonth(liveRows, mo);
+      const rows = liveRowsRef.current;
+      const rb = buildRowByMonthMap(rows);
+      const row = findRowByMonth(rows, mo);
       const copied = row
         ? null
-        : findLatestPriorRowWithSubmittedValue(rowByMonth, mo, displayMonthList);
+        : findLatestPriorRowWithSubmittedValue(rb, mo, displayMonthList);
       const sourceRow = row ?? copied?.row ?? null;
       if (normalMetricEntryActive) {
         setEditorRate(
@@ -1499,15 +1516,45 @@ export function PerformanceModal({
       setEditorAggregationType(
         resolvePerformanceAggregationType(row, kpiItem?.aggregationType)
       );
-      setEditorFiles([]);
     },
-    [liveRows, normalMetricEntryActive, rowByMonth, displayMonthList, kpiItem?.aggregationType]
+    [normalMetricEntryActive, displayMonthList, kpiItem?.aggregationType]
   );
 
+  /** 편집 월만 바뀔 때 대기 중인 첨부 초기화(실적 쿼리 30초 refetch 때는 유지) */
+  const prevEditorMonthForPendingFilesRef = useRef<MonthKey | null>(null);
   useEffect(() => {
-    if (mode !== "editor") return;
+    if (mode !== "editor") {
+      prevEditorMonthForPendingFilesRef.current = null;
+      return;
+    }
+    const prev = prevEditorMonthForPendingFilesRef.current;
+    if (prev !== null && prev !== editorMonth) {
+      setEditorFiles([]);
+    }
+    prevEditorMonthForPendingFilesRef.current = editorMonth;
+  }, [mode, editorMonth]);
+
+  /** KPI·편집월·모달 열림 조합당 1회 폼 로드 (실적 refetch 시에는 재동기화하지 않음 — 입력·첨부 유지) */
+  const editorFormBootstrapKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isOpen) {
+      editorFormBootstrapKeyRef.current = null;
+      return;
+    }
+    if (mode !== "editor" || !kpiItem) return;
+    if (!perfQuery.isSuccess) return;
+    const key = `${kpiItem.id}:${editorMonth}`;
+    if (editorFormBootstrapKeyRef.current === key) return;
+    editorFormBootstrapKeyRef.current = key;
     syncEditorFromMonth(editorMonth);
-  }, [mode, editorMonth, liveRows, syncEditorFromMonth]);
+  }, [
+    isOpen,
+    mode,
+    editorMonth,
+    kpiItem?.id,
+    perfQuery.isSuccess,
+    syncEditorFromMonth,
+  ]);
 
   if (!isOpen || !kpiItem) return null;
   const item = kpiItem;

@@ -149,7 +149,11 @@ function benchmarkValueLabel(item: DepartmentKpiDetailItem): string {
   const parsed = parseBenchmarkValue(item.bm);
   if (parsed === null) return item.bm;
 
-  const indicatorType = resolveEffectiveIndicatorTypeForUi(item.indicatorType, item.bm);
+  const indicatorType = resolveEffectiveIndicatorTypeForUi(
+    item.indicatorType,
+    item.bm,
+    item.unit
+  );
   if (indicatorType === "ppm") return `${formatKoMax2Decimals(parsed)} ppm`;
   if (indicatorType === "quantity") return `${formatKoMax2Decimals(parsed)} k`;
   if (indicatorType === "count") return `${formatKoMax2Decimals(parsed)} 건`;

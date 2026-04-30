@@ -14,7 +14,7 @@
 --   indicator_type text not null default 'normal' check (indicator_type in ('normal', 'ppm', 'quantity', 'count')),
 --   target_value double precision null,  -- 자동 계산 지표의 목표값
 --   evaluation_type text, -- quantitative | qualitative
---   unit text, -- %, 수율(%), PPM, ea, 건, 명, k, 억, 분(min), 시간(hr), UPH
+--   unit text, -- %, 수율(%), PPM, ea, 건, 명, k, 억, 분(min), 시간(hr), UPH (CHECK 는 migrations 참고)
 --   target_direction text, -- up | down | na
 --   qualitative_calc_type text, -- progress | completion
 --   aggregation_type text, -- monthly | cumulative

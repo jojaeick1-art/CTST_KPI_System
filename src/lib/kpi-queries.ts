@@ -475,15 +475,21 @@ function parseKpiIndicatorTypeFromDb(raw: unknown): KpiIndicatorType {
 
 /**
  * DB에 `normal`만 저장된 레거시 금액 KPI — 측정기준(bm)에 「금액」이 있으면 UI·저장은 money로 맞춤.
- * (장기적으로는 `kpi_items.indicator_type = money` + 마이그레이션 권장)
+ * `unit` 이 분(min)·시간(hr)·UPH 이면 indicator_type 이 아직 normal 이더라도 UI 계산 방식을 맞춤.
+ * (DB 마이그레이션으로 unit 은 분(min)·시간(hr) 으로 정규화; 레거시 분·시간 문자열은 일시 호환)
  */
 export function resolveEffectiveIndicatorTypeForUi(
   indicatorType: KpiIndicatorType,
-  bm: string | null | undefined
+  bm: string | null | undefined,
+  unit?: string | null
 ): KpiIndicatorType {
   if (indicatorType !== "normal") return indicatorType;
   if (String(bm ?? "").toLowerCase().includes("금액")) return "money";
   if (String(bm ?? "").includes("명")) return "headcount";
+  const u = String(unit ?? "").trim();
+  if (u === "분(min)" || u === "분") return "minutes";
+  if (u === "시간(hr)" || u === "시간") return "time";
+  if (u === "UPH") return "uph";
   return "normal";
 }
 
@@ -3467,7 +3473,7 @@ export async function updateKpiItemIndicatorSettings(input: {
   const t = input.targetPpm;
   if (t === null || !Number.isFinite(t) || t <= 0) {
     throw new Error(
-      "PPM·수량(k)·건수·금액(억)·시간(h)·UPH 방식은 목표값을 0보다 큰 숫자로 입력해 주세요."
+      "PPM·수량(k)·건수·금액(억)·시간(h)·분(min)·UPH 방식은 목표값을 0보다 큰 숫자로 입력해 주세요."
     );
   }
   const { error } = await supabase

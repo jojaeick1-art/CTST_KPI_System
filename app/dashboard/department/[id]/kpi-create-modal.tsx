@@ -149,6 +149,7 @@ function indicatorTypeToBaseline(
     return unit as BaselineOption;
   }
   if (unit === "시간") return "시간(hr)";
+  if (unit === "분") return "분(min)";
   if (indicatorType === "ppm") return "PPM";
   if (indicatorType === "quantity") return "k";
   if (indicatorType === "count") return "건";

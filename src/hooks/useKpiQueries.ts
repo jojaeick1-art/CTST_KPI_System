@@ -63,6 +63,20 @@ function isParkJaejunProfile(row: {
   return username === "pli" || fullName === "박재준";
 }
 
+/** 연구소 RAmosR&D: DB 는 `그룹장` 유지, UI·실적 워크플로는 그룹장+팀장+프로 병합(group_team_leader) */
+function isRamosResearchProfile(row: {
+  username?: unknown;
+  full_name?: unknown;
+}): boolean {
+  const username = String(row.username ?? "").trim().toLowerCase();
+  const fullName = String(row.full_name ?? "").trim();
+  return (
+    username === "ramosr&d" ||
+    fullName === "RAmosR&D" ||
+    fullName.toLowerCase() === "ramosr&d"
+  );
+}
+
 /** React Query 키 — Auth 동기화 컴포넌트에서 무효화 시 동일 키 사용 */
 export const DASHBOARD_PROFILE_QUERY_KEY = [
   "supabase",
@@ -101,9 +115,10 @@ export async function fetchDashboardProfile(): Promise<DashboardProfileData | nu
 
   const dbRoleRaw =
     row.role === null || row.role === undefined ? "" : String(row.role);
-  const normalizedRole = isParkJaejunProfile(row)
-    ? "group_team_leader"
-    : normalizeRole(dbRoleRaw);
+  const normalizedRole =
+    isParkJaejunProfile(row) || isRamosResearchProfile(row)
+      ? "group_team_leader"
+      : normalizeRole(dbRoleRaw);
   logProfileRoleSync({
     phase: "fetchDashboardProfile",
     authUid: session.user.id,
