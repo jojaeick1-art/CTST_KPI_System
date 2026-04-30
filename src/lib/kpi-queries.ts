@@ -571,6 +571,9 @@ type PerformanceMonthlyCell = {
   bubble_note?: string | null;
   evidence_url?: string | null;
   evidence_urls?: string[] | null;
+  /** `evidence_urls`·`evidence_url`과 같은 순서·단일 시 첫 파일 — 표시·다운로드 파일명(원본) */
+  evidence_original_filenames?: string[] | null;
+  evidence_original_filename?: string | null;
   aggregation_type?: KpiAggregationType | string | null;
   rejection_reason?: string | null;
 };
@@ -1344,6 +1347,45 @@ function evidenceStoredValuesFromCell(
   ]);
 }
 
+/** 메타에 저장할 원본 파일명 — 경로 침해·과도 길이만 제한(한글·공백은 유지) */
+function sanitizeEvidenceOriginalFilename(name: string): string {
+  const t = String(name).trim();
+  if (!t) return "evidence";
+  const noPath = t.replace(/^.*[/\\]/, "");
+  const safe = noPath
+    .replace(/[/\\]/g, "_")
+    .replace(/\.\./g, "_")
+    .trim();
+  const bounded = safe.length > 180 ? safe.slice(0, 180) : safe;
+  return bounded || "evidence";
+}
+
+function evidenceOriginalNamesFromCell(
+  cell: PerformanceMonthlyCell | undefined
+): string[] {
+  const urls = evidenceStoredValuesFromCell(cell);
+  if (urls.length === 0) return [];
+  const arr = cell?.evidence_original_filenames;
+  if (Array.isArray(arr) && arr.length > 0) {
+    return urls.map((u, i) => {
+      const raw = arr[i];
+      const fromMeta =
+        typeof raw === "string" && raw.trim()
+          ? sanitizeEvidenceOriginalFilename(raw)
+          : "";
+      return fromMeta || evidenceFileNameFromStoredValue(u);
+    });
+  }
+  const single = cell?.evidence_original_filename;
+  if (typeof single === "string" && single.trim()) {
+    const sanitized = sanitizeEvidenceOriginalFilename(single);
+    return urls.map((u, i) =>
+      i === 0 ? sanitized : evidenceFileNameFromStoredValue(u)
+    );
+  }
+  return urls.map((u) => evidenceFileNameFromStoredValue(u));
+}
+
 function evidencePathsFromStoredValues(rawValues: unknown): string[] {
   return normalizeEvidenceStoredValues(rawValues)
     .map((value) => evidencePathFromStoredValue(value))
@@ -1956,6 +1998,8 @@ export type ItemPerformanceRow = {
   evidence_url: string | null;
   evidence_paths: string[];
   evidence_urls: string[];
+  /** `evidence_paths`와 동일 인덱스 — UI·다운로드 표시명(원본 파일명) */
+  evidence_original_filenames: string[];
   aggregation_type: KpiAggregationType | null;
   description: string | null;
   bubble_note: string | null;
@@ -2151,6 +2195,7 @@ function mapTargetRecordToItemPerformanceRow(
   const remarks =
     typeof t.remarks === "string" ? t.remarks : null;
   const evidenceValues = normalizeEvidenceStoredValues(t.evidence_url);
+  const paths = evidencePathsFromStoredValues(evidenceValues);
   return {
     id,
     half_type: ht,
@@ -2163,8 +2208,11 @@ function mapTargetRecordToItemPerformanceRow(
         ? t.evidence_url.trim()
         : null,
     evidence_url: toEvidencePublicUrl(supabase, t.evidence_url),
-    evidence_paths: evidencePathsFromStoredValues(evidenceValues),
+    evidence_paths: paths,
     evidence_urls: evidencePublicUrlsFromStoredValues(supabase, evidenceValues),
+    evidence_original_filenames: paths.map((p) =>
+      evidenceFileNameFromStoredValue(p)
+    ),
     aggregation_type: parseAggregationType(t.aggregation_type),
     description: remarks,
     bubble_note: null,
@@ -2241,6 +2289,7 @@ async function buildItemPerformanceRowsFromKpiTargets(
           : null;
       const evidenceValues = evidenceStoredValuesFromCell(cell);
       const ev = evidenceValues[0] ?? null;
+      const paths = evidencePathsFromStoredValues(evidenceValues);
       return {
         id,
         half_type: monthToHalfTypeLabel(m),
@@ -2250,8 +2299,9 @@ async function buildItemPerformanceRowsFromKpiTargets(
         evidence_path:
           typeof ev === "string" && ev.trim() ? ev.trim() : null,
         evidence_url: toEvidencePublicUrl(supabase, ev),
-        evidence_paths: evidencePathsFromStoredValues(evidenceValues),
+        evidence_paths: paths,
         evidence_urls: evidencePublicUrlsFromStoredValues(supabase, evidenceValues),
+        evidence_original_filenames: evidenceOriginalNamesFromCell(cell),
         aggregation_type: parseAggregationType(cell?.aggregation_type),
         description:
           typeof cell?.remarks === "string" ? cell.remarks : null,
@@ -2271,6 +2321,7 @@ async function buildItemPerformanceRowsFromKpiTargets(
   return KPI_MONTHS.map((m) => {
     const src = m <= 6 ? h1s : h2s;
     const evidenceValues = normalizeEvidenceStoredValues(src.evidence_url);
+    const pathsLeg = evidencePathsFromStoredValues(evidenceValues);
     const q = monthToLegacyQuarter(m) as QuarterLabel;
     const rowId =
       m <= 6
@@ -2297,8 +2348,11 @@ async function buildItemPerformanceRowsFromKpiTargets(
           ? src.evidence_url.trim()
           : null,
       evidence_url: toEvidencePublicUrl(supabase, src.evidence_url),
-      evidence_paths: evidencePathsFromStoredValues(evidenceValues),
+      evidence_paths: pathsLeg,
       evidence_urls: evidencePublicUrlsFromStoredValues(supabase, evidenceValues),
+      evidence_original_filenames: pathsLeg.map((p) =>
+        evidenceFileNameFromStoredValue(p)
+      ),
       aggregation_type: parseAggregationType(src.aggregation_type),
       description:
         typeof src.remarks === "string" ? src.remarks : null,
@@ -2403,9 +2457,11 @@ async function findOrCreateKpiTargetRowIdForYear(
 }
 
 /**
- * Supabase Storage 객체 키에 쓸 베이스 파일명 — 한글·공백·일반 문장부호 유지,
- * 경로 침해(/, \\)·제어 문자·양방향 재정의 문자만 제거.
- * 객체 경로: `kpi/{targetId}/{베이스}_{구분6자}.ext` — 구분 6자 규칙은 `kpiEvidenceDisambiguator6` 참고.
+ * Supabase Storage 객체 키용 베이스 파일명.
+ * Storage는 키에 비ASCII·공백·괄호 등이 섞이면 `Invalid key`를 반환할 수 있어,
+ * `a-zA-Z0-9._-`만 남기고 나머지는 `_`로 통일한 뒤 압축한다.
+ * 원본명이 모두 한글 등이면 `evidence`로 두고, 뒤의 `_{구분6자}`로 충돌을 피한다.
+ * 객체 경로: `kpi/{targetId}/{베이스}_{구분6자}.ext`
  */
 
 const KPI_EVIDENCE_B36 = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -2445,16 +2501,17 @@ function kpiEvidenceDisambiguator6(): string {
 }
 
 function sanitizeKpiEvidenceBaseName(raw: string, maxChars: number): string {
-  let s = raw.normalize("NFC").trim();
+  let s = raw.normalize("NFKD").replace(/\p{M}/gu, "").trim();
   if (!s) return "evidence";
   s = s
     .replace(/[\u0000-\u001f\u007f\u202d\u202e]/g, "")
     .replace(/[/\\]/g, "_")
     .replace(/\.\./g, "_");
-  s = s.replace(/^\.+|\.+$/g, "").trim();
+  s = s.replace(/[^a-zA-Z0-9._-]+/g, "_");
+  s = s.replace(/_{2,}/g, "_").replace(/^\.+|\.+$|^_|_$/g, "").trim();
   if (!s) return "evidence";
   if (s.length > maxChars) {
-    s = s.slice(0, maxChars).trim();
+    s = s.slice(0, maxChars).replace(/_+$/g, "").trim();
   }
   return s || "evidence";
 }
@@ -2881,6 +2938,8 @@ export async function updatePerformanceMonthlyEvidenceUrl(input: {
   month: MonthKey;
   evidenceUrl?: string;
   evidenceUrls?: string[];
+  /** `evidenceUrls`와 동일한 순서의 사용자 기기 원본 파일명 */
+  evidenceOriginalFilenames?: string[];
 }): Promise<void> {
   const supabase = createBrowserSupabase();
   const evidenceUrls = normalizeEvidenceStoredValues([
@@ -2916,11 +2975,21 @@ export async function updatePerformanceMonthlyEvidenceUrl(input: {
     }
   }
   const key = String(input.month);
-  pm[key] = {
+  const nextCell: PerformanceMonthlyCell = {
     ...(pm[key] ?? {}),
     evidence_url: firstEvidenceUrl,
     evidence_urls: evidenceUrls,
   };
+  if (input.evidenceOriginalFilenames !== undefined) {
+    nextCell.evidence_original_filenames = input.evidenceOriginalFilenames.map(
+      (n) => sanitizeEvidenceOriginalFilename(n)
+    );
+    delete nextCell.evidence_original_filename;
+  } else {
+    delete nextCell.evidence_original_filenames;
+    delete nextCell.evidence_original_filename;
+  }
+  pm[key] = nextCell;
   const filtered = await filterPayloadToExistingKpiTargetColumns({
     id: tid,
     performance_monthly: pm,

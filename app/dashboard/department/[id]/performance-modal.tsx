@@ -1383,6 +1383,7 @@ export function PerformanceModal({
     selectedRow?.evidence_path ??
     selectedRow?.evidence_url ??
     null;
+  const originalNames = selectedRow?.evidence_original_filenames;
   const selectedEvidenceItems = (
     selectedRow?.evidence_paths?.length
       ? selectedRow.evidence_paths
@@ -1392,10 +1393,12 @@ export function PerformanceModal({
           ? [selectedEvidenceStored]
           : []
   )
-    .map((storedValue) => ({
+    .map((storedValue, idx) => ({
       storedValue,
       path: evidencePathFromStoredValue(storedValue),
-      fileName: evidenceFileNameFromStoredValue(storedValue),
+      fileName:
+        originalNames?.[idx]?.trim() ||
+        evidenceFileNameFromStoredValue(storedValue),
     }))
     .filter((item) => Boolean(item.path));
   const selectedStatus = selectedRow?.approval_step ?? null;
@@ -1421,7 +1424,10 @@ export function PerformanceModal({
     return () => clearTimeout(t);
   }, [toast.open]);
 
-  async function handleDownloadEvidence(storedValue: string) {
+  async function handleDownloadEvidence(
+    storedValue: string,
+    downloadFileName?: string | null
+  ) {
     if (!storedValue) {
       notify("info", "보고서가 없습니다.");
       return;
@@ -1431,6 +1437,30 @@ export function PerformanceModal({
       notify("error", "다운로드용 저장 경로를 확인할 수 없습니다.");
       return;
     }
+    const preferredName =
+      (downloadFileName?.trim() && downloadFileName.trim()) ||
+      evidenceFileNameFromStoredValue(storedValue);
+
+    async function tryDownloadWithPreferredName(url: string): Promise<boolean> {
+      try {
+        const res = await fetch(url, { mode: "cors" });
+        if (!res.ok) return false;
+        const blob = await res.blob();
+        const objUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = objUrl;
+        a.download = preferredName;
+        a.rel = "noopener";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.setTimeout(() => URL.revokeObjectURL(objUrl), 60_000);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
     try {
       setDownloadingEvidence(true);
       const bridge = await notifyWidgetUploadToTest(relPath);
@@ -1439,6 +1469,7 @@ export function PerformanceModal({
           bridge.bucket.trim() || getKpiWebBridgeTestBucket();
         const testUrl = storageObjectPublicUrl(bucket, bridge.path);
         if (testUrl) {
+          if (await tryDownloadWithPreferredName(testUrl)) return;
           window.open(testUrl, "_blank", "noopener,noreferrer");
           return;
         }
@@ -1449,6 +1480,15 @@ export function PerformanceModal({
 
       const fallbackUrl = resolveEvidencePublicUrl(storedValue);
       if (fallbackUrl) {
+        if (await tryDownloadWithPreferredName(fallbackUrl)) {
+          if (!bridge.ok) {
+            notify(
+              "info",
+              "웹 브리지를 쓰지 못해 Supabase(kpi-evidence) 원본 링크로 받았습니다."
+            );
+          }
+          return;
+        }
         window.open(fallbackUrl, "_blank", "noopener,noreferrer");
         if (!bridge.ok) {
           notify(
@@ -1805,6 +1845,7 @@ export function PerformanceModal({
           targetId,
           month: editorMonth,
           evidenceUrls: uploadedPaths,
+          evidenceOriginalFilenames: editorFiles.map((f) => f.name),
         });
       }
 
@@ -2314,7 +2355,9 @@ export function PerformanceModal({
                       </p>
                       <button
                         type="button"
-                        onClick={() => void handleDownloadEvidence(item.storedValue)}
+                        onClick={() =>
+                          void handleDownloadEvidence(item.storedValue, item.fileName)
+                        }
                         disabled={downloadingEvidence}
                         className="inline-flex items-center gap-1 rounded-lg border border-sky-200 bg-white px-3 py-1.5 text-xs font-semibold text-sky-800 hover:bg-sky-50 disabled:opacity-50"
                       >
