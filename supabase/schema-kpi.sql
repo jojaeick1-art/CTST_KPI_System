@@ -11,10 +11,10 @@
 --   dept_id uuid not null references public.departments (id) on delete cascade,
 --   main_topic text,
 --   sub_topic text,  -- KPI 항목명 등
---   indicator_type text not null default 'normal' check (indicator_type in ('normal', 'ppm', 'quantity', 'count')),
+--   indicator_type text not null default 'normal' check (indicator_type in ('normal', 'ppm', 'quantity', 'count', 'money', 'time', 'minutes', 'uph', 'headcount', 'cpk')),
 --   target_value double precision null,  -- 자동 계산 지표의 목표값
 --   evaluation_type text, -- quantitative | qualitative
---   unit text, -- %, 수율(%), PPM, ea, 건, 명, k, 억, 분(min), 시간(hr), UPH (CHECK 는 migrations 참고)
+--   unit text, -- %, 수율(%), PPM, ea, 건, 명, k, 억, 분(min), 시간(hr), UPH, Cpk (CHECK 는 migrations 참고)
 --   target_direction text, -- up | down | na
 --   qualitative_calc_type text, -- progress | completion
 --   aggregation_type text, -- monthly | cumulative

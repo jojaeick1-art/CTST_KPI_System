@@ -69,6 +69,11 @@ import {
   normalizeRole,
 } from "@/src/lib/rbac";
 import { AppToast, type ToastState } from "@/src/components/ui/toast";
+import {
+  useKpiPerformances,
+  useUpsertMonthPerformance,
+  useWorkflowReviewMutation,
+} from "@/src/hooks/useKpiQueries";
 
 type KpiModalItem = {
   id: string;
@@ -116,6 +121,7 @@ function computedActualLabel(t: KpiIndicatorType): string {
   if (t === "time") return "실적 시간(h)";
   if (t === "minutes") return "실적 시간(분)";
   if (t === "uph") return "실적 UPH";
+  if (t === "cpk") return "실적 Cpk";
   return "실적";
 }
 
@@ -128,6 +134,7 @@ function computedTargetLabel(t: KpiIndicatorType): string {
   if (t === "time") return "목표 시간(h)";
   if (t === "minutes") return "목표 시간(분)";
   if (t === "uph") return "목표 UPH";
+  if (t === "cpk") return "목표 Cpk";
   return "목표";
 }
 
@@ -154,6 +161,9 @@ function computedFormulaHint(t: KpiIndicatorType): string {
   if (t === "uph") {
     return "UPH: 높을수록 좋음이면 실적÷목표×100, 낮을수록 좋음이면 목표÷실적×100 (상한 100%).";
   }
+  if (t === "cpk") {
+    return "Cpk: 높을수록 좋음이면 실적÷목표×100, 낮을수록 좋음이면 목표÷실적×100 (상한 100%).";
+  }
   return "";
 }
 
@@ -166,13 +176,9 @@ function computedKindSummaryKo(t: KpiIndicatorType): string {
   if (t === "time") return "시간(h)";
   if (t === "minutes") return "분(min)";
   if (t === "uph") return "생산성(UPH)";
+  if (t === "cpk") return "공정능력(Cpk)";
   return "";
 }
-import {
-  useKpiPerformances,
-  useUpsertMonthPerformance,
-  useWorkflowReviewMutation,
-} from "@/src/hooks/useKpiQueries";
 
 type ChartDatum = {
   periodLabel: string;
@@ -237,6 +243,7 @@ function chartBarTopLabel(
         if (indicatorType === "time") return `${formatKoMax2Decimals(n)}h`;
         if (indicatorType === "minutes") return `${formatKoMax2Decimals(n)} min`;
         if (indicatorType === "uph") return `${formatKoMax2Decimals(n)} UPH`;
+        if (indicatorType === "cpk") return `${formatKoMax2Decimals(n)} Cpk`;
       }
     }
     if (rawSubmittedPercent !== null && rawSubmittedPercent !== undefined) {
@@ -293,6 +300,15 @@ function parseNonNegativeDecimal(v: string): number | null {
   const n = Number(t);
   if (!Number.isFinite(n) || n < 0) return null;
   return n;
+}
+
+/** 월 목표 연동 normal: 정성은 화면에서 editorActualPpm만 쓰고, 정량은 editorRate를 씀 */
+function normalMonthlyActualInputForSave(
+  isComputedItem: boolean,
+  editorRate: string,
+  editorActualPpm: string
+): string {
+  return isComputedItem ? editorActualPpm : editorRate;
 }
 
 function parseBenchmarkValue(raw: string | null | undefined): number | null {
@@ -702,6 +718,7 @@ function chartValueLabel(indicatorType: KpiIndicatorType, value: number): string
   if (indicatorType === "time") return `${formatKoMax2Decimals(value)} h`;
   if (indicatorType === "minutes") return `${formatKoMax2Decimals(value)} min`;
   if (indicatorType === "uph") return `${formatKoMax2Decimals(value)} UPH`;
+  if (indicatorType === "cpk") return `${formatKoMax2Decimals(value)} Cpk`;
   return formatKoPercentMax2(value);
 }
 
@@ -778,6 +795,7 @@ function chartVerticalAxisHint(
   if (t === "time") return "세로축: 시간(h).";
   if (t === "minutes") return "세로축: 분(min).";
   if (t === "uph") return "세로축: 생산성(UPH).";
+  if (t === "cpk") return "세로축: 공정능력 Cpk(목표·실적 동일 단위).";
   return "";
 }
 
@@ -1711,7 +1729,9 @@ export function PerformanceModal({
       normalMonthlyTargetEditor !== null &&
       normalMonthlyTargetEditor >= 0
     ) {
-      const metric = parseNonNegativeDecimal(editorRate);
+      const metric = parseNonNegativeDecimal(
+        normalMonthlyActualInputForSave(isComputedItem, editorRate, editorActualPpm)
+      );
       if (metric === null) {
         notify("error", "해당 월의 실적 지표값을 입력해 주세요.");
         return;
@@ -1778,11 +1798,7 @@ export function PerformanceModal({
         setUploading(true);
         const uploadedPaths: string[] = [];
         for (const file of editorFiles) {
-          const uploaded = await uploadEvidenceFile(
-            targetId,
-            file,
-            `m${editorMonth}`
-          );
+          const uploaded = await uploadEvidenceFile(targetId, file);
           uploadedPaths.push(uploaded.fullPath);
         }
         await updatePerformanceMonthlyEvidenceUrl({
@@ -2517,10 +2533,12 @@ export function PerformanceModal({
                           : effectiveIndicatorType === "minutes"
                             ? "분(min) 단위 숫자"
                             : effectiveIndicatorType === "uph"
-                            ? "UPH 숫자"
-                        : effectiveIndicatorType === "money"
-                          ? "억 단위 숫자"
-                          : "0 이상"
+                              ? "UPH 숫자"
+                              : effectiveIndicatorType === "cpk"
+                                ? "Cpk 값(무차원)"
+                                : effectiveIndicatorType === "money"
+                                  ? "억 단위 숫자"
+                                  : "0 이상"
                     }
                   />
                   <p className="mt-1 text-[11px] text-slate-500">
@@ -2636,7 +2654,13 @@ export function PerformanceModal({
                   (isComputedItem &&
                     parseNonNegativeDecimal(editorActualPpm) === null) ||
                   (normalMetricEntryActive &&
-                    parseNonNegativeDecimal(editorRate) === null) ||
+                    parseNonNegativeDecimal(
+                      normalMonthlyActualInputForSave(
+                        isComputedItem,
+                        editorRate,
+                        editorActualPpm
+                      )
+                    ) === null) ||
                   (!isComputedItem &&
                     !normalMetricEntryActive &&
                     !editorRate.trim())
@@ -2666,7 +2690,13 @@ export function PerformanceModal({
                     (isComputedItem &&
                       parseNonNegativeDecimal(editorActualPpm) === null) ||
                     (normalMetricEntryActive &&
-                      parseNonNegativeDecimal(editorRate) === null) ||
+                      parseNonNegativeDecimal(
+                        normalMonthlyActualInputForSave(
+                          isComputedItem,
+                          editorRate,
+                          editorActualPpm
+                        )
+                      ) === null) ||
                     (!isComputedItem &&
                       !normalMetricEntryActive &&
                       !editorRate.trim())

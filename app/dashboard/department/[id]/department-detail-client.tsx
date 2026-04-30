@@ -72,6 +72,8 @@ function indicatorBadgeClass(t: KpiIndicatorType): string {
       return "bg-rose-50 text-rose-800 ring-rose-200";
     case "uph":
       return "bg-cyan-50 text-cyan-800 ring-cyan-200";
+    case "cpk":
+      return "bg-lime-50 text-lime-900 ring-lime-200";
     case "headcount":
       return "bg-fuchsia-50 text-fuchsia-800 ring-fuchsia-200";
     default:
@@ -88,6 +90,7 @@ function indicatorModeShortLabel(t: KpiIndicatorType): string {
   if (t === "time") return "시간(h)";
   if (t === "minutes") return "분(min)";
   if (t === "uph") return "생산성(UPH)";
+  if (t === "cpk") return "공정능력(Cpk)";
   if (t === "headcount") return "인원(명)";
   return "—";
 }
@@ -162,6 +165,7 @@ function benchmarkValueLabel(item: DepartmentKpiDetailItem): string {
   if (indicatorType === "time") return `${formatKoMax2Decimals(parsed)} h`;
   if (indicatorType === "minutes") return `${formatKoMax2Decimals(parsed)} min`;
   if (indicatorType === "uph") return `${formatKoMax2Decimals(parsed)} UPH`;
+  if (indicatorType === "cpk") return `${formatKoMax2Decimals(parsed)} Cpk`;
   return formatKoPercentMax2(parsed);
 }
 

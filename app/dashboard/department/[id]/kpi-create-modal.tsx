@@ -57,7 +57,8 @@ type BaselineOption =
   | "억"
   | "분(min)"
   | "시간(hr)"
-  | "UPH";
+  | "UPH"
+  | "Cpk";
 
 type DirectionOption = "higher" | "lower";
 
@@ -73,6 +74,7 @@ const BASELINE_OPTIONS: BaselineOption[] = [
   "분(min)",
   "시간(hr)",
   "UPH",
+  "Cpk",
 ];
 const PERIOD_MONTH_OPTIONS = Array.from({ length: 15 }, (_, i) => i + 1);
 
@@ -138,6 +140,7 @@ function baselineToIndicatorType(baseline: BaselineOption): KpiIndicatorType {
   if (baseline === "분(min)") return "minutes";
   if (baseline === "시간(hr)") return "time";
   if (baseline === "UPH") return "uph";
+  if (baseline === "Cpk") return "cpk";
   return "normal";
 }
 
@@ -158,6 +161,7 @@ function indicatorTypeToBaseline(
   if (indicatorType === "time") return "시간(hr)";
   if (indicatorType === "minutes") return "분(min)";
   if (indicatorType === "uph") return "UPH";
+  if (indicatorType === "cpk") return "Cpk";
   if (indicatorType === "normal") {
     const u = String(unit ?? "").trim();
     if (/수율|yield/i.test(u)) return "수율(%)";
@@ -390,6 +394,7 @@ export function KpiCreateModal({
     baseline === "분(min)" ||
     baseline === "시간(hr)" ||
     baseline === "UPH" ||
+    baseline === "Cpk" ||
     evaluationType === "qualitative";
   const isQualitative = evaluationType === "qualitative";
   const unitSuffix = baseline;
@@ -629,7 +634,7 @@ export function KpiCreateModal({
               <div className={compactControlClass}>
                 <label className="mb-1 block text-xs font-medium text-slate-600">
                   측정 기준
-                  <FieldHint text="%, 수율(%), PPM, ea·건·명·k·억, 분(min), 시간(hr), UPH 등 프로젝트 단위에 맞게 선택합니다." />
+                  <FieldHint text="%, 수율(%), PPM, ea·건·명·k·억, 분(min), 시간(hr), UPH, Cpk 등 프로젝트 단위에 맞게 선택합니다." />
                 </label>
                 <select
                   className={`${selectClass} w-full ${selectDisabledClass}`}

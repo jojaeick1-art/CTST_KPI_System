@@ -228,7 +228,8 @@ export type KpiIndicatorType =
   | "time"
   | "minutes"
   | "uph"
-  | "headcount";
+  | "headcount"
+  | "cpk";
 
 export type KpiEvaluationType = "quantitative" | "qualitative";
 export type KpiQualitativeCalcType = "progress" | "completion";
@@ -246,7 +247,8 @@ export function indicatorUsesComputedAchievement(
   | "time"
   | "minutes"
   | "uph"
-  | "headcount" {
+  | "headcount"
+  | "cpk" {
   return t !== "normal";
 }
 
@@ -258,7 +260,7 @@ function applyAchievementCap(n: number, cap: KpiAchievementCap = 100): number {
 }
 
 /**
- * 수량(k)·건수·금액(억)·시간(h)·분(min)·UPH: 목표 대비 달성률 0~100%.
+ * 수량(k)·건수·금액(억)·시간(h)·분(min)·UPH·Cpk: 목표 대비 달성률 0~100%.
  * - 높을수록 좋음: 실적÷목표×100 (목표 이상이면 100% 캡)
  * - 낮을수록 좋음: 목표÷실적×100 (실적이 목표 이하면 100%에 가깝게)
  */
@@ -308,7 +310,8 @@ export function computedAchievementPercent(
     indicator === "time" ||
     indicator === "minutes" ||
     indicator === "uph" ||
-    indicator === "headcount"
+    indicator === "headcount" ||
+    indicator === "cpk"
   ) {
     const higher = targetDirection !== "down";
     return quantityLikeAchievementPercent(actual, target, higher, cap);
@@ -470,12 +473,13 @@ function parseKpiIndicatorTypeFromDb(raw: unknown): KpiIndicatorType {
     return "minutes";
   }
   if (s === "uph" || s === "생산성" || s === "생산성(uph)") return "uph";
+  if (s === "cpk") return "cpk";
   return "normal";
 }
 
 /**
  * DB에 `normal`만 저장된 레거시 금액 KPI — 측정기준(bm)에 「금액」이 있으면 UI·저장은 money로 맞춤.
- * `unit` 이 분(min)·시간(hr)·UPH 이면 indicator_type 이 아직 normal 이더라도 UI 계산 방식을 맞춤.
+ * `unit` 이 분(min)·시간(hr)·UPH·Cpk 이면 indicator_type 이 아직 normal 이더라도 UI 계산 방식을 맞춤.
  * (DB 마이그레이션으로 unit 은 분(min)·시간(hr) 으로 정규화; 레거시 분·시간 문자열은 일시 호환)
  */
 export function resolveEffectiveIndicatorTypeForUi(
@@ -490,6 +494,7 @@ export function resolveEffectiveIndicatorTypeForUi(
   if (u === "분(min)" || u === "분") return "minutes";
   if (u === "시간(hr)" || u === "시간") return "time";
   if (u === "UPH") return "uph";
+  if (u === "Cpk") return "cpk";
   return "normal";
 }
 
@@ -2397,10 +2402,66 @@ async function findOrCreateKpiTargetRowIdForYear(
   );
 }
 
+/**
+ * Supabase Storage 객체 키에 쓸 베이스 파일명 — 한글·공백·일반 문장부호 유지,
+ * 경로 침해(/, \\)·제어 문자·양방향 재정의 문자만 제거.
+ * 객체 경로: `kpi/{targetId}/{베이스}_{구분6자}.ext` — 구분 6자 규칙은 `kpiEvidenceDisambiguator6` 참고.
+ */
+
+const KPI_EVIDENCE_B36 = "0123456789abcdefghijklmnopqrstuvwxyz";
+
+const KPI_EVIDENCE_DISAMBIG_CHARS =
+  "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+/** 앞 4자: `Date.now()`를 base36으로 고정 4자(시간 흐름 반영, 36^4 주기로 순환). */
+function kpiEvidenceTimeBase36_4(): string {
+  const mod = 36 ** 4;
+  let n = Date.now() % mod;
+  let s = "";
+  for (let i = 0; i < 4; i++) {
+    s = KPI_EVIDENCE_B36[n % 36]! + s;
+    n = Math.floor(n / 36);
+  }
+  return s;
+}
+
+function kpiEvidenceRandomBase62(length: number): string {
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  const chars = KPI_EVIDENCE_DISAMBIG_CHARS;
+  let out = "";
+  for (let i = 0; i < length; i++) {
+    out += chars[bytes[i]! % chars.length]!;
+  }
+  return out;
+}
+
+/**
+ * 정확히 6자(초과 없음): 시간 4자(base36 소문자·숫자) + 랜덤 2자(영대·소·숫자).
+ * 같은 밀리초·같은 파일베이스라도 뒤 2자로 대부분 구분; Storage "이미 있음"이면 재시도로 새 조합 생성.
+ */
+function kpiEvidenceDisambiguator6(): string {
+  return kpiEvidenceTimeBase36_4() + kpiEvidenceRandomBase62(2);
+}
+
+function sanitizeKpiEvidenceBaseName(raw: string, maxChars: number): string {
+  let s = raw.normalize("NFC").trim();
+  if (!s) return "evidence";
+  s = s
+    .replace(/[\u0000-\u001f\u007f\u202d\u202e]/g, "")
+    .replace(/[/\\]/g, "_")
+    .replace(/\.\./g, "_");
+  s = s.replace(/^\.+|\.+$/g, "").trim();
+  if (!s) return "evidence";
+  if (s.length > maxChars) {
+    s = s.slice(0, maxChars).trim();
+  }
+  return s || "evidence";
+}
+
 export async function uploadEvidenceFile(
   targetId: string,
-  file: File,
-  quarterSegment?: string
+  file: File
 ): Promise<{ fullPath: string; publicUrl: string }> {
   const supabase = createBrowserSupabase();
   const {
@@ -2417,28 +2478,11 @@ export async function uploadEvidenceFile(
     .replace(/[^a-z0-9]/g, "")
     .slice(0, 10) || "dat";
   const baseName = file.name.replace(/\.[^/.]+$/, "").trim();
-  const safeBaseName = (baseName || "evidence")
-    .normalize("NFKD")
-    .replace(/[^\x00-\x7F]/g, "")
-    .replace(/[^a-zA-Z0-9._-]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 80) || "evidence";
-  const timestamp = Date.now();
-  const nonce = Math.random().toString(36).slice(2, 8);
+  const safeBaseName = sanitizeKpiEvidenceBaseName(baseName || "evidence", 180);
   const safeTargetId = targetId.replace(/[^a-zA-Z0-9_-]/g, "");
   if (!safeTargetId) {
     throw new Error("실적 정보 생성 중입니다. 잠시 후 다시 시도해 주세요.");
   }
-  const safeQuarter =
-    quarterSegment
-      ?.normalize("NFKD")
-      .replace(/[^\x00-\x7F]/g, "")
-      .toLowerCase()
-      .replace(/\s+/g, "_")
-      .replace(/[^a-z0-9_-]/g, "") || "q";
-  const preferredPath = `kpi/${safeTargetId}/${safeQuarter}_${timestamp}_${safeBaseName}.${safeExt}`;
-  const fallbackPath = `kpi/${safeTargetId}/${safeQuarter}_${timestamp}_${nonce}.${safeExt}`;
 
   const tryUpload = async (path: string) => {
     const { error } = await supabase.storage
@@ -2450,9 +2494,22 @@ export async function uploadEvidenceFile(
     return { path, error };
   };
 
-  let uploaded = await tryUpload(preferredPath);
+  const isDuplicateObjectError = (message: string) =>
+    /already exists|duplicate|resource already exists|409/i.test(message);
+
+  /** 구분 접미: 항상 정확히 6자 — 앞 4자 시간(base36), 뒤 2자 랜덤(base62). */
+  // 루프 본문에서 항상 한 번 이상 할당되지만, TS는 for 루프 밖 사용을 확정하지 못함.
+  let uploaded!: { path: string; error: { message: string } | null };
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const tag = kpiEvidenceDisambiguator6();
+    const path = `kpi/${safeTargetId}/${safeBaseName}_${tag}.${safeExt}`;
+    uploaded = await tryUpload(path);
+    if (!uploaded.error) break;
+    if (!isDuplicateObjectError(uploaded.error.message)) break;
+  }
+
   if (uploaded.error && /failed to fetch/i.test(uploaded.error.message)) {
-    // 네트워크/인코딩 이슈를 줄이기 위한 1회 재시도 (짧은 파일명)
+    const fallbackPath = `kpi/${safeTargetId}/evidence_${kpiEvidenceDisambiguator6()}.${safeExt}`;
     uploaded = await tryUpload(fallbackPath);
   }
   if (uploaded.error) {
@@ -3473,7 +3530,7 @@ export async function updateKpiItemIndicatorSettings(input: {
   const t = input.targetPpm;
   if (t === null || !Number.isFinite(t) || t <= 0) {
     throw new Error(
-      "PPM·수량(k)·건수·금액(억)·시간(h)·분(min)·UPH 방식은 목표값을 0보다 큰 숫자로 입력해 주세요."
+      "PPM·수량(k)·건수·금액(억)·시간(h)·분(min)·UPH·Cpk 방식은 목표값을 0보다 큰 숫자로 입력해 주세요."
     );
   }
   const { error } = await supabase
@@ -4340,6 +4397,10 @@ export async function updateManualKpiItem(
   if (milestoneErr) throw new Error(milestoneErr.message);
 }
 
+function excelBaselineMapsToCpk(baselineRaw: string): boolean {
+  return /^cpk$/i.test(String(baselineRaw ?? "").trim());
+}
+
 async function upsertKpiItemCompat(input: {
   deptId: string;
   mainTopic: string;
@@ -4359,7 +4420,7 @@ async function upsertKpiItemCompat(input: {
   const existingId = input.existingByComposite.get(compositeKey) ?? null;
   const safeWeight = parseWeightOrZero(input.weight);
 
-  const basePayload = {
+  const basePayload: Record<string, unknown> = {
     dept_id: input.deptId,
     main_topic: input.mainTopic,
     sub_topic: input.subTopic,
@@ -4369,6 +4430,11 @@ async function upsertKpiItemCompat(input: {
     weight: safeWeight,
     manager_name: input.managerName,
   };
+  const isCpk = excelBaselineMapsToCpk(input.baseline);
+  if (isCpk) {
+    basePayload.unit = "Cpk";
+    basePayload.indicator_type = "cpk";
+  }
   if (existingId) {
     const updated = await supabase
       .from("kpi_items")
@@ -4386,7 +4452,7 @@ async function upsertKpiItemCompat(input: {
     .from("kpi_items")
     .insert({
       ...basePayload,
-      indicator_type: "normal",
+      indicator_type: isCpk ? "cpk" : "normal",
       target_value: null as number | null,
     })
     .select("id")
