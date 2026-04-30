@@ -25,6 +25,7 @@ import {
   removeDepartment,
   renameDepartment,
   reviewPerformanceWorkflow,
+  withdrawPerformanceSubmission,
   saveMonthDeadline,
   upsertMonthPerformance,
   upsertQuarterPerformance,
@@ -365,6 +366,30 @@ export function useWorkflowReviewMutation() {
         opt
       );
     },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "pending-performances"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "department-kpi-summary"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "department-kpi-detail"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "kpi-performances"],
+      });
+    },
+  });
+}
+
+export function useWithdrawPendingPerformanceMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { performanceId: string; month?: MonthKey | null }) =>
+      withdrawPerformanceSubmission(args.performanceId, {
+        month: args.month ?? undefined,
+      }),
     onSuccess: () => {
       void queryClient.invalidateQueries({
         queryKey: ["supabase", "pending-performances"],

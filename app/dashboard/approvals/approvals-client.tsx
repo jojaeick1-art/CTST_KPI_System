@@ -93,6 +93,9 @@ function PendingTable({
                   <th className="px-4 py-3 font-semibold">KPI 항목</th>
                   <th className="px-4 py-3 font-semibold">기간</th>
                   <th className="px-4 py-3 font-semibold">입력 수치</th>
+                  <th className="whitespace-nowrap px-4 py-3 font-semibold">
+                    담당자 이름
+                  </th>
                   <th className="min-w-[180px] px-4 py-3 font-semibold">
                     담당자 코멘트
                   </th>
@@ -130,6 +133,9 @@ function PendingTable({
                       </td>
                       <td className="px-4 py-3 font-semibold tabular-nums text-sky-800">
                         {pct}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-800">
+                        {row.ownerName?.trim() ? row.ownerName : "—"}
                       </td>
                       <td className="px-4 py-3 text-xs leading-relaxed text-slate-600">
                         {row.description?.trim() ? row.description : "—"}

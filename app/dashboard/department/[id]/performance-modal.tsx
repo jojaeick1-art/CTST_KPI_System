@@ -72,6 +72,7 @@ import { AppToast, type ToastState } from "@/src/components/ui/toast";
 import {
   useKpiPerformances,
   useUpsertMonthPerformance,
+  useWithdrawPendingPerformanceMutation,
   useWorkflowReviewMutation,
 } from "@/src/hooks/useKpiQueries";
 
@@ -278,6 +279,8 @@ type Props = {
   canEditPerformance?: boolean;
   /** 로그인 사용자 `profiles.role` (한글·영문) — 승인 버튼 노출용 */
   profileRole?: string | null;
+  /** 로그인 사용자 `profiles.id` — 제출 회수(submitted_by 검증) */
+  profileUserId?: string | null;
   /** 관리자·팀장·그룹장 KPI 항목 삭제 */
   canDeleteKpiItem?: boolean;
   onDeleteKpiItem?: (kpiId: string) => Promise<void> | void;
@@ -811,6 +814,7 @@ export function PerformanceModal({
   startMode,
   canEditPerformance = true,
   profileRole = null,
+  profileUserId = null,
   canDeleteKpiItem = false,
   onDeleteKpiItem,
   canFinalizeKpiItem = false,
@@ -820,6 +824,7 @@ export function PerformanceModal({
   const perfQuery = useKpiPerformances(isOpen && kpiItem ? kpiItem.id : null);
   const saveMutation = useUpsertMonthPerformance();
   const workflowMut = useWorkflowReviewMutation();
+  const withdrawMut = useWithdrawPendingPerformanceMutation();
   const [mode, setMode] = useState<"viewer" | "editor">("viewer");
   const [selectedMonth, setSelectedMonth] = useState<MonthKey>(1);
   const [editorMonth, setEditorMonth] = useState<MonthKey>(1);
@@ -1528,6 +1533,26 @@ export function PerformanceModal({
     );
   }, [profileRole, selectedRow?.id, selectedStatus]);
 
+  const canWithdrawPendingSubmission = useMemo(() => {
+    if (!profileUserId?.trim() || !selectedRow?.id || !canEditPerformance) {
+      return false;
+    }
+    const st = (selectedStatus ?? "").trim().toLowerCase();
+    const pending =
+      st === PERF_STATUS_PENDING_PRIMARY ||
+      st === PERF_STATUS_PENDING_FINAL ||
+      st === PERF_LEGACY_PENDING;
+    if (!pending) return false;
+    const sub = selectedRow.submitted_by?.trim() ?? "";
+    return sub.length > 0 && sub === profileUserId;
+  }, [
+    profileUserId,
+    selectedRow?.id,
+    selectedRow?.submitted_by,
+    selectedStatus,
+    canEditPerformance,
+  ]);
+
   const editorRow = findRowByMonth(liveRows, editorMonth);
   const editorMonthLocked = monthLockedForEditor(
     editorRow?.approval_step,
@@ -1930,6 +1955,29 @@ export function PerformanceModal({
     }
   }
 
+  async function handleModalWithdrawSubmission() {
+    const rid = selectedRow?.id;
+    if (!rid) return;
+    const hasMonthly = await getKpiTargetsHasPerformanceMonthlyColumn();
+    try {
+      await withdrawMut.mutateAsync({
+        performanceId: rid,
+        ...(hasMonthly ? { month: selectedMonth } : {}),
+      });
+      const refreshed = await perfQuery.refetch();
+      if (refreshed.data) setLiveRows(refreshed.data);
+      notify(
+        "success",
+        "제출을 회수했습니다. 실적을 수정한 뒤 다시 제출할 수 있습니다."
+      );
+    } catch (e) {
+      notify(
+        "error",
+        e instanceof Error ? e.message : "회수 처리에 실패했습니다."
+      );
+    }
+  }
+
   function openRejectModal() {
     const rid = selectedRow?.id;
     if (!rid) {
@@ -2030,6 +2078,19 @@ export function PerformanceModal({
                 >
                   <FilePenLine className="h-3.5 w-3.5" />
                   실적 등록
+                </button>
+              ) : null}
+              {canWithdrawPendingSubmission && mode === "viewer" ? (
+                <button
+                  type="button"
+                  onClick={() => void handleModalWithdrawSubmission()}
+                  disabled={withdrawMut.isPending || workflowMut.isPending}
+                  className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-white/95 px-2.5 py-1.5 text-xs font-semibold text-amber-900 shadow-sm hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {withdrawMut.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : null}
+                  제출 회수
                 </button>
               ) : null}
               {canOpenModify ? (

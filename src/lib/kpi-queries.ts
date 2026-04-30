@@ -566,6 +566,8 @@ type PerformanceMonthlyCell = {
   achievement_rate?: number | string | null;
   /** 역지표(PPM) 월별 실적 PPM */
   actual_value?: number | string | null;
+  /** 실적 제출 시 auth.users.id — 승인 대기 회수 시 본인 확인 */
+  submitted_by?: string | null;
   approval_step?: string | null;
   remarks?: string | null;
   bubble_note?: string | null;
@@ -637,6 +639,144 @@ function actualThroughMonthFromCells(
     if (actual !== null && Number.isFinite(actual)) sum += actual;
   }
   return sum;
+}
+
+/** 평가 시작월~toMonth 까지 월별 actual_value 합(저장 방식과 무관하게 월별 값 합산). */
+function actualSumFromPeriodStartThroughMonth(
+  cells: Record<string, unknown>,
+  periodStart: MonthKey,
+  toMonth: MonthKey
+): number {
+  if (toMonth < periodStart) return 0;
+  const throughTo = actualThroughMonthFromCells(cells, toMonth);
+  const before =
+    periodStart > 1
+      ? actualThroughMonthFromCells(cells, (periodStart - 1) as MonthKey)
+      : 0;
+  return Math.max(0, throughTo - before);
+}
+
+/**
+ * 부서 KPI 목록·전체보기 대표 달성률.
+ * - **누적 계산**: 평가 시작~최신 실적월까지 실적 합(또는 저장 방식에 맞는 구간 합) vs **평가 말월 누적 목표 합**.
+ * - **당월 단독**: 월별 목표가 **각 월의 절대 지표값**(ppm·Cpk 등)인 경우 — 합산 금지. **평가 말월 그 달의 목표** vs **가장 늦은 실적 월의 실적 1건**.
+ *   (수량·금액·시간 등 **월별 증가분 합산**이 맞는 지표만 구간 실적 합을 사용.)
+ */
+function periodEndOverallAchievementPercentFromMonthlyTarget(
+  targetRow: Record<string, unknown>,
+  ctx: MonthlyAchievementRateContext,
+  periodStartRaw: number | null,
+  periodEndRaw: number | null
+): number | null {
+  const raw = targetRow.performance_monthly;
+  if (!performanceMonthlyIsNonEmpty(raw)) return null;
+  const o = raw as Record<string, unknown>;
+
+  const periodStart = (
+    periodStartRaw !== null &&
+    Number.isInteger(periodStartRaw) &&
+    periodStartRaw >= 1 &&
+    periodStartRaw <= 15
+      ? periodStartRaw
+      : 1
+  ) as MonthKey;
+  const periodEnd = (
+    periodEndRaw !== null &&
+    Number.isInteger(periodEndRaw) &&
+    periodEndRaw >= 1 &&
+    periodEndRaw <= 15
+      ? periodEndRaw
+      : 12
+  ) as MonthKey;
+  if (periodStart > periodEnd) return null;
+
+  let latestM = -1;
+  for (const mi of KPI_MONTHS) {
+    const mn = Number(mi);
+    if (mn < periodStart || mn > periodEnd) continue;
+    const cell = o[String(mi)];
+    if (!cell || typeof cell !== "object" || Array.isArray(cell)) continue;
+    const rate = monthlyAchievementRateFromCurrentTarget(o, mi, ctx);
+    if (rate === null || !Number.isFinite(rate)) continue;
+    if (mn > latestM) latestM = mn;
+  }
+  if (latestM < 0) return null;
+
+  const latestCell = o[String(latestM)] as PerformanceMonthlyCell;
+  const agg =
+    parseAggregationType(latestCell.aggregation_type) ??
+    ctx.aggregationType ??
+    "monthly";
+
+  const sumThroughLatest = actualSumFromPeriodStartThroughMonth(
+    o,
+    periodStart,
+    latestM as MonthKey
+  );
+  const actualFromLatestCell = toNum(
+    latestCell.actual_value as number | string | null | undefined
+  );
+  /** 당월 단독이어도 월별 값을 더해야 하는 지표(월 증가분 합이 의미 있음) */
+  const useSumOfMonthsForActual =
+    agg === "cumulative" ||
+    ctx.indicatorType === "quantity" ||
+    ctx.indicatorType === "count" ||
+    ctx.indicatorType === "money" ||
+    ctx.indicatorType === "time" ||
+    ctx.indicatorType === "minutes";
+
+  const actualOverall =
+    useSumOfMonthsForActual ||
+    actualFromLatestCell === null ||
+    !Number.isFinite(actualFromLatestCell)
+      ? sumThroughLatest
+      : actualFromLatestCell;
+
+  let periodTarget: number | null = null;
+  if (agg === "cumulative") {
+    periodTarget = cumulativeTargetThroughMonthFromPlan(ctx.monthlyTargets, periodEnd);
+    if (periodTarget === null) {
+      periodTarget = resolveCurrentMonthlyTargetMetric(periodEnd, "cumulative", ctx);
+    }
+  } else {
+    periodTarget = resolveCurrentMonthlyTargetMetric(periodEnd, "monthly", ctx);
+    if (periodTarget === null && ctx.normalMonthlyContext?.targetFinalValue != null) {
+      periodTarget = ctx.normalMonthlyContext.targetFinalValue;
+    }
+    if (periodTarget === null) {
+      periodTarget = cumulativeTargetThroughMonthFromPlan(ctx.monthlyTargets, periodEnd);
+    }
+  }
+
+  if (periodTarget === null || !Number.isFinite(periodTarget) || periodTarget < 0) {
+    return null;
+  }
+
+  if (ctx.evaluationType === "qualitative") {
+    return qualitativeAchievementPercent(
+      actualOverall,
+      periodTarget,
+      ctx.qualitativeCalcType ?? "progress",
+      ctx.achievementCap ?? 100
+    );
+  }
+  if (
+    indicatorUsesComputedAchievement(ctx.indicatorType) ||
+    (ctx.indicatorType === "normal" && ctx.targetDirection !== "na")
+  ) {
+    return computedAchievementPercent(
+      ctx.indicatorType,
+      actualOverall,
+      periodTarget,
+      ctx.targetDirection,
+      ctx.achievementCap
+    );
+  }
+
+  const stored = monthlyAchievementRateFromCurrentTarget(o, latestM as MonthKey, ctx);
+  return stored !== null
+    ? applyAchievementCap(stored, ctx.achievementCap ?? 100)
+    : null;
 }
 
 function resolveCurrentMonthlyTargetMetric(
@@ -896,8 +1036,8 @@ function collectApprovedAchievementRatesForItemTargets(
 }
 
 /**
- * 목록·집계에서 KPI 항목 1건의 대표 달성률.
- * - 월별 JSON: **마지막 등록 월** 기준 1값(위 함수 참고).
+ * 목록·집계에서 KPI 항목 1건의 대표 달성률(평균용 보조).
+ * - 월별 JSON이 있으면 `periodEndOverallAchievementPercentFromMonthlyTarget`가 우선.
  * - 레거시 분기·반기: 수집된 값 평균.
  */
 function representativeAchievementPercentForRates(
@@ -1044,7 +1184,23 @@ export async function fetchDepartmentKpiSummary(): Promise<
       hasTargetHalf,
       rateContext
     );
-    const rep = representativeAchievementPercentForRates(itemRates);
+    const primaryMonthlyRow =
+      targets.find((t) => performanceMonthlyIsNonEmpty(t.performance_monthly)) ?? null;
+    const periodStartForOverall =
+      rateContext.normalMonthlyContext?.periodStartMonth ??
+      pickNumber(itemRecord, ["period_start_month"]);
+    const periodEndForOverall =
+      rateContext.normalMonthlyContext?.periodEndMonth ??
+      pickNumber(itemRecord, ["period_end_month"]);
+    const rep =
+      primaryMonthlyRow !== null
+        ? periodEndOverallAchievementPercentFromMonthlyTarget(
+            primaryMonthlyRow,
+            rateContext,
+            periodStartForOverall,
+            periodEndForOverall
+          ) ?? representativeAchievementPercentForRates(itemRates)
+        : representativeAchievementPercentForRates(itemRates);
     if (rep !== null) {
       scoredCountByDept.set(deptId, (scoredCountByDept.get(deptId) ?? 0) + 1);
     }
@@ -1146,7 +1302,7 @@ export type DepartmentKpiDetailItem = {
   achievementCap: KpiAchievementCap;
   structureVersion: number;
   needsStructureReview: boolean;
-  /** 목록·부서 평균용 대표 달성률. 월별 입력 시 가장 늦은 월 기준. 없으면 null */
+  /** 목록·부서 평균용 대표 달성률. 월별 입력 시 평가 종료월 목표 대비 구간 실적. 없으면 null */
   averageAchievement: number | null;
   targetCount: number;
   /** 반려 사유가 남아 있으면 true — 목록에서 강조 표시 */
@@ -1738,13 +1894,30 @@ export async function fetchDepartmentKpiDetail(
       hasH1TargetPctColumn,
       hasH2TargetPctColumn,
     });
+    const periodStartMonth =
+      rateContext.normalMonthlyContext?.periodStartMonth ??
+      pickNumber(item, ["period_start_month"]);
+    const periodEndMonth =
+      rateContext.normalMonthlyContext?.periodEndMonth ??
+      pickNumber(item, ["period_end_month"]);
     const rates = collectApprovedAchievementRatesForItemTargets(
       targets,
       hasTargetHalf,
       rateContext
     );
+    const primaryMonthlyRow =
+      targets.find((t) => performanceMonthlyIsNonEmpty(t.performance_monthly)) ?? null;
+    const overallFromPeriod =
+      primaryMonthlyRow !== null
+        ? periodEndOverallAchievementPercentFromMonthlyTarget(
+            primaryMonthlyRow,
+            rateContext,
+            periodStartMonth,
+            periodEndMonth
+          )
+        : null;
     const averageAchievement =
-      representativeAchievementPercentForRates(rates);
+      overallFromPeriod ?? representativeAchievementPercentForRates(rates);
     // 부서 상단 "전체 평균 달성률"은 대시보드 부서 카드와 동일하게
     // 등록된 KPI 항목 수를 분모로 하고, 승인 실적 없음은 0%로 포함한다.
     departmentRates.push(averageAchievement ?? 0);
@@ -1782,8 +1955,6 @@ export async function fetchDepartmentKpiDetail(
     const targetPpm = pickNumber(item, ["target_value", "target_ppm"]);
     const statusRaw = String(item.status ?? "").trim().toLowerCase();
     const status = statusRaw || "active";
-    const periodStartMonth = pickNumber(item, ["period_start_month"]);
-    const periodEndMonth = pickNumber(item, ["period_end_month"]);
     const targetFinalValue = pickNumber(item, ["target_final_value"]);
     const evaluationType = parseEvaluationType(item.evaluation_type);
     const unit = pickNullableText(item, "unit");
@@ -2004,6 +2175,8 @@ export type ItemPerformanceRow = {
   description: string | null;
   bubble_note: string | null;
   rejection_reason: string | null;
+  /** 제출자 UUID — 월별은 JSON 셀, 레거시 분기는 kpi_targets.performance_submitted_by */
+  submitted_by: string | null;
 };
 
 function monthFromTargetText(v: unknown): number | null {
@@ -2218,6 +2391,11 @@ function mapTargetRecordToItemPerformanceRow(
     bubble_note: null,
     rejection_reason:
       typeof rr === "string" && rr.trim() ? rr.trim() : null,
+    submitted_by:
+      typeof t.performance_submitted_by === "string" &&
+      t.performance_submitted_by.trim()
+        ? t.performance_submitted_by.trim()
+        : null,
   };
 }
 
@@ -2312,6 +2490,10 @@ async function buildItemPerformanceRowsFromKpiTargets(
           cell.rejection_reason.trim()
             ? cell.rejection_reason.trim()
             : null,
+        submitted_by:
+          typeof cell?.submitted_by === "string" && cell.submitted_by.trim()
+            ? cell.submitted_by.trim()
+            : null,
       };
     });
   }
@@ -2359,6 +2541,11 @@ async function buildItemPerformanceRowsFromKpiTargets(
       bubble_note: null,
       rejection_reason:
         typeof rr === "string" && rr.trim() ? rr.trim() : null,
+      submitted_by:
+        typeof src.performance_submitted_by === "string" &&
+        String(src.performance_submitted_by).trim()
+          ? String(src.performance_submitted_by).trim()
+          : null,
     };
   });
 }
@@ -2603,6 +2790,10 @@ export async function upsertQuarterPerformance(
   }
 ): Promise<{ targetId: string }> {
   const supabase = createBrowserSupabase();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const submitterId = session?.user?.id ?? null;
   const halfCanon = quarterLabelToHalfTypeCanonical(input.quarter);
   const hasHalfType = await getKpiTargetsHasHalfTypeColumn();
   const targetId = await findOrCreateKpiTargetRowIdForYear(
@@ -2658,6 +2849,9 @@ export async function upsertQuarterPerformance(
   }
   if (input.evidenceUrl !== undefined) {
     updatePayload.evidence_url = input.evidenceUrl;
+  }
+  if (submitterId) {
+    updatePayload.performance_submitted_by = submitterId;
   }
 
   const hasYear = await getKpiTargetsHasYearColumn();
@@ -2732,6 +2926,10 @@ export async function upsertMonthPerformance(
   }
 ): Promise<{ targetId: string }> {
   const supabase = createBrowserSupabase();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const submitterId = session?.user?.id ?? null;
   const hasHalfType = await getKpiTargetsHasHalfTypeColumn();
   const targetId = await findOrCreateKpiTargetRowIdForYear(
     supabase,
@@ -2834,6 +3032,9 @@ export async function upsertMonthPerformance(
   }
   if (input.evidenceUrl !== undefined) {
     nextCell.evidence_url = input.evidenceUrl;
+  }
+  if (submitterId) {
+    nextCell.submitted_by = submitterId;
   }
   pm[key] = nextCell;
 
@@ -3062,6 +3263,8 @@ export type PendingPerformanceListRow = {
   departmentName: string;
   kpiMainLabel: string;
   kpiSubLabel: string;
+  /** KPI 항목 담당자(`kpi_items.manager_name` 등) */
+  ownerName: string | null;
 };
 
 export async function fetchPerformancesPendingStage(options: {
@@ -3122,6 +3325,14 @@ export async function fetchPerformancesPendingStage(options: {
       hasH1TargetPctColumn,
       hasH2TargetPctColumn,
     });
+    const ownerNameRaw = pickText(itemRec, [
+      "manager_name",
+      "owner",
+      "assignee",
+      "manager",
+      "owner_name",
+    ]).trim();
+    const ownerName = ownerNameRaw.length > 0 ? ownerNameRaw : null;
 
     if (options.filterDeptId && deptId !== options.filterDeptId) {
       continue;
@@ -3156,6 +3367,7 @@ export async function fetchPerformancesPendingStage(options: {
           "subtitle",
         ]),
         kpiSubLabel: pickText(itemRec, ["main_topic", "topic_main"]),
+        ownerName,
         deptId,
       });
     };
@@ -3199,6 +3411,7 @@ export async function fetchPerformancesPendingStage(options: {
             "subtitle",
           ]),
           kpiSubLabel: pickText(itemRec, ["main_topic", "topic_main"]),
+          ownerName,
           deptId,
         });
         stagedMonthPending = true;
@@ -3421,6 +3634,174 @@ export async function reviewPerformanceWorkflow(
       PERF_STATUS_PENDING_FINAL,
       PERF_LEGACY_PENDING,
     ]);
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * 제출자 본인: 승인 대기 실적을 제출 전(draft)으로 회수(반려 사유 없음).
+ * 월별 JSON: 해당 월 `submitted_by` 가 로그인 사용자와 일치해야 함.
+ * 레거시 분기 행: `performance_submitted_by` 컬럼 값이 일치해야 함.
+ */
+export async function withdrawPerformanceSubmission(
+  performanceId: string,
+  options?: { month?: MonthKey }
+): Promise<void> {
+  const supabase = createBrowserSupabase();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const uid = session?.user?.id ?? "";
+  if (!uid) {
+    throw new Error("로그인이 필요합니다.");
+  }
+
+  let tid = performanceId.trim();
+  if (!tid) {
+    throw new Error("대상 ID가 없습니다.");
+  }
+  let monthFromComposite: MonthKey | undefined;
+  const compositeIdx = tid.indexOf(":M");
+  if (compositeIdx > 0) {
+    const base = tid.slice(0, compositeIdx);
+    const suffix = tid.slice(compositeIdx + 2);
+    const mo = Number(suffix);
+    if (
+      suffix !== "" &&
+      Number.isInteger(mo) &&
+      mo >= 1 &&
+      mo <= 12
+    ) {
+      tid = base;
+      monthFromComposite = mo as MonthKey;
+    }
+  }
+  const month =
+    options?.month !== undefined ? options.month : monthFromComposite;
+
+  const { data: exists, error: exErr } = await supabase
+    .from("kpi_targets")
+    .select("id")
+    .eq("id", tid)
+    .maybeSingle();
+  if (exErr) throw new Error(exErr.message);
+  if (!exists) {
+    throw new Error("kpi_targets 행을 찾을 수 없습니다.");
+  }
+
+  if (
+    month !== undefined &&
+    (await getKpiTargetsHasPerformanceMonthlyColumn())
+  ) {
+    const { data: cur, error: rErr } = await supabase
+      .from("kpi_targets")
+      .select("performance_monthly")
+      .eq("id", tid)
+      .maybeSingle();
+    if (rErr) throw new Error(rErr.message);
+    const rec = cur as Record<string, unknown> | null;
+    const pm: Record<string, PerformanceMonthlyCell> = {};
+    const prevPm = rec?.performance_monthly;
+    if (prevPm && typeof prevPm === "object" && !Array.isArray(prevPm)) {
+      const o = prevPm as Record<string, unknown>;
+      for (const k of Object.keys(o)) {
+        const cell = o[k];
+        if (cell && typeof cell === "object" && !Array.isArray(cell)) {
+          pm[k] = { ...(cell as PerformanceMonthlyCell) };
+        }
+      }
+    }
+    const key = String(month);
+    const cell = pm[key];
+    if (!cell || typeof cell !== "object") {
+      throw new Error("해당 월 실적 데이터를 찾을 수 없습니다.");
+    }
+    const curSt =
+      typeof cell.approval_step === "string"
+        ? cell.approval_step.trim().toLowerCase()
+        : "";
+    if (
+      curSt !== PERF_STATUS_PENDING_PRIMARY &&
+      curSt !== PERF_STATUS_PENDING_FINAL &&
+      curSt !== PERF_LEGACY_PENDING
+    ) {
+      throw new Error("승인 대기 중인 실적만 회수할 수 있습니다.");
+    }
+    const subRaw =
+      typeof cell.submitted_by === "string" ? cell.submitted_by.trim() : "";
+    if (!subRaw) {
+      throw new Error(
+        "제출자 정보가 없어 회수할 수 없습니다. 실적을 다시 저장(제출)해 주세요."
+      );
+    }
+    if (subRaw !== uid) {
+      throw new Error("본인이 제출한 실적만 회수할 수 있습니다.");
+    }
+    const nextCell: PerformanceMonthlyCell = {
+      ...cell,
+      approval_step: PERF_STATUS_DRAFT,
+      rejection_reason: null,
+    };
+    delete (nextCell as Record<string, unknown>).submitted_by;
+    pm[key] = nextCell;
+
+    const filtered = await filterPayloadToExistingKpiTargetColumns({
+      id: tid,
+      performance_monthly: pm,
+    });
+    const { error } = await supabase
+      .from("kpi_targets")
+      .update(filtered)
+      .eq("id", tid);
+    if (error) throw new Error(error.message);
+    return;
+  }
+
+  const { data: row, error: rowErr } = await supabase
+    .from("kpi_targets")
+    .select("approval_step, performance_submitted_by")
+    .eq("id", tid)
+    .maybeSingle();
+  if (rowErr) throw new Error(rowErr.message);
+  const rec = row as Record<string, unknown> | null;
+  const st =
+    typeof rec?.approval_step === "string"
+      ? rec.approval_step.trim().toLowerCase()
+      : "";
+  if (
+    st !== PERF_STATUS_PENDING_PRIMARY &&
+    st !== PERF_STATUS_PENDING_FINAL &&
+    st !== PERF_LEGACY_PENDING
+  ) {
+    throw new Error("승인 대기 중인 실적만 회수할 수 있습니다.");
+  }
+  const subRow = rec?.performance_submitted_by;
+  const subStr =
+    typeof subRow === "string"
+      ? subRow.trim()
+      : subRow !== null && subRow !== undefined
+        ? String(subRow).trim()
+        : "";
+  if (!subStr) {
+    throw new Error(
+      "제출자 정보가 없어 회수할 수 없습니다. 실적을 한 번 저장(제출)한 뒤 다시 시도해 주세요."
+    );
+  }
+  if (subStr !== uid) {
+    throw new Error("본인이 제출한 실적만 회수할 수 있습니다.");
+  }
+
+  const baseUpdate: Record<string, unknown> = {
+    approval_step: PERF_STATUS_DRAFT,
+    rejection_reason: null,
+  };
+  if (await getKpiTargetsHasColumn("performance_submitted_by")) {
+    baseUpdate.performance_submitted_by = null;
+  }
+  const filtered = await filterPayloadToExistingKpiTargetColumns(baseUpdate);
+  const { error } = await supabase
+    .from("kpi_targets")
+    .update(filtered)
+    .eq("id", tid);
   if (error) throw new Error(error.message);
 }
 

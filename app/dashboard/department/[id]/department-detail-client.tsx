@@ -1,11 +1,14 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   AlertTriangle,
+  ArrowDownWideNarrow,
   ArrowLeft,
+  ArrowUpDown,
+  ArrowUpNarrowWide,
   ClipboardList,
   FileUp,
   Loader2,
@@ -107,6 +110,58 @@ function defaultKpiMonth(): MonthKey {
 
 type AchievementMonthSelection = MonthKey | "all";
 
+type DepartmentTableSortKey =
+  | "mainTopic"
+  | "subTopicDetail"
+  | "bm"
+  | "weight"
+  | "owner"
+  | "period"
+  | "achievement";
+
+type SortDirection = "asc" | "desc";
+
+/** 달성률 정렬: 최종 완료(화면 '완료')는 100% 초과로 취급 → 내림차순 시 100%보다 위에 옴 */
+const ACHIEVEMENT_SORT_COMPLETED_SCORE = 101;
+
+function compareNullableNumber(
+  a: number | null | undefined,
+  b: number | null | undefined,
+  dir: SortDirection
+): number {
+  const aOk = a !== null && a !== undefined && Number.isFinite(a);
+  const bOk = b !== null && b !== undefined && Number.isFinite(b);
+  if (!aOk && !bOk) return 0;
+  if (!aOk) return 1;
+  if (!bOk) return -1;
+  const diff = (a as number) - (b as number);
+  return dir === "asc" ? diff : -diff;
+}
+
+function achievementSortScore(
+  item: DepartmentKpiDetailItem,
+  month: AchievementMonthSelection
+): number | null {
+  if (item.isFinalCompleted) {
+    return ACHIEVEMENT_SORT_COMPLETED_SCORE;
+  }
+  if (month === "all") {
+    const v = item.averageAchievement;
+    if (v !== null && Number.isFinite(v)) {
+      return v;
+    }
+    return 0;
+  }
+  if (!itemIsEvaluatedInMonth(item, month)) {
+    return null;
+  }
+  const r = item.monthlyAchievementRates[month];
+  if (r !== undefined && r !== null && Number.isFinite(r)) {
+    return r;
+  }
+  return 0;
+}
+
 function itemIsEvaluatedInMonth(item: DepartmentKpiDetailItem, month: MonthKey): boolean {
   const start = item.periodStartMonth ?? 1;
   const end = item.periodEndMonth ?? 12;
@@ -169,6 +224,28 @@ function benchmarkValueLabel(item: DepartmentKpiDetailItem): string {
   return formatKoPercentMax2(parsed);
 }
 
+function DepartmentTableSortIcon({
+  active,
+  direction,
+}: {
+  active: boolean;
+  direction: SortDirection;
+}) {
+  if (!active) {
+    return (
+      <ArrowUpDown
+        className="h-3.5 w-3.5 shrink-0 text-slate-400 opacity-70"
+        aria-hidden
+      />
+    );
+  }
+  return direction === "asc" ? (
+    <ArrowUpNarrowWide className="h-3.5 w-3.5 shrink-0 text-sky-700" aria-hidden />
+  ) : (
+    <ArrowDownWideNarrow className="h-3.5 w-3.5 shrink-0 text-sky-700" aria-hidden />
+  );
+}
+
 export function DepartmentDetailClient({ departmentId }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -200,6 +277,10 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   const [editingKpiItem, setEditingKpiItem] = useState<DepartmentKpiDetailItem | null>(null);
   const [selectedAchievementMonth, setSelectedAchievementMonth] =
     useState<AchievementMonthSelection>(() => defaultKpiMonth());
+  const [tableSort, setTableSort] = useState<{
+    key: DepartmentTableSortKey | null;
+    dir: SortDirection;
+  }>({ key: null, dir: "asc" });
   /** 목표값이 없는 상태에서 자동계산형 지표로 바꿀 때만 표시 */
   const [pendingIndicator, setPendingIndicator] = useState<{
     kpiId: string;
@@ -355,6 +436,111 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     }
   }
 
+  const detailItems = detailQuery.data?.items ?? [];
+
+  const sortedItems = useMemo(() => {
+    const items = [...detailItems];
+    const { key: sortKey, dir } = tableSort;
+
+    const defaultSort = () => {
+      items.sort((a, b) => {
+        const m = a.mainTopic.localeCompare(b.mainTopic, "ko");
+        if (m !== 0) return m;
+        const s = a.subTopic.localeCompare(b.subTopic, "ko");
+        if (s !== 0) return s;
+        return a.detailActivity.localeCompare(b.detailActivity, "ko");
+      });
+    };
+
+    if (sortKey === null) {
+      defaultSort();
+      return items;
+    }
+
+    const dirSign = dir === "asc" ? 1 : -1;
+
+    items.sort((a, b) => {
+      let c = 0;
+      switch (sortKey) {
+        case "mainTopic":
+          c = a.mainTopic.localeCompare(b.mainTopic, "ko") * dirSign;
+          break;
+        case "subTopicDetail": {
+          const s0 = a.subTopic.localeCompare(b.subTopic, "ko") * dirSign;
+          if (s0 !== 0) {
+            c = s0;
+            break;
+          }
+          c = a.detailActivity.localeCompare(b.detailActivity, "ko") * dirSign;
+          break;
+        }
+        case "bm": {
+          const pa = parseBenchmarkValue(a.bm);
+          const pb = parseBenchmarkValue(b.bm);
+          if (pa !== null && pb !== null) {
+            c = (pa - pb) * dirSign;
+          } else {
+            c =
+              benchmarkValueLabel(a).localeCompare(benchmarkValueLabel(b), "ko") *
+              dirSign;
+          }
+          break;
+        }
+        case "weight": {
+          const wa = Number(String(a.weight ?? "").trim());
+          const wb = Number(String(b.weight ?? "").trim());
+          const na = Number.isFinite(wa) ? wa : null;
+          const nb = Number.isFinite(wb) ? wb : null;
+          if (na === null && nb === null) c = 0;
+          else if (na === null) c = 1;
+          else if (nb === null) c = -1;
+          else c = (na - nb) * dirSign;
+          break;
+        }
+        case "owner":
+          c = a.owner.localeCompare(b.owner, "ko") * dirSign;
+          break;
+        case "period": {
+          const sa = a.periodStartMonth ?? 0;
+          const sb = b.periodStartMonth ?? 0;
+          if (sa !== sb) {
+            c = (sa - sb) * dirSign;
+            break;
+          }
+          const ea = a.periodEndMonth ?? 0;
+          const eb = b.periodEndMonth ?? 0;
+          c = (ea - eb) * dirSign;
+          break;
+        }
+        case "achievement": {
+          c = compareNullableNumber(
+            achievementSortScore(a, selectedAchievementMonth),
+            achievementSortScore(b, selectedAchievementMonth),
+            dir
+          );
+          break;
+        }
+        default:
+          c = 0;
+      }
+      if (c !== 0) return c;
+      const m = a.mainTopic.localeCompare(b.mainTopic, "ko");
+      if (m !== 0) return m;
+      const s = a.subTopic.localeCompare(b.subTopic, "ko");
+      if (s !== 0) return s;
+      return a.detailActivity.localeCompare(b.detailActivity, "ko");
+    });
+    return items;
+  }, [detailItems, tableSort, selectedAchievementMonth]);
+
+  function toggleDepartmentTableSort(column: DepartmentTableSortKey) {
+    setTableSort((prev) =>
+      prev.key === column
+        ? { key: column, dir: prev.dir === "asc" ? "desc" : "asc" }
+        : { key: column, dir: "asc" }
+    );
+  }
+
   if (profileQuery.isPending) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-sky-50/60">
@@ -402,18 +588,11 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   const canFinalizeKpiItems = roleCanAlwaysEdit && (isAdmin || isOwnDepartment);
   /** 관리자: 모든 부서, 그룹장·팀장: 본인 부서 KPI 항목 추가/수정/삭제 가능 */
   const canCreateKpi = canManageKpiItems;
-  const detailItems = detailQuery.data?.items ?? [];
   const totalWeight = detailItems.reduce((sum, item) => {
     const n = Number(String(item.weight ?? "").trim());
     return Number.isFinite(n) ? sum + n : sum;
   }, 0);
-  const sortedItems = [...detailItems].sort((a, b) => {
-    const m = a.mainTopic.localeCompare(b.mainTopic, "ko");
-    if (m !== 0) return m;
-    const s = a.subTopic.localeCompare(b.subTopic, "ko");
-    if (s !== 0) return s;
-    return a.detailActivity.localeCompare(b.detailActivity, "ko");
-  });
+
   const monthSelectableItems =
     selectedAchievementMonth === "all"
       ? detailItems
@@ -777,26 +956,166 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                   <table className="min-w-[1100px] w-full border-collapse text-sm">
                     <thead className="bg-sky-50/80 text-slate-700">
                       <tr>
-                        <th className="min-w-[14.5rem] whitespace-nowrap px-4 py-3 text-left font-semibold">
-                          대분류
+                        <th
+                          scope="col"
+                          className="min-w-[14.5rem] whitespace-nowrap px-4 py-3 text-left font-semibold"
+                          aria-sort={
+                            tableSort.key === "mainTopic"
+                              ? tableSort.dir === "asc"
+                                ? "ascending"
+                                : "descending"
+                              : undefined
+                          }
+                        >
+                          <button
+                            type="button"
+                            onClick={() => toggleDepartmentTableSort("mainTopic")}
+                            className="inline-flex max-w-full items-center gap-1 rounded-md px-1 py-0.5 text-left font-semibold text-slate-700 transition hover:bg-sky-100/70 hover:text-sky-900"
+                          >
+                            대분류
+                            <DepartmentTableSortIcon
+                              active={tableSort.key === "mainTopic"}
+                              direction={tableSort.dir}
+                            />
+                          </button>
                         </th>
-                        <th className="min-w-[10.5rem] whitespace-nowrap px-4 py-3 text-left font-semibold">
-                          소분류 / 세부 내용
+                        <th
+                          scope="col"
+                          className="min-w-[10.5rem] whitespace-nowrap px-4 py-3 text-left font-semibold"
+                          aria-sort={
+                            tableSort.key === "subTopicDetail"
+                              ? tableSort.dir === "asc"
+                                ? "ascending"
+                                : "descending"
+                              : undefined
+                          }
+                        >
+                          <button
+                            type="button"
+                            onClick={() => toggleDepartmentTableSort("subTopicDetail")}
+                            className="inline-flex max-w-full items-center gap-1 rounded-md px-1 py-0.5 text-left font-semibold text-slate-700 transition hover:bg-sky-100/70 hover:text-sky-900"
+                          >
+                            소분류 / 세부 내용
+                            <DepartmentTableSortIcon
+                              active={tableSort.key === "subTopicDetail"}
+                              direction={tableSort.dir}
+                            />
+                          </button>
                         </th>
-                        <th className="min-w-[3.5rem] whitespace-nowrap px-4 py-3 text-left font-semibold">
-                          B/M
+                        <th
+                          scope="col"
+                          className="min-w-[3.5rem] whitespace-nowrap px-4 py-3 text-left font-semibold"
+                          aria-sort={
+                            tableSort.key === "bm"
+                              ? tableSort.dir === "asc"
+                                ? "ascending"
+                                : "descending"
+                              : undefined
+                          }
+                        >
+                          <button
+                            type="button"
+                            onClick={() => toggleDepartmentTableSort("bm")}
+                            className="inline-flex max-w-full items-center gap-1 rounded-md px-1 py-0.5 text-left font-semibold text-slate-700 transition hover:bg-sky-100/70 hover:text-sky-900"
+                          >
+                            B/M
+                            <DepartmentTableSortIcon
+                              active={tableSort.key === "bm"}
+                              direction={tableSort.dir}
+                            />
+                          </button>
                         </th>
-                        <th className="min-w-[4.5rem] whitespace-nowrap px-4 py-3 text-left font-semibold">
-                          가중치
+                        <th
+                          scope="col"
+                          className="min-w-[4.5rem] whitespace-nowrap px-4 py-3 text-left font-semibold"
+                          aria-sort={
+                            tableSort.key === "weight"
+                              ? tableSort.dir === "asc"
+                                ? "ascending"
+                                : "descending"
+                              : undefined
+                          }
+                        >
+                          <button
+                            type="button"
+                            onClick={() => toggleDepartmentTableSort("weight")}
+                            className="inline-flex max-w-full items-center gap-1 rounded-md px-1 py-0.5 text-left font-semibold text-slate-700 transition hover:bg-sky-100/70 hover:text-sky-900"
+                          >
+                            가중치
+                            <DepartmentTableSortIcon
+                              active={tableSort.key === "weight"}
+                              direction={tableSort.dir}
+                            />
+                          </button>
                         </th>
-                        <th className="min-w-[5.5rem] whitespace-nowrap px-4 py-3 text-left font-semibold">
-                          담당자
+                        <th
+                          scope="col"
+                          className="min-w-[5.5rem] whitespace-nowrap px-4 py-3 text-left font-semibold"
+                          aria-sort={
+                            tableSort.key === "owner"
+                              ? tableSort.dir === "asc"
+                                ? "ascending"
+                                : "descending"
+                              : undefined
+                          }
+                        >
+                          <button
+                            type="button"
+                            onClick={() => toggleDepartmentTableSort("owner")}
+                            className="inline-flex max-w-full items-center gap-1 rounded-md px-1 py-0.5 text-left font-semibold text-slate-700 transition hover:bg-sky-100/70 hover:text-sky-900"
+                          >
+                            담당자
+                            <DepartmentTableSortIcon
+                              active={tableSort.key === "owner"}
+                              direction={tableSort.dir}
+                            />
+                          </button>
                         </th>
-                        <th className="w-[10rem] min-w-[10rem] max-w-[10rem] whitespace-nowrap px-3 py-3 text-left font-semibold">
-                          평가 구간
+                        <th
+                          scope="col"
+                          className="w-[10rem] min-w-[10rem] max-w-[10rem] whitespace-nowrap px-3 py-3 text-left font-semibold"
+                          aria-sort={
+                            tableSort.key === "period"
+                              ? tableSort.dir === "asc"
+                                ? "ascending"
+                                : "descending"
+                              : undefined
+                          }
+                        >
+                          <button
+                            type="button"
+                            onClick={() => toggleDepartmentTableSort("period")}
+                            className="inline-flex max-w-full items-center gap-1 rounded-md px-1 py-0.5 text-left font-semibold text-slate-700 transition hover:bg-sky-100/70 hover:text-sky-900"
+                          >
+                            평가 구간
+                            <DepartmentTableSortIcon
+                              active={tableSort.key === "period"}
+                              direction={tableSort.dir}
+                            />
+                          </button>
                         </th>
-                        <th className="min-w-[7rem] whitespace-nowrap px-4 py-3 text-left font-semibold">
-                          달성률
+                        <th
+                          scope="col"
+                          className="min-w-[7rem] whitespace-nowrap px-4 py-3 text-left font-semibold"
+                          aria-sort={
+                            tableSort.key === "achievement"
+                              ? tableSort.dir === "asc"
+                                ? "ascending"
+                                : "descending"
+                              : undefined
+                          }
+                        >
+                          <button
+                            type="button"
+                            onClick={() => toggleDepartmentTableSort("achievement")}
+                            className="inline-flex max-w-full items-center gap-1 rounded-md px-1 py-0.5 text-left font-semibold text-slate-700 transition hover:bg-sky-100/70 hover:text-sky-900"
+                          >
+                            달성률
+                            <DepartmentTableSortIcon
+                              active={tableSort.key === "achievement"}
+                              direction={tableSort.dir}
+                            />
+                          </button>
                         </th>
                         <th className="min-w-[9.5rem] whitespace-nowrap py-3 pl-2.5 pr-4 text-left font-semibold">
                           관리
@@ -961,6 +1280,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
         startMode={modalMode}
         canEditPerformance={canEditPerformance}
         profileRole={ensuredRole}
+        profileUserId={ensuredProfile.id}
         canDeleteKpiItem={canManageKpiItems}
         onDeleteKpiItem={(kpiId) => handleDeleteKpiItem(kpiId)}
         canFinalizeKpiItem={canFinalizeKpiItems}
