@@ -165,7 +165,7 @@ export function canTeamLeaderFinalApprove(role: string | null | undefined): bool
   );
 }
 
-/** 실적 승인 관리 메뉴·페이지 — 그룹장·팀장·관리자 */
+/** 실적함 메뉴·페이지 — 그룹장·팀장·관리자 */
 export function canAccessApprovalsPage(role: string | null | undefined): boolean {
   const n = normalizeRole(role);
   return n === "admin" || n === "ceo" || n === "group_leader" || n === "team_leader" || n === "group_team_leader";

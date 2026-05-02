@@ -8,14 +8,12 @@ import {
   Plus,
   Save,
   Settings,
-  Shield,
   Trash2,
-  User,
   Users,
 } from "lucide-react";
 import { CtstAppSidebar } from "@/src/components/ctst-app-sidebar";
 import { createBrowserSupabase } from "@/src/lib/supabase";
-import { ChangePasswordButton } from "../change-password-modal";
+import { CtstUserProfileMenu } from "@/src/components/ctst-user-profile-menu";
 import { KPI_MONTHS, type MonthKey } from "@/src/lib/kpi-queries";
 import {
   canAccessApprovalsPage,
@@ -283,24 +281,13 @@ export function SettingsClient() {
               </p>
             </div>
             <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:gap-3">
-              <ChangePasswordButton profileUsername={ctx.profile.username} />
-            <div className="flex items-center gap-3 rounded-xl border border-sky-200 bg-white px-4 py-2.5 shadow-sm shadow-sky-100/50">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-100 text-sky-700">
-                <User className="h-5 w-5" aria-hidden />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-slate-800">
-                  {displayName}
-                  <span className="font-normal text-slate-400"> 님</span>
-                </p>
-                <div className="mt-0.5 flex items-center gap-1.5">
-                  <Shield className="h-3.5 w-3.5 text-sky-600" aria-hidden />
-                  <span className="text-xs font-medium text-sky-700">
-                    {roleLabelKo(ctx.profile.role)}
-                  </span>
-                </div>
-              </div>
-            </div>
+              <CtstUserProfileMenu
+                displayName={displayName}
+                roleLabel={roleLabelKo(ctx.profile.role)}
+                profileUsername={ctx.profile.username}
+                userId={ctx.session.user.id}
+                notificationsEnabled={featureAccess.kpi}
+              />
             </div>
           </div>
         </header>

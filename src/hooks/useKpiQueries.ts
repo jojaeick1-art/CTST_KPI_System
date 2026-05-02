@@ -14,9 +14,12 @@ import {
   fetchKpiPerformancesByItem,
   fetchMonthDeadlines,
   fetchDepartmentKpiDetail,
+  CURRENT_KPI_YEAR,
   fetchDepartmentKpiSummary,
   fetchDashboardSummaryStats,
   fetchPerformancesPendingStage,
+  fetchMyPerformanceInbox,
+  fetchMySubmittedPerformanceProgress,
   fetchKpiVocRequests,
   clearAllKpiData,
   extendKpiItemPeriodEndMonth,
@@ -26,6 +29,7 @@ import {
   renameDepartment,
   reviewPerformanceWorkflow,
   withdrawPerformanceSubmission,
+  deleteMyDraftPerformanceCell,
   saveMonthDeadline,
   upsertMonthPerformance,
   upsertQuarterPerformance,
@@ -196,10 +200,14 @@ export function useDashboardSummaryStats(
   });
 }
 
-export function useDepartmentKpiDetail(departmentId: string | undefined) {
+export function useDepartmentKpiDetail(
+  departmentId: string | undefined,
+  dataYear?: number
+) {
+  const year = dataYear ?? CURRENT_KPI_YEAR;
   return useQuery({
-    queryKey: ["supabase", "department-kpi-detail", departmentId],
-    queryFn: () => fetchDepartmentKpiDetail(departmentId!),
+    queryKey: ["supabase", "department-kpi-detail", departmentId, year],
+    queryFn: () => fetchDepartmentKpiDetail(departmentId!, year),
     enabled: Boolean(departmentId),
     refetchInterval: 30_000,
   });
@@ -309,7 +317,37 @@ export function useUpsertMonthPerformance() {
       void queryClient.invalidateQueries({
         queryKey: ["supabase", "pending-performances"],
       });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "my-performance-inbox"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "my-submitted-performance-progress"],
+      });
     },
+  });
+}
+
+export function useMyPerformanceInbox(enabled: boolean) {
+  const profileQuery = useDashboardProfile();
+  const uid = profileQuery.data?.session.user.id;
+  return useQuery({
+    queryKey: ["supabase", "my-performance-inbox", uid],
+    queryFn: () => fetchMyPerformanceInbox(uid!),
+    enabled:
+      enabled && profileQuery.isSuccess && typeof uid === "string" && uid.length > 0,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useMySubmittedPerformanceProgress(enabled: boolean) {
+  const profileQuery = useDashboardProfile();
+  const uid = profileQuery.data?.session.user.id;
+  return useQuery({
+    queryKey: ["supabase", "my-submitted-performance-progress", uid],
+    queryFn: () => fetchMySubmittedPerformanceProgress(uid!),
+    enabled:
+      enabled && profileQuery.isSuccess && typeof uid === "string" && uid.length > 0,
+    refetchInterval: 30_000,
   });
 }
 
@@ -379,6 +417,12 @@ export function useWorkflowReviewMutation() {
       void queryClient.invalidateQueries({
         queryKey: ["supabase", "kpi-performances"],
       });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "my-performance-inbox"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "my-submitted-performance-progress"],
+      });
     },
   });
 }
@@ -391,6 +435,42 @@ export function useWithdrawPendingPerformanceMutation() {
         month: args.month ?? undefined,
       }),
     onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "pending-performances"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "my-performance-inbox"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "my-submitted-performance-progress"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "department-kpi-summary"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "department-kpi-detail"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "kpi-performances"],
+      });
+    },
+  });
+}
+
+export function useDeleteDraftMonthlyPerformanceMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { performanceId: string; month?: MonthKey | null }) =>
+      deleteMyDraftPerformanceCell(args.performanceId, {
+        month: args.month ?? undefined,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "my-performance-inbox"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "my-submitted-performance-progress"],
+      });
       void queryClient.invalidateQueries({
         queryKey: ["supabase", "pending-performances"],
       });

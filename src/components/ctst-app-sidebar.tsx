@@ -6,14 +6,25 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
 import { CTST_PUBLIC_SITE_URL } from "@/src/lib/ctst-public-site";
 import {
+  useAppFeatureAvailability,
+  useDashboardProfile,
+  useMyPerformanceInbox,
+} from "@/src/hooks/useKpiQueries";
+import {
+  KPI_INBOX_SEEN_EVENT,
+  countUnreadInboxRows,
+} from "@/src/lib/kpi-inbox-seen";
+import {
   canAccessApprovalsPage,
   canAccessSystemSettings,
   hrefDashboardDepartmentList,
+  isAdminRole,
 } from "@/src/lib/rbac";
 
 const itemBase =
@@ -26,7 +37,14 @@ const itemActiveOverlay =
 const slidingIndicatorClass =
   "pointer-events-none absolute left-0 right-0 top-0 z-0 rounded-xl border border-sky-200/90 border-l-[3px] border-l-sky-500 bg-white shadow-sm shadow-sky-200/40 ring-1 ring-sky-100/90 will-change-[transform,height] transition-[transform,height,opacity] duration-[250ms] motion-reduce:transition-none [transition-timing-function:cubic-bezier(0.4,0,0.2,1)]";
 
-type NavSlot = "capa" | "kpi" | "approvals" | "voc" | "settings";
+type NavSlot =
+  | "capa"
+  | "kpi"
+  | "approvals"
+  | "kpiRejected"
+  | "kpiWithdrawn"
+  | "voc"
+  | "settings";
 
 type IndicatorBox = { top: number; height: number; opacity: number };
 
@@ -61,12 +79,16 @@ function resolveActiveNavSlot(
     return "kpi";
   }
 
-  if (
-    access.kpi &&
-    canAccessApprovalsPage(role) &&
-    pathname === "/dashboard/approvals"
-  ) {
+  if (access.kpi && pathname === "/dashboard/approvals") {
     return "approvals";
+  }
+
+  if (access.kpi && pathname === "/dashboard/performance-rejected") {
+    return "kpiRejected";
+  }
+
+  if (access.kpi && pathname === "/dashboard/performance-withdrawn") {
+    return "kpiWithdrawn";
   }
 
   if (
@@ -214,6 +236,47 @@ export function CtstAppSidebar({
   const access = featureAccess ?? { capa: true, voc: true, kpi: true };
   const kpiListHref = hrefDashboardDepartmentList(role, userDeptId);
 
+  const profileQuery = useDashboardProfile();
+  const featureQuery = useAppFeatureAvailability(
+    profileQuery.isSuccess && profileQuery.data !== null
+  );
+  const uid = profileQuery.data?.session.user.id;
+  const inboxQueryEnabled =
+    access.kpi &&
+    profileQuery.isSuccess &&
+    profileQuery.data !== null &&
+    typeof uid === "string" &&
+    uid.length > 0 &&
+    (isAdminRole(profileQuery.data.profile.role) ||
+      (featureQuery.isSuccess && featureQuery.data?.kpi === true));
+
+  const inboxQuery = useMyPerformanceInbox(inboxQueryEnabled);
+
+  const [inboxSeenTick, setInboxSeenTick] = useState(0);
+  useEffect(() => {
+    const fn = () => setInboxSeenTick((t) => t + 1);
+    window.addEventListener(KPI_INBOX_SEEN_EVENT, fn);
+    return () => window.removeEventListener(KPI_INBOX_SEEN_EVENT, fn);
+  }, []);
+
+  const rejectedUnread = useMemo(() => {
+    void inboxSeenTick;
+    return countUnreadInboxRows(
+      inboxQuery.data?.rejected ?? [],
+      uid,
+      "rejected"
+    );
+  }, [inboxQuery.data?.rejected, uid, inboxSeenTick]);
+
+  const withdrawnUnread = useMemo(() => {
+    void inboxSeenTick;
+    return countUnreadInboxRows(
+      inboxQuery.data?.withdrawn ?? [],
+      uid,
+      "withdrawn"
+    );
+  }, [inboxQuery.data?.withdrawn, uid, inboxSeenTick]);
+
   const activeSlot = resolveActiveNavSlot(pathname, role, access);
 
   const linkRefs = useRef<Partial<Record<NavSlot, HTMLAnchorElement | null>>>(
@@ -225,6 +288,8 @@ export function CtstAppSidebar({
   const capaActive = activeSlot === "capa";
   const kpiListActive = activeSlot === "kpi";
   const approvalsActive = activeSlot === "approvals";
+  const kpiRejectedActive = activeSlot === "kpiRejected";
+  const kpiWithdrawnActive = activeSlot === "kpiWithdrawn";
   const settingsActive = activeSlot === "settings";
   const vocActive = activeSlot === "voc";
 
@@ -297,24 +362,50 @@ export function CtstAppSidebar({
               href={kpiListHref}
               className={classForLink(kpiListActive)}
             >
-              KPI 대시보드
+              전체 대시보드
             </Link>
-            {canAccessApprovalsPage(role) ? (
-              <Link
-                ref={(el) => {
-                  linkRefs.current.approvals = el;
-                }}
-                href="/dashboard/approvals"
-                className={classForLink(approvalsActive)}
-              >
-                실적 승인 관리
-                {pendingApprovalCount > 0 ? (
-                  <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
-                    {pendingApprovalCount}
-                  </span>
-                ) : null}
-              </Link>
-            ) : null}
+            <Link
+              ref={(el) => {
+                linkRefs.current.approvals = el;
+              }}
+              href="/dashboard/approvals"
+              className={classForLink(approvalsActive)}
+            >
+              실적함
+              {canAccessApprovalsPage(role) && pendingApprovalCount > 0 ? (
+                <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                  {pendingApprovalCount}
+                </span>
+              ) : null}
+            </Link>
+            <Link
+              ref={(el) => {
+                linkRefs.current.kpiRejected = el;
+              }}
+              href="/dashboard/performance-rejected"
+              className={classForLink(kpiRejectedActive)}
+            >
+              반려함
+              {rejectedUnread > 0 ? (
+                <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                  {rejectedUnread}
+                </span>
+              ) : null}
+            </Link>
+            <Link
+              ref={(el) => {
+                linkRefs.current.kpiWithdrawn = el;
+              }}
+              href="/dashboard/performance-withdrawn"
+              className={classForLink(kpiWithdrawnActive)}
+            >
+              회수함
+              {withdrawnUnread > 0 ? (
+                <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                  {withdrawnUnread}
+                </span>
+              ) : null}
+            </Link>
             {access.voc ? (
               <Link
                 ref={(el) => {
@@ -323,7 +414,7 @@ export function CtstAppSidebar({
                 href="/voc"
                 className={classForLink(vocActive)}
               >
-                KPI VOC
+                VOC
               </Link>
             ) : null}
           </NavSection>

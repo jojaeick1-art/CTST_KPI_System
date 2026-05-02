@@ -1,24 +1,25 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import {
-  ExternalLink,
-  Loader2,
-  Paperclip,
-  Shield,
-  User,
-  X,
-} from "lucide-react";
+import { ExternalLink, Loader2, Paperclip, X } from "lucide-react";
 import { CtstAppSidebar } from "@/src/components/ctst-app-sidebar";
 import { createBrowserSupabase } from "@/src/lib/supabase";
-import { ChangePasswordButton } from "../change-password-modal";
-import type { PendingPerformanceListRow } from "@/src/lib/kpi-queries";
+import { CtstUserProfileMenu } from "@/src/components/ctst-user-profile-menu";
+import { PerformanceModal } from "../department/[id]/performance-modal";
+import type {
+  DepartmentKpiDetailItem,
+  MySubmittedPerformanceProgressRow,
+  PendingPerformanceListRow,
+} from "@/src/lib/kpi-queries";
+import type { MonthKey } from "@/src/lib/kpi-month";
 import {
   useAppFeatureAvailability,
   useDashboardProfile,
   useDashboardSummaryStats,
+  useDepartmentKpiDetail,
+  useMySubmittedPerformanceProgress,
   usePendingPerformances,
   useWorkflowReviewMutation,
 } from "@/src/hooks/useKpiQueries";
@@ -54,6 +55,176 @@ function displayNameFromSession(
   return username;
 }
 
+/** 승인 대기 목록용 — 내 실적 현황에서는 사용하지 않음 */
+function performanceActionKindBadgeClass(kind: string): string {
+  if (kind === "—") return "bg-slate-50 text-slate-500 ring-slate-200";
+  if (kind === "신규") return "bg-slate-100 text-slate-800 ring-slate-200";
+  if (kind === "재등록") return "bg-violet-100 text-violet-900 ring-violet-200";
+  return "bg-sky-100 text-sky-900 ring-sky-200";
+}
+
+function progressBadgeClass(label: string): string {
+  if (label === "1차 승인 대기") {
+    return "bg-amber-100 text-amber-900 ring-amber-200";
+  }
+  if (label === "최종 승인 대기") {
+    return "bg-sky-100 text-sky-900 ring-sky-200";
+  }
+  if (label === "반려") {
+    return "bg-red-100 text-red-900 ring-red-200";
+  }
+  if (label === "회수됨") {
+    return "bg-orange-100 text-orange-900 ring-orange-200";
+  }
+  if (label === "승인 완료") {
+    return "bg-emerald-100 text-emerald-900 ring-emerald-200";
+  }
+  return "bg-slate-100 text-slate-700 ring-slate-200";
+}
+
+function MySubmittedProgressTable({
+  rows,
+  onOpenRow,
+}: {
+  rows: MySubmittedPerformanceProgressRow[];
+  onOpenRow: (row: MySubmittedPerformanceProgressRow) => void;
+}) {
+  function rowOpenable(r: MySubmittedPerformanceProgressRow): boolean {
+    return Boolean(r.deptId?.trim() && r.kpiItemId?.trim());
+  }
+
+  if (!rows.length) {
+    return (
+      <p className="rounded-xl border border-sky-200 bg-white px-6 py-8 text-center text-sm text-slate-600 shadow-sm shadow-sky-100/40">
+        아직 제출한 실적이 없거나, 조회 가능한 건이 없습니다.
+      </p>
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-sm shadow-sky-100/40">
+      <div className="overflow-x-auto">
+        <table className="table-fixed min-w-[1020px] w-full border-collapse text-sm">
+          <colgroup>
+            <col className="w-[7%]" />
+            <col className="w-[10%]" />
+            <col className="w-[12%]" />
+            <col className="w-[5%]" />
+            <col className="w-[7%]" />
+            <col className="w-[11%]" />
+            <col className="w-[8%]" />
+            <col className="w-[16%]" />
+            <col className="w-[8%]" />
+            <col className="w-[16%]" />
+          </colgroup>
+          <thead className="bg-sky-50/90 text-left text-slate-700">
+            <tr>
+              <th className="whitespace-nowrap px-4 py-3 font-semibold">구분</th>
+              <th className="px-4 py-3 font-semibold">KPI 중분류</th>
+              <th className="px-4 py-3 font-semibold">KPI 세부내용</th>
+              <th className="px-4 py-3 font-semibold">월</th>
+              <th className="px-4 py-3 font-semibold">수치</th>
+              <th className="px-4 py-3 font-semibold">부서명</th>
+              <th className="whitespace-nowrap px-4 py-3 font-semibold">
+                담당자
+              </th>
+              <th className="px-4 py-3 font-semibold">진행 내용</th>
+              <th className="px-4 py-3 font-semibold">증빙</th>
+              <th className="px-4 py-3 font-semibold text-right">진행 현황</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const openable = rowOpenable(row);
+              const pct =
+                row.achievement_rate !== null
+                  ? `${Math.round(Number(row.achievement_rate))}%`
+                  : "—";
+              return (
+                <tr
+                  key={row.id}
+                  role={openable ? "button" : undefined}
+                  tabIndex={openable ? 0 : undefined}
+                  title={
+                    openable
+                      ? "클릭하면 해당 KPI·월 실적 창이 열립니다."
+                      : undefined
+                  }
+                  onClick={() => {
+                    if (openable) onOpenRow(row);
+                  }}
+                  onKeyDown={(e) => {
+                    if (!openable) return;
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onOpenRow(row);
+                    }
+                  }}
+                  className={`border-t border-sky-50 text-slate-700 transition hover:bg-sky-50/40 ${
+                    openable ? "cursor-pointer" : ""
+                  }`}
+                >
+                  <td className="max-w-0 whitespace-nowrap px-4 py-3 text-center tabular-nums text-slate-400">
+                    -
+                  </td>
+                  <td className="max-w-0 break-words px-4 py-3 font-medium text-slate-800">
+                    {row.kpiSubLabel}
+                  </td>
+                  <td className="max-w-0 break-words px-4 py-3 font-medium text-slate-800">
+                    {row.kpiMainLabel}
+                  </td>
+                  <td className="max-w-0 whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">
+                    {row.periodLabel}
+                  </td>
+                  <td className="max-w-0 whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-sky-800">
+                    {pct}
+                  </td>
+                  <td className="max-w-0 break-words px-4 py-3 font-medium text-slate-800">
+                    {row.departmentName}
+                  </td>
+                  <td className="max-w-0 whitespace-nowrap px-4 py-3 text-slate-800">
+                    {row.ownerName?.trim() ? row.ownerName : "—"}
+                  </td>
+                  <td className="max-w-0 break-words px-4 py-3 text-xs leading-relaxed text-slate-600">
+                    {row.description?.trim() ? row.description : "—"}
+                  </td>
+                  <td
+                    className="max-w-0 px-4 py-3"
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
+                  >
+                    {row.evidence_url ? (
+                      <a
+                        href={row.evidence_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-sky-200 bg-sky-50/50 px-2.5 py-1.5 text-xs font-medium text-sky-800 transition hover:bg-sky-100"
+                      >
+                        <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                        열기
+                        <ExternalLink className="h-3 w-3 shrink-0 opacity-70" />
+                      </a>
+                    ) : (
+                      <span className="text-xs text-slate-400">없음</span>
+                    )}
+                  </td>
+                  <td className="max-w-0 px-4 py-3 text-right align-middle">
+                    <span
+                      className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1 ring-inset ${progressBadgeClass(row.progressLabel)}`}
+                    >
+                      {row.progressLabel}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function PendingTable({
   title,
   subtitle,
@@ -86,19 +257,36 @@ function PendingTable({
       ) : (
         <div className="overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-sm shadow-sky-100/40">
           <div className="overflow-x-auto">
-            <table className="min-w-[960px] w-full border-collapse text-sm">
+            {/*
+              table-fixed + colgroup: 1차/최종 테이블 간 헤더·열 위치 동일(최종 승인 테이블 기준 비율 고정).
+            */}
+            <table className="table-fixed min-w-[1020px] w-full border-collapse text-sm">
+              <colgroup>
+                <col className="w-[7%]" />
+                <col className="w-[10%]" />
+                <col className="w-[12%]" />
+                <col className="w-[5%]" />
+                <col className="w-[7%]" />
+                <col className="w-[11%]" />
+                <col className="w-[8%]" />
+                <col className="w-[16%]" />
+                <col className="w-[8%]" />
+                <col className="w-[16%]" />
+              </colgroup>
               <thead className="bg-sky-50/90 text-left text-slate-700">
                 <tr>
-                  <th className="px-4 py-3 font-semibold">부서명</th>
-                  <th className="px-4 py-3 font-semibold">KPI 항목</th>
-                  <th className="px-4 py-3 font-semibold">기간</th>
-                  <th className="px-4 py-3 font-semibold">입력 수치</th>
                   <th className="whitespace-nowrap px-4 py-3 font-semibold">
-                    담당자 이름
+                    구분
                   </th>
-                  <th className="min-w-[180px] px-4 py-3 font-semibold">
-                    담당자 코멘트
+                  <th className="px-4 py-3 font-semibold">KPI 중분류</th>
+                  <th className="px-4 py-3 font-semibold">KPI 세부내용</th>
+                  <th className="px-4 py-3 font-semibold">월</th>
+                  <th className="px-4 py-3 font-semibold">수치</th>
+                  <th className="px-4 py-3 font-semibold">부서명</th>
+                  <th className="whitespace-nowrap px-4 py-3 font-semibold">
+                    담당자
                   </th>
+                  <th className="px-4 py-3 font-semibold">진행 내용</th>
                   <th className="px-4 py-3 font-semibold">증빙</th>
                   <th className="px-4 py-3 font-semibold text-right">
                     {variant === "primary" ? "1차 처리" : "최종 처리"}
@@ -117,30 +305,35 @@ function PendingTable({
                       key={row.id}
                       className="border-t border-sky-50 text-slate-700 transition hover:bg-sky-50/40"
                     >
-                      <td className="px-4 py-3 font-medium text-slate-800">
-                        {row.departmentName}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="font-medium text-slate-800">
-                          {row.kpiMainLabel}
-                        </span>
-                        <span className="mt-0.5 block text-xs text-slate-500">
-                          {row.kpiSubLabel}
+                      <td className="max-w-0 whitespace-nowrap px-4 py-3 align-middle">
+                        <span
+                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${performanceActionKindBadgeClass(row.performanceActionKind)}`}
+                        >
+                          {row.performanceActionKind}
                         </span>
                       </td>
-                      <td className="px-4 py-3 tabular-nums text-slate-600">
+                      <td className="max-w-0 break-words px-4 py-3 font-medium text-slate-800">
+                        {row.kpiSubLabel}
+                      </td>
+                      <td className="max-w-0 break-words px-4 py-3 font-medium text-slate-800">
+                        {row.kpiMainLabel}
+                      </td>
+                      <td className="max-w-0 whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">
                         {row.periodLabel}
                       </td>
-                      <td className="px-4 py-3 font-semibold tabular-nums text-sky-800">
+                      <td className="max-w-0 whitespace-nowrap px-4 py-3 font-semibold tabular-nums text-sky-800">
                         {pct}
                       </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-slate-800">
+                      <td className="max-w-0 break-words px-4 py-3 font-medium text-slate-800">
+                        {row.departmentName}
+                      </td>
+                      <td className="max-w-0 whitespace-nowrap px-4 py-3 text-slate-800">
                         {row.ownerName?.trim() ? row.ownerName : "—"}
                       </td>
-                      <td className="px-4 py-3 text-xs leading-relaxed text-slate-600">
+                      <td className="max-w-0 break-words px-4 py-3 text-xs leading-relaxed text-slate-600">
                         {row.description?.trim() ? row.description : "—"}
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="max-w-0 px-4 py-3">
                         {row.evidence_url ? (
                           <a
                             href={row.evidence_url}
@@ -156,7 +349,7 @@ function PendingTable({
                           <span className="text-xs text-slate-400">없음</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-right">
+                      <td className="max-w-0 px-4 py-3 text-right align-middle">
                         <div className="flex flex-wrap justify-end gap-2">
                           <button
                             type="button"
@@ -218,6 +411,12 @@ export function ApprovalsClient() {
   const featureQuery = useAppFeatureAvailability(
     profileQuery.isSuccess && profileQuery.data !== null
   );
+  const myProgressEnabled =
+    profileQuery.isSuccess &&
+    profileQuery.data !== null &&
+    (isAdminRole(profileQuery.data.profile.role) ||
+      (featureQuery.isSuccess && featureQuery.data?.kpi === true));
+  const myProgressQuery = useMySubmittedPerformanceProgress(myProgressEnabled);
   const pendingApprovalCount =
     approvalNotificationCount(
       resolvedRole,
@@ -257,8 +456,89 @@ export function ApprovalsClient() {
     tone: "info",
   });
 
-  const notify = (tone: ToastState["tone"], message: string) =>
-    setToast({ open: true, tone, message });
+  type PerfOpenReq = {
+    deptId: string;
+    kpiItemId: string;
+    month: MonthKey | null;
+  };
+  const [perfOpenReq, setPerfOpenReq] = useState<PerfOpenReq | null>(null);
+  const [perfModalItem, setPerfModalItem] =
+    useState<DepartmentKpiDetailItem | null>(null);
+  const [perfModalDeptId, setPerfModalDeptId] = useState<string | null>(null);
+  const [perfModalMonth, setPerfModalMonth] = useState<MonthKey | null>(null);
+
+  const deptIdForModalQuery =
+    perfOpenReq?.deptId ?? perfModalDeptId ?? undefined;
+  const deptDetailForModal = useDepartmentKpiDetail(deptIdForModalQuery);
+
+  const canEditPerformanceModal = useMemo(() => {
+    const p = profileQuery.data;
+    if (!p || !perfModalDeptId) return false;
+    if (isAdminRole(p.profile.role)) return true;
+    const d = typeof p.profile.dept_id === "string" ? p.profile.dept_id : null;
+    return Boolean(d && d === perfModalDeptId);
+  }, [profileQuery.data, perfModalDeptId]);
+
+  const notify = useCallback(
+    (tone: ToastState["tone"], message: string) =>
+      setToast({ open: true, tone, message }),
+    []
+  );
+
+  const handleOpenPerfFromProgressRow = useCallback(
+    (row: MySubmittedPerformanceProgressRow) => {
+      const d = row.deptId?.trim();
+      const kid = row.kpiItemId?.trim();
+      if (!d || !kid) {
+        notify(
+          "info",
+          "부서 또는 KPI 정보가 없어 실적 창을 열 수 없습니다."
+        );
+        return;
+      }
+      setPerfModalItem(null);
+      setPerfModalDeptId(null);
+      setPerfModalMonth(null);
+      setPerfOpenReq({
+        deptId: d,
+        kpiItemId: kid,
+        month: row.month,
+      });
+    },
+    [notify]
+  );
+
+  useEffect(() => {
+    if (!perfOpenReq) return;
+    if (deptDetailForModal.isPending) return;
+    if (deptDetailForModal.isError) return;
+    const items = deptDetailForModal.data?.items;
+    if (!items) return;
+    const item = items.find((i) => i.id === perfOpenReq.kpiItemId);
+    if (!item) {
+      notify("error", "KPI 항목을 찾을 수 없습니다.");
+      setPerfOpenReq(null);
+      return;
+    }
+    setPerfModalItem(item);
+    setPerfModalDeptId(perfOpenReq.deptId);
+    const m = perfOpenReq.month;
+    setPerfModalMonth(m != null && m >= 1 && m <= 12 ? (m as MonthKey) : null);
+    setPerfOpenReq(null);
+  }, [
+    perfOpenReq,
+    deptDetailForModal.isPending,
+    deptDetailForModal.isError,
+    deptDetailForModal.data?.items,
+    notify,
+  ]);
+
+  useEffect(() => {
+    if (!perfOpenReq) return;
+    if (!deptDetailForModal.isError) return;
+    notify("error", "부서 KPI 정보를 불러오지 못했습니다.");
+    setPerfOpenReq(null);
+  }, [perfOpenReq, deptDetailForModal.isError, notify]);
 
   useEffect(() => {
     if (!profileQuery.isSuccess) return;
@@ -425,91 +705,141 @@ export function ApprovalsClient() {
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h1 className="text-xl font-bold tracking-tight text-slate-800 sm:text-2xl">
-                실적 승인 관리
+                실적함
               </h1>
               <p className="mt-0.5 text-sm text-slate-500">
-                일반 제출 → 1차 승인 대기(그룹장) → 최종 승인 대기(팀장) → 승인 완료(대시보드
-                반영). 그룹장이 제출한 실적은 최종 승인 대기로 바로 이동합니다. 반려 시
-                제출 전(draft)으로 돌아갑니다.
+                &quot;내 실적 진행현황&quot;에서 본인이 제출한 실적의 승인 단계를 확인할 수
+                있습니다. 그룹장·팀장·관리자에게는 아래에 실적 승인·반려 처리 목록이
+                추가로 표시되며, 승인된 실적은 전체 대시보드 달성률에 반영됩니다.
               </p>
             </div>
             <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:gap-3">
-              <ChangePasswordButton profileUsername={ctx.profile.username} />
-              <div className="flex items-center gap-3 rounded-xl border border-sky-200 bg-white px-4 py-2.5 shadow-sm shadow-sky-100/50">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-100 text-sky-700">
-                  <User className="h-5 w-5" aria-hidden />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-slate-800">
-                    {displayName}
-                    <span className="font-normal text-slate-400"> 님</span>
-                  </p>
-                  <div className="mt-0.5 flex items-center gap-1.5">
-                    <Shield className="h-3.5 w-3.5 text-sky-600" aria-hidden />
-                    <span className="text-xs font-medium text-sky-700">
-                      {roleLabelKo(ctx.profile.role)}
-                    </span>
-                  </div>
-                </div>
-              </div>
+              <CtstUserProfileMenu
+                displayName={displayName}
+                roleLabel={roleLabelKo(ctx.profile.role)}
+                profileUsername={ctx.profile.username}
+                userId={ctx.session.user.id}
+                notificationsEnabled={featureAccess.kpi}
+              />
             </div>
           </div>
         </header>
 
         <div className="px-4 py-6 sm:p-8">
-          {!canSeeApprovals ? (
-            <div className="rounded-xl border border-amber-200 bg-amber-50/90 px-4 py-4 text-sm text-amber-900">
-              <p className="font-medium">
-                그룹장·팀장·관리자만 실적 승인 메뉴를 사용할 수 있습니다.
-              </p>
-              <Link
-                href={dashboardListHref}
-                className="mt-2 inline-block text-sky-700 underline-offset-2 hover:underline"
-              >
-                대시보드로 돌아가기
-              </Link>
-            </div>
-          ) : listError ? (
-            <div className="rounded-xl border border-red-100 bg-red-50/90 px-4 py-3 text-sm text-red-800">
-              {listError instanceof Error ? listError.message : "목록을 불러오지 못했습니다."}
-            </div>
-          ) : listLoading ? (
-            <div className="h-48 animate-pulse rounded-xl bg-sky-100/60" />
-          ) : (
-            <>
-              {isGroupLeader ? (
-                <PendingTable
-                  title="1차 승인 대기"
-                  subtitle="실적이 제출되면 여기에 표시됩니다. 승인 시 팀장에게 최종 승인 요청이 전달됩니다."
-                  rows={primaryQuery.data ?? []}
-                  busyId={actingId}
-                  workflowPending={workflowMut.isPending}
-                  variant="primary"
-                  onApprove={(row) => void handleApprovePrimary(row)}
-                  onRejectClick={(row) => {
-                    setRejectForId(row.id);
-                    setRejectReason("");
-                  }}
+          <div className="w-full min-w-0 space-y-10">
+            <section>
+              <div className="mb-3">
+                <h2 className="text-base font-semibold text-slate-800">
+                  내 실적 진행현황
+                </h2>
+                <p className="text-sm text-slate-500">
+                  내가 제출·회수한 실적의 현재 상태를 표시합니다. 승인 처리 권한은 없으며,
+                  행을 선택하면 이 화면에서 바로 실적 창이 열립니다.
+                </p>
+              </div>
+              {myProgressQuery.isPending ? (
+                <div className="h-40 animate-pulse rounded-xl bg-sky-100/60" />
+              ) : myProgressQuery.isError ? (
+                <div className="rounded-xl border border-red-100 bg-red-50/90 px-4 py-3 text-sm text-red-800">
+                  {myProgressQuery.error instanceof Error
+                    ? myProgressQuery.error.message
+                    : "목록을 불러오지 못했습니다."}
+                </div>
+              ) : (
+                <MySubmittedProgressTable
+                  rows={myProgressQuery.data ?? []}
+                  onOpenRow={handleOpenPerfFromProgressRow}
                 />
-              ) : null}
-              {isTeamLeader ? (
-                <PendingTable
-                  title="최종 승인 대기"
-                  subtitle="팀장 최종 승인이 필요한 실적이 표시됩니다. 승인 시 대시보드 달성률에 반영됩니다."
-                  rows={finalQuery.data ?? []}
-                  busyId={actingId}
-                  workflowPending={workflowMut.isPending}
-                  variant="final"
-                  onApprove={(row) => void handleApproveFinal(row)}
-                  onRejectClick={(row) => {
-                    setRejectForId(row.id);
-                    setRejectReason("");
-                  }}
-                />
-              ) : null}
-            </>
-          )}
+              )}
+            </section>
+
+            {!canSeeApprovals ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50/90 px-4 py-4 text-sm text-amber-900">
+                <p className="font-medium">
+                  그룹장·팀장·관리자만 아래와 같이 타인의 실적을 승인·반려할 수 있습니다.
+                  본인 제출 건의 진행 현황은 위 목록에서 확인하세요.
+                </p>
+                <Link
+                  href={dashboardListHref}
+                  className="mt-2 inline-block text-sky-700 underline-offset-2 hover:underline"
+                >
+                  전체 대시보드로 돌아가기
+                </Link>
+              </div>
+            ) : listError ? (
+              <div className="rounded-xl border border-red-100 bg-red-50/90 px-4 py-3 text-sm text-red-800">
+                {listError instanceof Error ? listError.message : "목록을 불러오지 못했습니다."}
+              </div>
+            ) : listLoading ? (
+              <div className="h-48 animate-pulse rounded-xl bg-sky-100/60" />
+            ) : (
+              <>
+                {isGroupLeader ? (
+                  <PendingTable
+                    title="1차 승인 대기"
+                    subtitle="실적이 제출되면 여기에 표시됩니다. 승인 시 팀장에게 최종 승인 요청이 전달됩니다."
+                    rows={primaryQuery.data ?? []}
+                    busyId={actingId}
+                    workflowPending={workflowMut.isPending}
+                    variant="primary"
+                    onApprove={(row) => void handleApprovePrimary(row)}
+                    onRejectClick={(row) => {
+                      setRejectForId(row.id);
+                      setRejectReason("");
+                    }}
+                  />
+                ) : null}
+                {isTeamLeader ? (
+                  <PendingTable
+                    title="최종 승인 대기"
+                    subtitle="팀장 최종 승인이 필요한 실적이 표시됩니다. 승인 시 대시보드 달성률에 반영됩니다."
+                    rows={finalQuery.data ?? []}
+                    busyId={actingId}
+                    workflowPending={workflowMut.isPending}
+                    variant="final"
+                    onApprove={(row) => void handleApproveFinal(row)}
+                    onRejectClick={(row) => {
+                      setRejectForId(row.id);
+                      setRejectReason("");
+                    }}
+                  />
+                ) : null}
+              </>
+            )}
+          </div>
         </div>
+
+            {perfOpenReq !== null && !deptDetailForModal.isError ? (
+              <div
+                className="fixed inset-0 z-[55] flex items-center justify-center bg-slate-900/35 p-4"
+                aria-busy
+                aria-live="polite"
+              >
+                <div className="flex flex-col items-center gap-3 rounded-2xl border border-sky-200 bg-white px-8 py-6 shadow-xl">
+                  <Loader2 className="h-10 w-10 animate-spin text-sky-600" />
+                  <p className="text-sm font-medium text-slate-700">
+                    실적 화면을 여는 중…
+                  </p>
+                </div>
+              </div>
+            ) : null}
+
+            <PerformanceModal
+              isOpen={perfModalItem !== null}
+              kpiItem={perfModalItem}
+              canEditPerformance={canEditPerformanceModal}
+              profileRole={role}
+              profileUserId={ctx.session.user.id}
+              canFinalizeKpiItem={false}
+              initialEditorMonth={perfModalMonth}
+              onClose={() => {
+                setPerfModalItem(null);
+                setPerfModalDeptId(null);
+                setPerfModalMonth(null);
+                setPerfOpenReq(null);
+                void myProgressQuery.refetch();
+              }}
+            />
         </>
         )}
       </main>

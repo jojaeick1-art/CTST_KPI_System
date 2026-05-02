@@ -578,6 +578,13 @@ type PerformanceMonthlyCell = {
   evidence_original_filename?: string | null;
   aggregation_type?: KpiAggregationType | string | null;
   rejection_reason?: string | null;
+  /** 제출 회수 시 기록 — 회수함 목록(본인 건만) */
+  withdrawn_by?: string | null;
+  withdrawn_at?: string | null;
+  /** 과거 승인 대기 제출 이력 — 재제출 시 구분(신규/수정/재등록)용 */
+  has_ever_been_pending?: boolean;
+  /** 승인 대기 목록용: 마지막 제출이 신규·수정·재등록 중 무엇이었는지 */
+  performance_submit_kind?: "신규" | "수정" | "재등록";
 };
 
 type MonthlyAchievementRateContext = {
@@ -1719,7 +1726,8 @@ function buildMonthlyAchievementRateContext(input: {
 }
 
 export async function fetchDepartmentKpiDetail(
-  departmentId: string
+  departmentId: string,
+  dataYear: number = CURRENT_KPI_YEAR
 ): Promise<{
   department: { id: string; name: string } | null;
   departmentAverageAchievement: number | null;
@@ -1806,11 +1814,11 @@ export async function fetchDepartmentKpiDetail(
   const detailItems: DepartmentKpiDetailItem[] = typedItems.map((raw) => {
     const item = asRecord(raw);
     const rawTargets = Array.isArray(item.kpi_targets) ? item.kpi_targets : [];
+    const targetYear = dataYear;
     const targets = rawTargets.map(asRecord).filter((t) => {
       if (!hasYear) return true;
       return (
-        toNum(t.year as number | string | null | undefined) ===
-        CURRENT_KPI_YEAR
+        toNum(t.year as number | string | null | undefined) === targetYear
       );
     });
     const firstHalf = targets
@@ -2177,6 +2185,9 @@ export type ItemPerformanceRow = {
   rejection_reason: string | null;
   /** 제출자 UUID — 월별은 JSON 셀, 레거시 분기는 kpi_targets.performance_submitted_by */
   submitted_by: string | null;
+  /** 월별 JSON — 회수함·삭제 판별용 */
+  withdrawn_by: string | null;
+  withdrawn_at: string | null;
 };
 
 function monthFromTargetText(v: unknown): number | null {
@@ -2396,6 +2407,8 @@ function mapTargetRecordToItemPerformanceRow(
       t.performance_submitted_by.trim()
         ? t.performance_submitted_by.trim()
         : null,
+    withdrawn_by: null,
+    withdrawn_at: null,
   };
 }
 
@@ -2494,6 +2507,14 @@ async function buildItemPerformanceRowsFromKpiTargets(
           typeof cell?.submitted_by === "string" && cell.submitted_by.trim()
             ? cell.submitted_by.trim()
             : null,
+        withdrawn_by:
+          typeof cell?.withdrawn_by === "string" && cell.withdrawn_by.trim()
+            ? cell.withdrawn_by.trim()
+            : null,
+        withdrawn_at:
+          typeof cell?.withdrawn_at === "string" && cell.withdrawn_at.trim()
+            ? cell.withdrawn_at.trim()
+            : null,
       };
     });
   }
@@ -2546,6 +2567,8 @@ async function buildItemPerformanceRowsFromKpiTargets(
         String(src.performance_submitted_by).trim()
           ? String(src.performance_submitted_by).trim()
           : null,
+      withdrawn_by: null,
+      withdrawn_at: null,
     };
   });
 }
@@ -2998,10 +3021,11 @@ export async function upsertMonthPerformance(
 
   const mode: KpiIndicatorType = input.indicatorMode ?? "normal";
   const r = applyAchievementCap(input.achievement_rate, input.achievementCap ?? 100);
+  const nextStep = approvalStepAfterPerformanceSubmit(options?.actorRole);
   const nextCell: PerformanceMonthlyCell = {
     ...prevCell,
     achievement_rate: r,
-    approval_step: approvalStepAfterPerformanceSubmit(options?.actorRole),
+    approval_step: nextStep,
     rejection_reason: null,
     remarks: input.description.trim() || null,
     bubble_note:
@@ -3036,6 +3060,31 @@ export async function upsertMonthPerformance(
   if (submitterId) {
     nextCell.submitted_by = submitterId;
   }
+  const pendingLike =
+    nextStep === PERF_STATUS_PENDING_PRIMARY ||
+    nextStep === PERF_LEGACY_PENDING ||
+    nextStep === PERF_STATUS_PENDING_FINAL;
+  if (pendingLike) {
+    const rejPrev =
+      typeof prevCell.rejection_reason === "string" &&
+      prevCell.rejection_reason.trim();
+    const wdrawPrev =
+      typeof prevCell.withdrawn_by === "string" && prevCell.withdrawn_by.trim();
+    let submitKind: "신규" | "수정" | "재등록";
+    if (rejPrev || wdrawPrev) {
+      submitKind = "재등록";
+    } else if (prevCell.has_ever_been_pending === true) {
+      submitKind = "수정";
+    } else {
+      submitKind = "신규";
+    }
+    nextCell.performance_submit_kind = submitKind;
+    nextCell.has_ever_been_pending = true;
+  } else {
+    delete (nextCell as Record<string, unknown>).performance_submit_kind;
+  }
+  delete (nextCell as Record<string, unknown>).withdrawn_by;
+  delete (nextCell as Record<string, unknown>).withdrawn_at;
   pm[key] = nextCell;
 
   const hasYear = await getKpiTargetsHasYearColumn();
@@ -3265,7 +3314,17 @@ export type PendingPerformanceListRow = {
   kpiSubLabel: string;
   /** KPI 항목 담당자(`kpi_items.manager_name` 등) */
   ownerName: string | null;
+  /** 승인·반려 담당자용 제출 구분(미기록·레거시는 "—") */
+  performanceActionKind: "신규" | "수정" | "재등록" | "—";
 };
+
+function performanceSubmitKindFromMonthlyCell(
+  c: PerformanceMonthlyCell
+): "신규" | "수정" | "재등록" | "—" {
+  const raw = (c as Record<string, unknown>).performance_submit_kind;
+  if (raw === "신규" || raw === "수정" || raw === "재등록") return raw;
+  return "—";
+}
 
 export async function fetchPerformancesPendingStage(options: {
   stage: ApprovalWorkflowStage;
@@ -3369,6 +3428,7 @@ export async function fetchPerformancesPendingStage(options: {
         kpiSubLabel: pickText(itemRec, ["main_topic", "topic_main"]),
         ownerName,
         deptId,
+        performanceActionKind: "—",
       });
     };
 
@@ -3413,6 +3473,7 @@ export async function fetchPerformancesPendingStage(options: {
           kpiSubLabel: pickText(itemRec, ["main_topic", "topic_main"]),
           ownerName,
           deptId,
+          performanceActionKind: performanceSubmitKindFromMonthlyCell(c),
         });
         stagedMonthPending = true;
       }
@@ -3454,6 +3515,541 @@ export async function fetchPerformancesPendingStage(options: {
         deptId && deptMap.has(deptId) ? deptMap.get(deptId)! : "-",
     };
   });
+}
+
+/** 본인이 제출·회수한 실적의 승인 진행 표시용 */
+export type MySubmittedPerformanceProgressRow = {
+  id: string;
+  targetRowId: string;
+  kpiItemId: string;
+  month: MonthKey | null;
+  periodLabel: string;
+  half_type: string;
+  achievement_rate: number | null;
+  description: string | null;
+  evidence_url: string | null;
+  departmentName: string;
+  kpiMainLabel: string;
+  kpiSubLabel: string;
+  ownerName: string | null;
+  deptId: string | null;
+  /** UI 표시용 문구 */
+  progressLabel: string;
+  /** 목록 정렬 (낮을수록 상단: 대기 → 반려·회수 → 완료) */
+  sortRank: number;
+};
+
+function resolveMySubmissionProgressLabel(
+  approvalStepRaw: string | null | undefined,
+  rejectionReason: string | null | undefined,
+  withdrawnBy: string | null | undefined
+): { label: string; sortRank: number } {
+  const st =
+    typeof approvalStepRaw === "string"
+      ? approvalStepRaw.trim().toLowerCase()
+      : "";
+  const effective = st || PERF_STATUS_DRAFT;
+  if (
+    effective === PERF_STATUS_PENDING_PRIMARY ||
+    effective === PERF_LEGACY_PENDING
+  ) {
+    return { label: "1차 승인 대기", sortRank: 0 };
+  }
+  if (effective === PERF_STATUS_PENDING_FINAL) {
+    return { label: "최종 승인 대기", sortRank: 1 };
+  }
+  if (effective === PERF_STATUS_APPROVED) {
+    return { label: "승인 완료", sortRank: 6 };
+  }
+  const rr =
+    typeof rejectionReason === "string" && rejectionReason.trim()
+      ? rejectionReason.trim()
+      : "";
+  const wby =
+    typeof withdrawnBy === "string" && withdrawnBy.trim()
+      ? withdrawnBy.trim()
+      : "";
+  if (rr) return { label: "반려", sortRank: 2 };
+  if (wby) return { label: "회수됨", sortRank: 3 };
+  if (!st || effective === PERF_STATUS_DRAFT) {
+    return { label: "작성 중", sortRank: 5 };
+  }
+  return { label: approvalStepRaw ?? "—", sortRank: 7 };
+}
+
+/**
+ * 로그인 사용자가 제출한 실적(월별 JSON `submitted_by` 또는 회수 `withdrawn_by`,
+ * 레거시 분기는 `performance_submitted_by`)의 현재 승인 단계 요약.
+ */
+export async function fetchMySubmittedPerformanceProgress(
+  userId: string
+): Promise<MySubmittedPerformanceProgressRow[]> {
+  const uid = userId.trim();
+  if (!uid) return [];
+
+  const supabase = createBrowserSupabase();
+  const hasYear = await getKpiTargetsHasYearColumn();
+  const hasTargetHalf = await getKpiTargetsHasHalfTypeColumn();
+  const hasH1TargetPctColumn = await getKpiTargetsHasColumn("h1_target_pct");
+  const hasH2TargetPctColumn = await getKpiTargetsHasColumn("h2_target_pct");
+
+  let tq = supabase
+    .from("kpi_targets")
+    .select("*, kpi_items(*, kpi_milestones(target_month, target_value))");
+  if (hasYear) tq = tq.eq("year", CURRENT_KPI_YEAR);
+
+  const { data: targetRows, error: te } = await tq;
+  if (te) throw new Error(te.message);
+
+  const deptIds = new Set<string>();
+  const staged: Array<
+    MySubmittedPerformanceProgressRow & { deptId: string | null }
+  > = [];
+
+  for (const rawT of targetRows ?? []) {
+    const t = asRecord(rawT);
+    const tid = typeof t.id === "string" ? t.id : String(t.id ?? "");
+    const itemRaw = t.kpi_items;
+    const item = Array.isArray(itemRaw) ? itemRaw[0] : itemRaw;
+    const itemRec = item ? asRecord(item as Record<string, unknown>) : {};
+    const kpiItemId =
+      typeof itemRec.id === "string"
+        ? itemRec.id
+        : String(itemRec.id ?? "");
+    const deptId =
+      typeof itemRec.dept_id === "string" && itemRec.dept_id
+        ? itemRec.dept_id
+        : null;
+    const milestoneRows = Array.isArray(itemRec.kpi_milestones)
+      ? itemRec.kpi_milestones.map(asRecord)
+      : [];
+    const monthlyTargets = milestoneRows.reduce<
+      Partial<Record<number, number>>
+    >((acc, row) => {
+      const month = toNum(row.target_month as number | string | null | undefined);
+      const value = toNum(row.target_value as number | string | null | undefined);
+      if (
+        month !== null &&
+        value !== null &&
+        Number.isInteger(month) &&
+        month >= 1 &&
+        month <= 15
+      ) {
+        acc[month] = value;
+      }
+      return acc;
+    }, {});
+    const rateContext = buildMonthlyAchievementRateContext({
+      item: itemRec,
+      targets: [t],
+      monthlyTargets,
+      hasH1TargetPctColumn,
+      hasH2TargetPctColumn,
+    });
+    const ownerNameRaw = pickText(itemRec, [
+      "manager_name",
+      "owner",
+      "assignee",
+      "manager",
+      "owner_name",
+    ]).trim();
+    const ownerName = ownerNameRaw.length > 0 ? ownerNameRaw : null;
+
+    if (deptId) deptIds.add(deptId);
+
+    const perfHalf = hasTargetHalf
+      ? normalizeHalfTypeKey(String(t.half_type ?? "")) || HALF_TYPE_H1
+      : HALF_TYPE_H1;
+    const quarterRangeLabel = legacyQuarterRangeLabelFromTargetRecord(t);
+
+    const kpiMainLabel = pickText(itemRec, [
+      "sub_topic",
+      "topic_sub",
+      "sub_title",
+      "subtitle",
+    ]);
+    const kpiSubLabel = pickText(itemRec, ["main_topic", "topic_main"]);
+
+    if (performanceMonthlyIsNonEmpty(t.performance_monthly)) {
+      const o = t.performance_monthly as Record<string, unknown>;
+      for (const mi of KPI_MONTHS) {
+        const cellRaw = o[String(mi)];
+        if (!cellRaw || typeof cellRaw !== "object" || Array.isArray(cellRaw)) {
+          continue;
+        }
+        const c = cellRaw as PerformanceMonthlyCell;
+        const sub =
+          typeof c.submitted_by === "string" ? c.submitted_by.trim() : "";
+        const wby =
+          typeof c.withdrawn_by === "string" ? c.withdrawn_by.trim() : "";
+        if (sub !== uid && wby !== uid) continue;
+
+        const stRaw =
+          typeof c.approval_step === "string" ? c.approval_step : "";
+        const { label, sortRank } = resolveMySubmissionProgressLabel(
+          stRaw,
+          typeof c.rejection_reason === "string" ? c.rejection_reason : null,
+          typeof c.withdrawn_by === "string" ? c.withdrawn_by : null
+        );
+
+        const storedRate = toNum(
+          c.achievement_rate as number | string | null | undefined
+        );
+        const rate =
+          monthlyAchievementRateFromCurrentTarget(o, mi, rateContext) ??
+          storedRate;
+
+        const evidenceVals = evidenceStoredValuesFromCell(c);
+        const ev0 = evidenceVals[0] ?? null;
+        const evidencePub = ev0 ? toEvidencePublicUrl(supabase, ev0) : null;
+
+        staged.push({
+          id: `${tid}:M${mi}:mine`,
+          targetRowId: tid,
+          kpiItemId,
+          month: mi as MonthKey,
+          periodLabel: `${mi}월`,
+          half_type: monthToHalfTypeLabel(mi as MonthKey),
+          achievement_rate: rate,
+          description:
+            typeof c.remarks === "string" ? c.remarks : null,
+          evidence_url: evidencePub,
+          departmentName: "-",
+          kpiMainLabel,
+          kpiSubLabel,
+          ownerName,
+          deptId,
+          progressLabel: label,
+          sortRank,
+        });
+      }
+      continue;
+    }
+
+    const subRow = t.performance_submitted_by;
+    const subStr =
+      typeof subRow === "string"
+        ? subRow.trim()
+        : subRow !== null && subRow !== undefined
+          ? String(subRow).trim()
+          : "";
+    if (subStr !== uid) continue;
+
+    const approvalStep =
+      typeof t.approval_step === "string" ? t.approval_step : "";
+    const rrRow =
+      typeof t.rejection_reason === "string" && t.rejection_reason.trim()
+        ? t.rejection_reason.trim()
+        : "";
+    const { label, sortRank } = resolveMySubmissionProgressLabel(
+      approvalStep,
+      rrRow || null,
+      null
+    );
+
+    const legacyEvidenceVals = normalizeEvidenceStoredValues(t.evidence_url);
+    const leg0 = legacyEvidenceVals[0] ?? null;
+    const legacyEvidencePub = leg0
+      ? toEvidencePublicUrl(supabase, leg0)
+      : null;
+
+    staged.push({
+      id: `${tid}:legacy:mine`,
+      targetRowId: tid,
+      kpiItemId,
+      month: null,
+      periodLabel:
+        formatKpiTargetActiveMonthRangeLabel(t) ??
+        quarterRangeLabel ??
+        halfTypeDisplayLabel(perfHalf),
+      half_type: perfHalf,
+      achievement_rate: targetAchievementPercentFromRecord(t),
+      description:
+        typeof t.remarks === "string" ? t.remarks : null,
+      evidence_url: legacyEvidencePub,
+      departmentName: "-",
+      kpiMainLabel,
+      kpiSubLabel,
+      ownerName,
+      deptId,
+      progressLabel: label,
+      sortRank,
+    });
+  }
+
+  const deptMap = new Map<string, string>();
+  if (deptIds.size > 0) {
+    const { data: depts, error: de } = await supabase
+      .from("departments")
+      .select("id, name")
+      .in("id", [...deptIds]);
+    if (de) throw new Error(de.message);
+    for (const d of depts ?? []) {
+      if (d && typeof d.id === "string" && typeof d.name === "string") {
+        deptMap.set(d.id, d.name);
+      }
+    }
+  }
+
+  const rows = staged.map((r) => {
+    const { deptId: dId, ...rest } = r;
+    return {
+      ...rest,
+      deptId: dId,
+      departmentName:
+        dId && deptMap.has(dId) ? deptMap.get(dId)! : "-",
+    };
+  });
+
+  rows.sort((a, b) => {
+    if (a.sortRank !== b.sortRank) return a.sortRank - b.sortRank;
+    const da = a.departmentName.localeCompare(b.departmentName, "ko");
+    if (da !== 0) return da;
+    const ma = a.month ?? 0;
+    const mb = b.month ?? 0;
+    return ma - mb;
+  });
+
+  return rows;
+}
+
+/** 반려함·회수함 — 로그인 사용자 본인이 제출했다가 반려·회수된 실적 */
+export type MyPerformanceInboxRow = {
+  id: string;
+  kpiItemId: string;
+  targetRowId: string;
+  month: MonthKey | null;
+  periodLabel: string;
+  half_type: string;
+  achievement_rate: number | null;
+  description: string | null;
+  rejection_reason: string | null;
+  withdrawn_at: string | null;
+  kind: "rejected" | "withdrawn";
+  departmentName: string;
+  kpiMainLabel: string;
+  kpiSubLabel: string;
+  deptId: string | null;
+  ownerName: string | null;
+  evidence_url: string | null;
+};
+
+export async function fetchMyPerformanceInbox(userId: string): Promise<{
+  rejected: MyPerformanceInboxRow[];
+  withdrawn: MyPerformanceInboxRow[];
+}> {
+  const uid = userId.trim();
+  if (!uid) return { rejected: [], withdrawn: [] };
+
+  const supabase = createBrowserSupabase();
+  const hasYear = await getKpiTargetsHasYearColumn();
+  const hasTargetHalf = await getKpiTargetsHasHalfTypeColumn();
+
+  let tq = supabase
+    .from("kpi_targets")
+    .select("*, kpi_items(*, kpi_milestones(target_month, target_value))");
+  if (hasYear) tq = tq.eq("year", CURRENT_KPI_YEAR);
+
+  const { data: targetRows, error: te } = await tq;
+  if (te) throw new Error(te.message);
+
+  const deptIds = new Set<string>();
+  const rejected: Array<MyPerformanceInboxRow & { deptId: string | null }> = [];
+  const withdrawn: Array<MyPerformanceInboxRow & { deptId: string | null }> = [];
+
+  for (const rawT of targetRows ?? []) {
+    const t = asRecord(rawT);
+    const tid = typeof t.id === "string" ? t.id : String(t.id ?? "");
+    const itemRaw = t.kpi_items;
+    const item = Array.isArray(itemRaw) ? itemRaw[0] : itemRaw;
+    const itemRec = item ? asRecord(item as Record<string, unknown>) : {};
+
+    const kpiItemId =
+      typeof itemRec.id === "string" && itemRec.id
+        ? itemRec.id
+        : typeof t.kpi_id === "string"
+          ? String(t.kpi_id)
+          : "";
+    if (!kpiItemId) continue;
+
+    const deptId =
+      typeof itemRec.dept_id === "string" && itemRec.dept_id
+        ? itemRec.dept_id
+        : null;
+    if (deptId) deptIds.add(deptId);
+
+    const perfHalf = hasTargetHalf
+      ? normalizeHalfTypeKey(String(t.half_type ?? "")) || HALF_TYPE_H1
+      : HALF_TYPE_H1;
+
+    const kpiMainLabel = pickText(itemRec, [
+      "sub_topic",
+      "topic_sub",
+      "sub_title",
+      "subtitle",
+    ]);
+    const kpiSubLabel = pickText(itemRec, [
+      "main_topic",
+      "topic_main",
+    ]);
+    const ownerNameRaw = pickText(itemRec, [
+      "manager_name",
+      "owner",
+      "assignee",
+      "manager",
+      "owner_name",
+    ]).trim();
+    const ownerName = ownerNameRaw.length > 0 ? ownerNameRaw : null;
+
+    if (performanceMonthlyIsNonEmpty(t.performance_monthly)) {
+      const o = t.performance_monthly as Record<string, unknown>;
+      for (const mi of KPI_MONTHS) {
+        const cell = o[String(mi)];
+        if (!cell || typeof cell !== "object" || Array.isArray(cell)) continue;
+        const c = cell as PerformanceMonthlyCell;
+        const stRaw =
+          typeof c.approval_step === "string"
+            ? c.approval_step.trim().toLowerCase()
+            : "";
+        const isDraft = !stRaw || stRaw === PERF_STATUS_DRAFT;
+        if (!isDraft) continue;
+
+        const rr =
+          typeof c.rejection_reason === "string" && c.rejection_reason.trim()
+            ? c.rejection_reason.trim()
+            : "";
+        const sub =
+          typeof c.submitted_by === "string" ? c.submitted_by.trim() : "";
+        const wby =
+          typeof c.withdrawn_by === "string" ? c.withdrawn_by.trim() : "";
+        const rate = toNum(
+          c.achievement_rate as number | string | null | undefined
+        );
+
+        const evidenceVals = evidenceStoredValuesFromCell(c);
+        const ev0 = evidenceVals[0] ?? null;
+        const evidencePub = ev0 ? toEvidencePublicUrl(supabase, ev0) : null;
+
+        const common = {
+          kpiItemId,
+          targetRowId: tid,
+          month: mi as MonthKey,
+          periodLabel: `${mi}월`,
+          half_type: monthToHalfTypeLabel(mi as MonthKey),
+          achievement_rate: rate,
+          description:
+            typeof c.remarks === "string" ? c.remarks : null,
+          departmentName: "-",
+          kpiMainLabel,
+          kpiSubLabel,
+          deptId,
+          ownerName,
+          evidence_url: evidencePub,
+        };
+
+        if (rr && sub === uid) {
+          rejected.push({
+            ...common,
+            id: `${tid}:M${mi}:rejected`,
+            rejection_reason: rr,
+            withdrawn_at: null,
+            kind: "rejected",
+          });
+        } else if (wby === uid) {
+          const watRaw =
+            typeof c.withdrawn_at === "string" ? c.withdrawn_at.trim() : "";
+          withdrawn.push({
+            ...common,
+            id: `${tid}:M${mi}:withdrawn`,
+            rejection_reason: null,
+            withdrawn_at: watRaw || null,
+            kind: "withdrawn",
+          });
+        }
+      }
+      continue;
+    }
+
+    const approvalStep =
+      typeof t.approval_step === "string"
+        ? t.approval_step.trim().toLowerCase()
+        : "";
+    const rr =
+      typeof t.rejection_reason === "string" && t.rejection_reason.trim()
+        ? t.rejection_reason.trim()
+        : "";
+    const subRow = t.performance_submitted_by;
+    const subStr =
+      typeof subRow === "string"
+        ? subRow.trim()
+        : subRow !== null && subRow !== undefined
+          ? String(subRow).trim()
+          : "";
+
+    if (approvalStep === PERF_STATUS_DRAFT && rr && subStr === uid) {
+      const legacyEvidenceVals = normalizeEvidenceStoredValues(t.evidence_url);
+      const leg0 = legacyEvidenceVals[0] ?? null;
+      const legacyEvidencePub = leg0
+        ? toEvidencePublicUrl(supabase, leg0)
+        : null;
+      rejected.push({
+        id: `${tid}:legacy:rejected`,
+        kpiItemId,
+        targetRowId: tid,
+        month: null,
+        periodLabel:
+          formatKpiTargetActiveMonthRangeLabel(t) ??
+          legacyQuarterRangeLabelFromTargetRecord(t) ??
+          halfTypeDisplayLabel(perfHalf),
+        half_type: perfHalf,
+        achievement_rate: targetAchievementPercentFromRecord(t),
+        description:
+          typeof t.remarks === "string" ? t.remarks : null,
+        rejection_reason: rr,
+        withdrawn_at: null,
+        kind: "rejected",
+        departmentName: "-",
+        kpiMainLabel,
+        kpiSubLabel,
+        deptId,
+        ownerName,
+        evidence_url: legacyEvidencePub,
+      });
+    }
+  }
+
+  const deptMap = new Map<string, string>();
+  if (deptIds.size > 0) {
+    const { data: depts, error: de } = await supabase
+      .from("departments")
+      .select("id, name")
+      .in("id", [...deptIds]);
+    if (de) throw new Error(de.message);
+    for (const d of depts ?? []) {
+      if (d && typeof d.id === "string" && typeof d.name === "string") {
+        deptMap.set(d.id, d.name);
+      }
+    }
+  }
+
+  const mapNames = (rows: typeof rejected): MyPerformanceInboxRow[] =>
+    rows.map((r) => {
+      const { deptId: dId, ...rest } = r;
+      return {
+        ...rest,
+        deptId: dId,
+        departmentName:
+          dId && deptMap.has(dId) ? deptMap.get(dId)! : "-",
+      };
+    });
+
+  const rej = mapNames(rejected);
+  const wd = mapNames(withdrawn);
+  wd.sort((a, b) =>
+    String(b.withdrawn_at ?? "").localeCompare(String(a.withdrawn_at ?? ""))
+  );
+
+  return { rejected: rej, withdrawn: wd };
 }
 
 /** @deprecated 2단계 워크플로로 대체 — {@link reviewPerformanceWorkflow} 사용 */
@@ -3577,11 +4173,14 @@ export async function reviewPerformanceWorkflow(
       ) {
         throw new Error("반려할 수 있는 승인 단계가 아닙니다.");
       }
-      pm[key] = {
+      const rejectedCell: PerformanceMonthlyCell = {
         ...cell,
         approval_step: PERF_STATUS_DRAFT,
         rejection_reason: reason,
       };
+      delete (rejectedCell as Record<string, unknown>).withdrawn_by;
+      delete (rejectedCell as Record<string, unknown>).withdrawn_at;
+      pm[key] = rejectedCell;
     }
 
     const filtered = await filterPayloadToExistingKpiTargetColumns({
@@ -3740,6 +4339,8 @@ export async function withdrawPerformanceSubmission(
       ...cell,
       approval_step: PERF_STATUS_DRAFT,
       rejection_reason: null,
+      withdrawn_by: uid,
+      withdrawn_at: new Date().toISOString(),
     };
     delete (nextCell as Record<string, unknown>).submitted_by;
     pm[key] = nextCell;
@@ -3798,6 +4399,168 @@ export async function withdrawPerformanceSubmission(
     baseUpdate.performance_submitted_by = null;
   }
   const filtered = await filterPayloadToExistingKpiTargetColumns(baseUpdate);
+  const { error } = await supabase
+    .from("kpi_targets")
+    .update(filtered)
+    .eq("id", tid);
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * 반려함·회수함: 제출 전(draft) 실적 중 본인 반려 건 또는 본인 회수 건만 해당 월 셀 삭제.
+ * 레거시 분기 행(월별 JSON 없음): 본인 반려 건만 행 단위 초기화.
+ */
+export async function deleteMyDraftPerformanceCell(
+  performanceId: string,
+  options?: { month?: MonthKey }
+): Promise<void> {
+  const supabase = createBrowserSupabase();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const uid = session?.user?.id ?? "";
+  if (!uid) {
+    throw new Error("로그인이 필요합니다.");
+  }
+
+  let tid = performanceId.trim();
+  if (!tid) {
+    throw new Error("대상 ID가 없습니다.");
+  }
+  let monthFromComposite: MonthKey | undefined;
+  const compositeIdx = tid.indexOf(":M");
+  if (compositeIdx > 0) {
+    const base = tid.slice(0, compositeIdx);
+    const suffix = tid.slice(compositeIdx + 2);
+    const mo = Number(suffix);
+    if (
+      suffix !== "" &&
+      Number.isInteger(mo) &&
+      mo >= 1 &&
+      mo <= 12
+    ) {
+      tid = base;
+      monthFromComposite = mo as MonthKey;
+    }
+  }
+  const month =
+    options?.month !== undefined ? options.month : monthFromComposite;
+
+  const hasMonthlyCol = await getKpiTargetsHasPerformanceMonthlyColumn();
+
+  const { data: cur, error: selErr } = await supabase
+    .from("kpi_targets")
+    .select(
+      "performance_monthly, approval_step, rejection_reason, performance_submitted_by"
+    )
+    .eq("id", tid)
+    .maybeSingle();
+  if (selErr) throw new Error(selErr.message);
+  const rec = cur as Record<string, unknown> | null;
+  if (!rec) {
+    throw new Error("kpi_targets 행을 찾을 수 없습니다.");
+  }
+
+  if (!hasMonthlyCol || !performanceMonthlyIsNonEmpty(rec.performance_monthly)) {
+    const approvalStep =
+      typeof rec.approval_step === "string"
+        ? rec.approval_step.trim().toLowerCase()
+        : "";
+    const rr =
+      typeof rec.rejection_reason === "string" && rec.rejection_reason.trim()
+        ? rec.rejection_reason.trim()
+        : "";
+    const subRow = rec.performance_submitted_by;
+    const subStr =
+      typeof subRow === "string"
+        ? subRow.trim()
+        : subRow !== null && subRow !== undefined
+          ? String(subRow).trim()
+          : "";
+    if (approvalStep !== PERF_STATUS_DRAFT || !rr || subStr !== uid) {
+      throw new Error(
+        "본인이 반려받은 제출 전 실적만 삭제할 수 있습니다."
+      );
+    }
+
+    const clearPayload: Record<string, unknown> = {
+      id: tid,
+      approval_step: PERF_STATUS_DRAFT,
+      rejection_reason: null,
+      remarks: null,
+      h1_result: null,
+      h1_rate: null,
+      h2_result: null,
+      h2_rate: null,
+      evidence_url: null,
+    };
+    if (await getKpiTargetsHasColumn("performance_submitted_by")) {
+      clearPayload.performance_submitted_by = null;
+    }
+
+    const filtered = await filterPayloadToExistingKpiTargetColumns(clearPayload);
+    const { error } = await supabase
+      .from("kpi_targets")
+      .update(filtered)
+      .eq("id", tid);
+    if (error) throw new Error(error.message);
+    return;
+  }
+
+  if (month === undefined || month === null) {
+    throw new Error("삭제할 월을 선택해 주세요.");
+  }
+
+  const pm: Record<string, PerformanceMonthlyCell> = {};
+  const prevPm = rec.performance_monthly;
+  if (prevPm && typeof prevPm === "object" && !Array.isArray(prevPm)) {
+    const o = prevPm as Record<string, unknown>;
+    for (const k of Object.keys(o)) {
+      const cell = o[k];
+      if (cell && typeof cell === "object" && !Array.isArray(cell)) {
+        pm[k] = { ...(cell as PerformanceMonthlyCell) };
+      }
+    }
+  }
+
+  const key = String(month);
+  const cell = pm[key];
+  if (!cell || typeof cell !== "object") {
+    throw new Error("해당 월 실적 데이터를 찾을 수 없습니다.");
+  }
+
+  const curSt =
+    typeof cell.approval_step === "string"
+      ? cell.approval_step.trim().toLowerCase()
+      : "";
+  const isDraft = !curSt || curSt === PERF_STATUS_DRAFT;
+  if (!isDraft) {
+    throw new Error("제출 전(draft) 상태의 실적만 삭제할 수 있습니다.");
+  }
+
+  const rr =
+    typeof cell.rejection_reason === "string" && cell.rejection_reason.trim()
+      ? cell.rejection_reason.trim()
+      : "";
+  const sub =
+    typeof cell.submitted_by === "string" ? cell.submitted_by.trim() : "";
+  const wby =
+    typeof cell.withdrawn_by === "string" ? cell.withdrawn_by.trim() : "";
+
+  const rejectedMine = rr.length > 0 && sub === uid;
+  const withdrawnMine = wby === uid;
+  if (!rejectedMine && !withdrawnMine) {
+    throw new Error(
+      "본인이 반려받았거나 회수한 실적만 삭제할 수 있습니다."
+    );
+  }
+
+  delete pm[key];
+
+  const filtered = await filterPayloadToExistingKpiTargetColumns({
+    id: tid,
+    performance_monthly: pm,
+  });
   const { error } = await supabase
     .from("kpi_targets")
     .update(filtered)

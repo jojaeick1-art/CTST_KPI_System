@@ -2,13 +2,14 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
   ArrowDownWideNarrow,
   ArrowLeft,
   ArrowUpDown,
   ArrowUpNarrowWide,
+  ChevronDown,
   ClipboardList,
   FileUp,
   Loader2,
@@ -34,11 +35,11 @@ import {
   approvalNotificationDeptFilter,
   canAccessApprovalsPage,
   canConfigureKpiIndicatorType,
-  canSubmitMonthlyPerformance,
   DASHBOARD_SHOW_MAIN_SESSION_KEY,
   hrefDashboardDepartmentList,
   isAdminRole,
   normalizeRole,
+  roleLabelKo,
 } from "@/src/lib/rbac";
 import {
   useAppFeatureAvailability,
@@ -55,9 +56,29 @@ import {
 } from "@/src/hooks/useKpiQueries";
 import { PerformanceModal } from "./performance-modal";
 import { KpiCreateModal } from "./kpi-create-modal";
-import { ChangePasswordButton } from "../../change-password-modal";
+import { CtstUserProfileMenu } from "@/src/components/ctst-user-profile-menu";
 
 type Props = { departmentId: string };
+
+function displayNameFromSession(
+  profileFullName: string | null | undefined,
+  username: string,
+  userMetadata: Record<string, unknown> | undefined
+): string {
+  const profileName = typeof profileFullName === "string" ? profileFullName.trim() : "";
+  if (profileName) return profileName;
+  const full =
+    typeof userMetadata?.full_name === "string"
+      ? userMetadata.full_name
+      : typeof userMetadata?.name === "string"
+        ? userMetadata.name
+        : typeof userMetadata?.display_name === "string"
+          ? userMetadata.display_name
+          : null;
+  const t = full?.trim();
+  if (t) return t;
+  return username;
+}
 
 function indicatorBadgeClass(t: KpiIndicatorType): string {
   switch (t) {
@@ -102,13 +123,18 @@ function monthLabel(month: number): string {
   return month <= 12 ? `${month}월` : `익년 ${month - 12}월`;
 }
 
+type AchievementMonthSelection = MonthKey | "all";
+
 function defaultKpiMonth(): MonthKey {
   const m = new Date().getMonth() + 1;
   if (m >= 1 && m <= 12) return m as MonthKey;
   return 1;
 }
 
-type AchievementMonthSelection = MonthKey | "all";
+function periodSelectionLabel(year: number, month: AchievementMonthSelection): string {
+  if (month === "all") return `${year}년 · 전체`;
+  return `${year}년 · ${monthLabel(month)}`;
+}
 
 type DepartmentTableSortKey =
   | "mainTopic"
@@ -249,8 +275,13 @@ function DepartmentTableSortIcon({
 export function DepartmentDetailClient({ departmentId }: Props) {
   const router = useRouter();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const profileQuery = useDashboardProfile();
-  const detailQuery = useDepartmentKpiDetail(departmentId);
+  const [selectedYear, setSelectedYear] = useState<number>(CURRENT_KPI_YEAR);
+  const [draftYear, setDraftYear] = useState<number>(CURRENT_KPI_YEAR);
+  const [draftAchievementMonth, setDraftAchievementMonth] =
+    useState<AchievementMonthSelection>(() => defaultKpiMonth());
+  const detailQuery = useDepartmentKpiDetail(departmentId, selectedYear);
   const profile = profileQuery.data?.profile ?? null;
   const userDeptId =
     profile && typeof profile.dept_id === "string" ? profile.dept_id : null;
@@ -270,8 +301,11 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   const updateFinalCompletionMutation = useUpdateKpiItemFinalCompletionMutation();
   const extendPeriodEndMonthMutation = useExtendKpiItemPeriodEndMonthMutation();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const periodPickerRef = useRef<HTMLDivElement | null>(null);
+  const [periodPickerOpen, setPeriodPickerOpen] = useState(false);
   const [selectedKpi, setSelectedKpi] = useState<DepartmentKpiDetailItem | null>(null);
-  const [modalMode, setModalMode] = useState<"viewer" | "editor">("viewer");
+  const [performanceModalInitialMonth, setPerformanceModalInitialMonth] =
+    useState<MonthKey | null>(null);
   const [exportingExcel, setExportingExcel] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingKpiItem, setEditingKpiItem] = useState<DepartmentKpiDetailItem | null>(null);
@@ -306,6 +340,26 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   }, [departmentId]);
 
   useEffect(() => {
+    if (!periodPickerOpen) return;
+    function handlePointerDown(e: MouseEvent) {
+      const el = periodPickerRef.current;
+      if (!el || el.contains(e.target as Node)) return;
+      setPeriodPickerOpen(false);
+    }
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [periodPickerOpen]);
+
+  const selectableYears = useMemo(() => {
+    const cy = CURRENT_KPI_YEAR;
+    const years: number[] = [];
+    for (let y = cy - 3; y <= cy + 1; y += 1) {
+      if (y >= 2000 && y <= cy + 5) years.push(y);
+    }
+    return years;
+  }, []);
+
+  useEffect(() => {
     if (profileQuery.isPending) return;
     if (profileQuery.isError || profileQuery.data == null) {
       router.replace("/login");
@@ -316,6 +370,19 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     profileQuery.data,
     router,
   ]);
+
+  useEffect(() => {
+    const openKpi = searchParams.get("openKpi")?.trim();
+    if (!openKpi || !detailQuery.data?.items?.length) return;
+    const item = detailQuery.data.items.find((i) => i.id === openKpi);
+    if (!item) return;
+    const mo = Number(searchParams.get("month"));
+    const monthOk =
+      Number.isInteger(mo) && mo >= 1 && mo <= 12 ? (mo as MonthKey) : null;
+    setSelectedKpi(item);
+    setPerformanceModalInitialMonth(monthOk);
+    router.replace(`/dashboard/department/${departmentId}`, { scroll: false });
+  }, [searchParams, detailQuery.data?.items, departmentId, router]);
 
   /** `public/kpi-oo-upload-template.xlsx` — 원본 `KPI_OO부문_upload용 양식.xlsx`와 동일 */
   async function handleDownloadTemplateXlsx() {
@@ -580,10 +647,8 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     Boolean(ensuredUserDeptId) && ensuredUserDeptId === departmentId;
   const canConfigureIndicator =
     canConfigureKpiIndicatorType(ensuredRole) && (isAdmin || isOwnDepartment);
-  const canEditPerformance =
-    isAdmin ||
-    (isOwnDepartment &&
-      (roleCanAlwaysEdit || canSubmitMonthlyPerformance(ensuredRole)));
+  /** 소속 부서 KPI는 역할과 무관하게 실적 입력·수정 가능(승인 단계 잠금은 모달 내부 규칙 유지) */
+  const canEditPerformance = isAdmin || isOwnDepartment;
   const canManageKpiItems = roleCanAlwaysEdit && (isAdmin || isOwnDepartment);
   const canFinalizeKpiItems = roleCanAlwaysEdit && (isAdmin || isOwnDepartment);
   /** 관리자: 모든 부서, 그룹장·팀장: 본인 부서 KPI 항목 추가/수정/삭제 가능 */
@@ -617,6 +682,11 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   ).sort((a, b) => a.localeCompare(b, "ko"));
 
   const dashboardListHref = hrefDashboardDepartmentList(ensuredRole, ensuredUserDeptId);
+  const displayName = displayNameFromSession(
+    ensuredProfile.full_name,
+    ensuredProfile.username,
+    profileQuery.data.session.user.user_metadata as Record<string, unknown> | undefined
+  );
 
   async function handleIndicatorTypeSelect(
     item: DepartmentKpiDetailItem,
@@ -794,7 +864,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
         onSignOut={handleSignOut}
       />
 
-      <main className="min-w-0 flex-1 px-4 py-6 sm:p-8">
+      <main className="min-w-0 flex-1">
         {!featureAccess.kpi ? (
           <div className="flex min-h-full flex-col items-center justify-center px-4 py-16">
             <div className="w-full max-w-md rounded-2xl border border-sky-200 bg-white p-8 text-center shadow-lg shadow-sky-100/50">
@@ -815,17 +885,39 @@ export function DepartmentDetailClient({ departmentId }: Props) {
           </div>
         ) : (
         <>
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-          <Link
-            href={dashboardListHref}
-            className="inline-flex items-center gap-1.5 text-sm font-medium text-sky-700 hover:text-sky-800"
-          >
-            <ArrowLeft className="h-4 w-4" aria-hidden />
-            대시보드로
-          </Link>
-          <ChangePasswordButton profileUsername={ensuredProfile.username} />
-        </div>
+        <header className="border-b border-sky-200 bg-white/80 px-4 backdrop-blur-sm sm:px-8">
+          <div className="flex min-h-[95px] flex-wrap items-center justify-between gap-3 py-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <h1 className="text-xl font-bold tracking-tight text-slate-800 sm:text-2xl">
+                  {detailQuery.data?.department?.name ??
+                    (detailQuery.isPending ? "불러오는 중…" : "부서 KPI")}
+                </h1>
+                <Link
+                  href={dashboardListHref}
+                  className="inline-flex shrink-0 items-center gap-1.5 text-sm font-medium text-sky-700 hover:text-sky-800"
+                >
+                  <ArrowLeft className="h-4 w-4 shrink-0" aria-hidden />
+                  대시보드로
+                </Link>
+              </div>
+              <p className="mt-1 text-sm text-slate-500">
+                KPI 항목·실적·가중치를 관리합니다
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              <CtstUserProfileMenu
+                displayName={displayName}
+                roleLabel={roleLabelKo(ensuredRole)}
+                profileUsername={ensuredProfile.username}
+                userId={profileQuery.data.session.user.id}
+                notificationsEnabled={featureAccess.kpi}
+              />
+            </div>
+          </div>
+        </header>
 
+        <div className="px-4 py-6 sm:p-8">
         {detailQuery.isPending ? (
           <div className="flex justify-center py-16">
             <Loader2 className="h-8 w-8 animate-spin text-sky-600" />
@@ -843,108 +935,183 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                 타 부서 KPI는 조회만 가능합니다. 실적 등록·수정은 본인 소속 부서에서만 가능합니다.
               </div>
             ) : null}
-            <header className="mb-8">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h1 className="text-2xl font-bold text-slate-800 sm:text-3xl">
-                    {detailQuery.data.department.name}
-                  </h1>
-                  <div className="mt-2 flex items-center gap-2">
-                    <span className="rounded-full bg-sky-50 px-2.5 py-0.5 text-[11px] font-semibold text-sky-700 ring-1 ring-sky-200">
-                      기준 연도: {CURRENT_KPI_YEAR}
-                    </span>
-                    <span className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[11px] text-slate-500">
-                      연도 선택(준비중)
-                    </span>
-                  </div>
-                </div>
-                {canCreateKpi ? (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditingKpiItem(null);
-                        setShowCreateModal(true);
-                      }}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
-                    >
-                      KPI 항목 추가
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-              <div className="mt-3">
-                <span
-                  className={
-                    totalWeight === 100
-                      ? "text-sm font-semibold text-emerald-700"
-                      : totalWeight > 100
-                        ? "text-sm font-semibold text-red-700"
-                        : "text-sm font-semibold text-amber-700"
-                  }
+
+            <section className="mb-6 space-y-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4 xl:items-stretch">
+                <div
+                  ref={periodPickerRef}
+                  className="relative flex min-h-[7.5rem] flex-row items-center justify-between gap-2 rounded-2xl border border-sky-200 bg-white p-3 shadow-sm shadow-sky-100/40 sm:min-h-0"
                 >
-                  {totalWeight === 100
-                    ? "가중치 합계 100/100 (정상)"
-                    : totalWeight > 100
-                      ? `가중치 합계 ${totalWeight}/100 (${totalWeight - 100}점 초과 - 조정 필요)`
-                      : `가중치 합계 ${totalWeight}/100 (${100 - totalWeight}점 미배분)`}
-                </span>
-                <p className="mt-1 text-xs text-slate-500">
-                  {detailQuery.data.department.name} 기준 합계입니다. 100점 초과 시 신규 항목 저장이 차단됩니다.
-                </p>
-              </div>
-              <div className="mt-4 rounded-2xl border border-sky-200 bg-white p-3 shadow-sm shadow-sky-100/40">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-semibold text-slate-500">월별 달성률 보기</p>
-                    <p className="mt-1 text-sm font-semibold text-slate-800">
-                      {selectedAchievementMonth === "all"
-                        ? "전체보기"
-                        : `${monthLabel(selectedAchievementMonth)} 평가 대상`}{" "}
-                      평균:{" "}
-                      <span className="text-sky-700">
-                        {selectedMonthAverage === null
-                          ? "데이터 없음"
-                          : formatKoPercentMax2(selectedMonthAverage)}
-                      </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium text-slate-500">기간</p>
+                    <p className="mt-1 min-w-0 break-words text-2xl font-bold leading-tight tracking-tight text-slate-900">
+                      {periodSelectionLabel(selectedYear, selectedAchievementMonth)}
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedAchievementMonth("all")}
-                      className={`rounded-full px-2.5 py-1 text-xs font-semibold transition ${
-                        selectedAchievementMonth === "all"
-                          ? "bg-sky-600 text-white shadow-sm"
-                          : "bg-sky-50 text-sky-700 ring-1 ring-sky-200 hover:bg-sky-100"
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPeriodPickerOpen((prev) => {
+                        if (prev) return false;
+                        setDraftYear(selectedYear);
+                        setDraftAchievementMonth(selectedAchievementMonth);
+                        return true;
+                      });
+                    }}
+                    aria-expanded={periodPickerOpen}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-sky-200 bg-sky-50/80 px-3 py-2 text-xs font-semibold text-sky-800 ring-1 ring-sky-100 transition hover:bg-sky-100"
+                  >
+                    기간 선택
+                    <ChevronDown
+                      className={`h-4 w-4 shrink-0 transition ${periodPickerOpen ? "rotate-180" : ""}`}
+                      aria-hidden
+                    />
+                  </button>
+                {periodPickerOpen ? (
+                  <div className="absolute left-0 right-0 top-full z-30 mt-2 w-[min(calc(100vw-2rem),18.5rem)] max-w-none rounded-xl border border-sky-200 bg-white p-3 shadow-xl shadow-sky-200/60 sm:left-auto sm:right-0 sm:max-w-[18.5rem]">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      연도
+                    </p>
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {selectableYears.map((y) => {
+                        const on = y === draftYear;
+                        return (
+                          <button
+                            key={`period-year-${y}`}
+                            type="button"
+                            onClick={() => setDraftYear(y)}
+                            className={`min-w-[3.25rem] rounded-md px-2 py-1 text-xs font-semibold transition ${
+                              on
+                                ? "bg-sky-600 text-white shadow-sm"
+                                : "bg-slate-50 text-slate-700 ring-1 ring-slate-200 hover:bg-sky-50"
+                            }`}
+                          >
+                            {y}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      {draftYear}년 월
+                    </p>
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setDraftAchievementMonth("all")}
+                        className={`rounded-md px-2 py-1 text-xs font-semibold transition ${
+                          draftAchievementMonth === "all"
+                            ? "bg-sky-600 text-white shadow-sm"
+                            : "bg-slate-50 text-slate-700 ring-1 ring-slate-200 hover:bg-sky-50"
+                        }`}
+                      >
+                        전체
+                      </button>
+                      {KPI_MONTHS.filter((month) => month <= 12).map((month) => {
+                        const active = month === draftAchievementMonth;
+                        return (
+                          <button
+                            key={`period-month-${month}`}
+                            type="button"
+                            onClick={() => setDraftAchievementMonth(month)}
+                            className={`min-w-[2.75rem] rounded-md px-2 py-1 text-xs font-semibold transition ${
+                              active
+                                ? "bg-sky-600 text-white shadow-sm"
+                                : "bg-slate-50 text-slate-700 ring-1 ring-slate-200 hover:bg-sky-50"
+                            }`}
+                          >
+                            {monthLabel(month)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-4 flex gap-2 border-t border-slate-100 pt-3">
+                      <button
+                        type="button"
+                        onClick={() => setPeriodPickerOpen(false)}
+                        className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                      >
+                        취소
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedYear(draftYear);
+                          setSelectedAchievementMonth(draftAchievementMonth);
+                          setPeriodPickerOpen(false);
+                        }}
+                        className="flex-1 rounded-lg bg-sky-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-sky-700"
+                      >
+                        적용
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                </div>
+
+                <div className="flex min-h-[7.5rem] flex-col justify-center rounded-2xl border border-sky-200 bg-white p-3 shadow-sm shadow-sky-100/40 sm:min-h-0">
+                  <p className="text-xs font-medium text-slate-500">평균 달성률</p>
+                  <p className="mt-2 text-2xl font-bold tracking-tight text-sky-700">
+                    {selectedMonthAverage === null
+                      ? "—"
+                      : formatKoPercentMax2(selectedMonthAverage)}
+                  </p>
+                </div>
+                <div className="flex min-h-[7.5rem] flex-row items-center justify-between gap-3 rounded-2xl border border-sky-200 bg-white p-3 shadow-sm shadow-sky-100/40 sm:min-h-0">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium text-slate-500">가중치 합계</p>
+                    <p
+                      className={`mt-2 text-2xl font-bold tracking-tight ${
+                        totalWeight === 100
+                          ? "text-emerald-700"
+                          : totalWeight > 100
+                            ? "text-red-700"
+                            : "text-amber-700"
                       }`}
                     >
-                      전체보기
-                    </button>
-                    {KPI_MONTHS.filter((month) => month <= 12).map((month) => {
-                      const active = month === selectedAchievementMonth;
-                      return (
-                        <button
-                          key={`achievement-month-${month}`}
-                          type="button"
-                          onClick={() => setSelectedAchievementMonth(month)}
-                          className={`rounded-full px-2.5 py-1 text-xs font-semibold transition ${
-                            active
-                              ? "bg-sky-600 text-white shadow-sm"
-                              : "bg-sky-50 text-sky-700 ring-1 ring-sky-200 hover:bg-sky-100"
-                          }`}
-                        >
-                          {monthLabel(month)}
-                        </button>
-                      );
-                    })}
+                      {totalWeight}/100
+                    </p>
                   </div>
+                  <p className="max-w-[9rem] shrink-0 text-right text-[11px] leading-snug text-slate-500">
+                    {totalWeight === 100
+                      ? "정상"
+                      : totalWeight > 100
+                        ? `${totalWeight - 100}점 초과`
+                        : `${100 - totalWeight}점 미배분`}
+                  </p>
                 </div>
-                <p className="mt-2 text-[11px] text-slate-500">
-                  월별 평균은 해당 월 평가 대상 KPI를 분모로 계산합니다. 평가 대상인데 실적이 없으면 0%로 포함하고, 전체보기는 기존 대표 달성률 기준입니다.
-                </p>
+                <div className="flex min-h-[7.5rem] flex-col justify-center rounded-2xl border border-sky-200 bg-white p-3 shadow-sm shadow-sky-100/40 sm:min-h-0">
+                  <p className="text-xs font-medium text-slate-500">평가 대상 KPI 수</p>
+                  <p className="mt-2 text-2xl font-bold tabular-nums tracking-tight text-slate-800">
+                    {detailItems.length === 0 ? (
+                      "—"
+                    ) : (
+                      <>
+                        <span className="text-slate-900">{monthSelectableItems.length}</span>
+                        <span className="mx-0.5 text-xl font-semibold text-slate-400">
+                          /
+                        </span>
+                        <span className="font-semibold text-slate-600">{detailItems.length}</span>
+                      </>
+                    )}
+                  </p>
+                </div>
               </div>
-            </header>
+            </section>
+
+            {canCreateKpi ? (
+              <div className="mb-3 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingKpiItem(null);
+                    setShowCreateModal(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
+                >
+                  KPI 항목 추가
+                </button>
+              </div>
+            ) : null}
 
             {!detailItems.length ? (
               <p className="rounded-xl border border-sky-200 bg-white px-4 py-8 text-center text-sm text-slate-600">
@@ -1140,7 +1307,6 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                           <tr
                             key={item.id}
                             onClick={() => {
-                              setModalMode("viewer");
                               setSelectedKpi(item);
                             }}
                             className={`min-h-[4.25rem] border-t border-sky-50 text-slate-700 transition hover:bg-sky-50/50 ${
@@ -1238,7 +1404,6 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                                       setShowCreateModal(true);
                                       return;
                                     }
-                                    setModalMode("editor");
                                     setSelectedKpi(item);
                                   }}
                                   className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
@@ -1271,24 +1436,27 @@ export function DepartmentDetailClient({ departmentId }: Props) {
             )}
           </>
         )}
+        </div>
+
         </>
         )}
       </main>
       <PerformanceModal
         isOpen={selectedKpi !== null}
         kpiItem={selectedKpi}
-        startMode={modalMode}
         canEditPerformance={canEditPerformance}
         profileRole={ensuredRole}
         profileUserId={ensuredProfile.id}
-        canDeleteKpiItem={canManageKpiItems}
-        onDeleteKpiItem={(kpiId) => handleDeleteKpiItem(kpiId)}
         canFinalizeKpiItem={canFinalizeKpiItems}
         onFinalizeKpiItem={(kpiId, completed) =>
           handleFinalizeKpiItem(kpiId, completed)
         }
         onExtendPeriodEndMonth={(kpiId) => handleExtendKpiItemPeriodEndMonth(kpiId)}
-        onClose={() => setSelectedKpi(null)}
+        initialEditorMonth={performanceModalInitialMonth}
+        onClose={() => {
+          setSelectedKpi(null);
+          setPerformanceModalInitialMonth(null);
+        }}
       />
       <KpiCreateModal
         isOpen={showCreateModal}

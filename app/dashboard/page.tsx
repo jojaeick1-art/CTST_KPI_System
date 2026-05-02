@@ -4,8 +4,8 @@ import { Loader2 } from "lucide-react";
 import { DashboardClient } from "./dashboard-client";
 
 export const metadata: Metadata = {
-  title: "대시보드",
-  description: "CTST KPI 대시보드 — 부서별 진행 현황",
+  title: "전체 대시보드",
+  description: "CTST KPI 전체 대시보드 — 부서별 진행 현황",
 };
 
 function DashboardFallback() {

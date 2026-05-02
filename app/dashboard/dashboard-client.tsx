@@ -3,12 +3,7 @@
 import { useEffect, useMemo } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import {
-  Shield,
-  User,
-  Loader2,
-  TrendingUp,
-} from "lucide-react";
+import { Loader2, TrendingUp } from "lucide-react";
 import { CtstAppSidebar } from "@/src/components/ctst-app-sidebar";
 import { createBrowserSupabase } from "@/src/lib/supabase";
 import type { DepartmentKpiSummary } from "@/src/types/kpi";
@@ -31,7 +26,7 @@ import {
   useDepartmentKpiSummary,
 } from "@/src/hooks/useKpiQueries";
 import { CURRENT_KPI_YEAR } from "@/src/lib/kpi-queries";
-import { ChangePasswordButton } from "./change-password-modal";
+import { CtstUserProfileMenu } from "@/src/components/ctst-user-profile-menu";
 
 function displayNameFromSession(
   profileFullName: string | null | undefined,
@@ -305,7 +300,7 @@ export function DashboardClient() {
           <div className="flex h-full items-center justify-between gap-3">
             <div className="min-w-0">
               <h1 className="text-xl font-bold tracking-tight text-slate-800 sm:text-2xl">
-                KPI 대시보드
+                전체 대시보드
               </h1>
               <div className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-slate-500">
                 <p>부서별 진행 현황을 한눈에 확인하세요</p>
@@ -318,28 +313,13 @@ export function DashboardClient() {
               </div>
             </div>
             <div className="flex items-center gap-3">
-              <ChangePasswordButton profileUsername={ctx.profile.username} />
-            <div className="flex items-center gap-3 rounded-xl border border-sky-200 bg-white px-4 py-2.5 shadow-sm shadow-sky-100/50">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-100 text-sky-700">
-                <User className="h-5 w-5" aria-hidden />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-slate-800">
-                  <span className="sr-only">접속자 </span>
-                  {displayName}
-                  <span className="font-normal text-slate-400"> 님</span>
-                </p>
-                <div className="mt-0.5 flex items-center gap-1.5">
-                  <Shield
-                    className="h-3.5 w-3.5 text-sky-600"
-                    aria-hidden
-                  />
-                  <span className="text-xs font-medium text-sky-700">
-                    {roleLabelKo(role)}
-                  </span>
-                </div>
-              </div>
-            </div>
+              <CtstUserProfileMenu
+                displayName={displayName}
+                roleLabel={roleLabelKo(role)}
+                profileUsername={ctx.profile.username}
+                userId={ctx.session.user.id}
+                notificationsEnabled={featureAccess.kpi}
+              />
             </div>
           </div>
         </header>
@@ -395,10 +375,10 @@ export function DashboardClient() {
                   href="/dashboard/approvals"
                   className="font-medium text-sky-800 underline-offset-2 hover:underline"
                 >
-                  실적 승인 관리
+                  실적함
                 </Link>
               ) : (
-                <span className="font-medium text-slate-600">실적 승인 관리</span>
+                <span className="font-medium text-slate-600">실적함</span>
               )}
               에서 진행합니다.
             </p>

@@ -2,20 +2,10 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
-import {
-  ListChecks,
-  Loader2,
-  Lock,
-  PenLine,
-  Send,
-  Shield,
-  Trash2,
-  User,
-  X,
-} from "lucide-react";
+import { Loader2, Trash2, X } from "lucide-react";
 
 import { CtstPortalShell } from "@/src/components/ctst-portal-shell";
-import { ChangePasswordButton } from "@/app/dashboard/change-password-modal";
+import { CtstUserProfileMenu } from "@/src/components/ctst-user-profile-menu";
 
 import {
   useAppFeatureAvailability,
@@ -853,7 +843,7 @@ export function VocPlaceholderContent() {
 
       setMessage({
         tone: "success",
-        text: "KPI VOC가 접수 대기 상태로 등록되었습니다.",
+        text: "VOC가 접수 대기 상태로 등록되었습니다.",
       });
     } catch (error) {
       setMessage({
@@ -869,39 +859,24 @@ export function VocPlaceholderContent() {
     <CtstPortalShell>
       <>
         {canAccessVoc ? (
-          <header className="h-[95px] border-b border-sky-200 bg-white/80 px-4 backdrop-blur-sm sm:px-8">
-            <div className="flex h-full items-center justify-between gap-3">
-              <div className="min-w-0">
+          <header className="border-b border-sky-200 bg-white/80 px-4 backdrop-blur-sm sm:px-8">
+            <div className="flex min-h-[95px] flex-wrap items-center justify-between gap-3 py-3">
+              <div className="min-w-0 flex-1">
                 <h1 className="text-xl font-bold tracking-tight text-slate-800 sm:text-2xl">
-                  KPI VOC
+                  VOC
                 </h1>
-                <p className="mt-0.5 text-sm text-slate-500">
+                <p className="mt-1 text-sm text-slate-500">
                   운영 개선 요청을 접수하고 처리 현황을 확인합니다.
                 </p>
               </div>
-              <div className="flex items-center gap-3">
-                <ChangePasswordButton profileUsername={profile.username} />
-                <div className="flex items-center gap-3 rounded-xl border border-sky-200 bg-white px-4 py-2.5 shadow-sm shadow-sky-100/50">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-100 text-sky-700">
-                    <User className="h-5 w-5" aria-hidden />
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold text-slate-800">
-                      <span className="sr-only">접속자 </span>
-                      {displayName}
-                      <span className="font-normal text-slate-400"> 님</span>
-                    </p>
-                    <div className="mt-0.5 flex items-center gap-1.5">
-                      <Shield
-                        className="h-3.5 w-3.5 text-sky-600"
-                        aria-hidden
-                      />
-                      <span className="text-xs font-medium text-sky-700">
-                        {roleLabelKo(role)}
-                      </span>
-                    </div>
-                  </div>
-                </div>
+              <div className="flex flex-wrap items-center justify-end gap-3">
+                <CtstUserProfileMenu
+                  displayName={displayName}
+                  roleLabel={roleLabelKo(role)}
+                  profileUsername={profile.username}
+                  userId={ctx.session.user.id}
+                  notificationsEnabled={canAccessVoc}
+                />
               </div>
             </div>
           </header>
@@ -914,11 +889,10 @@ export function VocPlaceholderContent() {
               : "flex min-h-full flex-col items-center justify-center px-4 py-16"
           }
         >
-          <div className={canAccessVoc ? "mx-auto max-w-7xl" : "w-full"}>
+          <div className="w-full min-w-0">
             {!canAccessVoc ? (
               <div className="w-full max-w-md rounded-2xl border border-sky-200 bg-white p-8 text-center shadow-lg shadow-sky-100/50">
-              <p className="inline-flex items-center gap-1.5 rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
-                <Lock className="h-3.5 w-3.5" aria-hidden />
+              <p className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
                 관리자 잠금 상태
               </p>
 
@@ -928,7 +902,7 @@ export function VocPlaceholderContent() {
             </div>
             ) : (
             <div className="space-y-6">
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
                 {(
                   [
                     {
@@ -936,62 +910,78 @@ export function VocPlaceholderContent() {
                       label: "전체",
                       hint: "건수",
                       value: vocCounts.total,
-                      borderClass: "border-slate-200",
+                      valueClass: "text-slate-800",
                     },
                     {
                       key: "registered",
                       label: "등록",
                       hint: "접수·대기",
                       value: vocCounts.registered,
-                      borderClass: "border-sky-200",
+                      valueClass: "text-sky-700",
                     },
                     {
                       key: "progress",
                       label: "조치 진행 중",
                       hint: "진행",
                       value: vocCounts.inProgress,
-                      borderClass: "border-amber-200",
+                      valueClass: "text-amber-700",
                     },
                     {
                       key: "done",
                       label: "완료",
                       hint: "적용 완료",
                       value: vocCounts.done,
-                      borderClass: "border-emerald-200",
+                      valueClass: "text-emerald-700",
                     },
                     {
                       key: "rejected",
                       label: "반려",
                       hint: "반려·보류",
                       value: vocCounts.rejected,
-                      borderClass: "border-red-200",
+                      valueClass: "text-red-700",
                     },
                   ] as const
                 ).map((card) => (
                   <div
                     key={card.key}
-                    className={`rounded-2xl border bg-white p-4 shadow-sm shadow-sky-100/40 ${card.borderClass}`}
+                    className="flex min-h-[7.5rem] flex-col justify-center rounded-2xl border border-sky-200 bg-white p-3 shadow-sm shadow-sky-100/40 sm:min-h-0"
                   >
-                    <p className="text-xs font-medium text-slate-600">{card.label}</p>
-                    <p className="mt-2 text-2xl font-bold tabular-nums tracking-tight text-slate-900">
+                    <p className="text-xs font-medium text-slate-500">{card.label}</p>
+                    <p
+                      className={`mt-2 text-2xl font-bold tabular-nums tracking-tight ${card.valueClass}`}
+                    >
                       {vocQuery.isPending ? "—" : card.value}
                     </p>
-                    <p className="mt-0.5 text-[11px] text-slate-500">{card.hint}</p>
+                    <p className="mt-1 text-[11px] text-slate-500">{card.hint}</p>
                   </div>
                 ))}
               </div>
 
-              <div className="grid gap-6 lg:grid-cols-[minmax(0,42%)_minmax(0,58%)] lg:items-start">
-                <div>
-                  <div className="mb-4 flex flex-wrap items-center gap-2 text-slate-700">
-                    <PenLine className="h-5 w-5 shrink-0 text-sky-600" aria-hidden />
-                    <h2 className="text-base font-semibold">VOC 접수</h2>
-                  </div>
-                  <div className="rounded-2xl border border-sky-200 bg-white p-4 shadow-sm shadow-sky-100/40 sm:p-5">
+              <div className="grid gap-6 lg:grid-cols-2 lg:items-stretch">
+                <div className="min-w-0 flex flex-col">
+                  <div className="flex flex-1 flex-col rounded-2xl border border-sky-200 bg-white shadow-sm shadow-sky-100/40">
                     <form
-                      className="space-y-4"
+                      className="flex flex-1 flex-col"
                       onSubmit={(e) => void handleCreate(e)}
                     >
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-5 sm:py-4">
+                        <h2 className="text-base font-semibold text-slate-800">VOC 접수</h2>
+                        <button
+                          type="submit"
+                          disabled={createMutation.isPending}
+                          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-sky-600/20 transition hover:bg-sky-700 disabled:opacity-60"
+                        >
+                          {createMutation.isPending ? (
+                            <>
+                              <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                              접수 중…
+                            </>
+                          ) : (
+                            "VOC 접수"
+                          )}
+                        </button>
+                      </div>
+                      <div className="space-y-4 p-4 sm:p-5">
                       <div className="grid gap-4 sm:grid-cols-2">
                           <label className="block">
                             <span className="mb-1.5 block text-xs font-medium text-slate-500">
@@ -1061,97 +1051,74 @@ export function VocPlaceholderContent() {
                           placeholder="요청 배경, 현재 문제, 기대하는 변경 내용을 적어 주세요."
                         />
                       </label>
-
-                      <button
-                        type="submit"
-                        disabled={createMutation.isPending}
-                        className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-sky-600/20 transition hover:bg-sky-700 disabled:opacity-60"
-                      >
-                        {createMutation.isPending ? (
-                          <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                        ) : (
-                          <Send className="h-4 w-4" aria-hidden />
-                        )}
-                        VOC 접수
-                      </button>
-                    </form>
+                      </div>
 
                     {message ? (
-                      <p
-                        className={`mt-4 rounded-xl px-3 py-2.5 text-sm ${
-                          message.tone === "success"
-                            ? "bg-emerald-50 text-emerald-800"
-                            : "bg-red-50 text-red-800"
-                        }`}
-                      >
-                        {message.text}
-                      </p>
+                      <div className="border-t border-slate-100 px-4 pb-4 pt-3 sm:px-5">
+                        <p
+                          className={`rounded-xl px-3 py-2.5 text-sm ${
+                            message.tone === "success"
+                              ? "bg-emerald-50 text-emerald-800"
+                              : "bg-red-50 text-red-800"
+                          }`}
+                        >
+                          {message.text}
+                        </p>
+                      </div>
                     ) : null}
+                    </form>
                   </div>
                 </div>
 
-                <div>
-                  <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex flex-wrap items-center gap-2 text-slate-700">
-                      <ListChecks
-                        className="h-5 w-5 shrink-0 text-sky-600"
-                        aria-hidden
-                      />
-                      <h2 className="text-base font-semibold">
+                <div className="min-w-0 flex flex-col">
+                  <div className="flex flex-1 flex-col rounded-2xl border border-sky-200 bg-white shadow-sm shadow-sky-100/40">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-5 sm:py-4">
+                      <h2 className="text-base font-semibold text-slate-800">
                         {vocViewScope === "mine" ? "내 VOC 목록" : "접수 VOC 목록"}
                       </h2>
-                      <span className="text-sm font-normal text-slate-500">
-                        ·{" "}
-                        {vocViewScope === "mine"
-                          ? "내가 접수한 건만"
-                          : isAdmin
-                            ? "항목을 눌러 상세·처리"
-                            : "항목을 눌러 진행 현황 확인"}
-                      </span>
-                    </div>
 
-                    <div className="flex shrink-0 flex-wrap items-center gap-2">
-                      <div
-                        className="inline-flex rounded-xl border border-slate-200 bg-slate-50/80 p-0.5 text-xs font-semibold shadow-sm"
-                        role="group"
-                        aria-label="목록 보기 범위"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => setVocViewScope("all")}
-                          aria-pressed={vocViewScope === "all"}
-                          className={`rounded-lg px-3 py-1.5 transition ${
-                            vocViewScope === "all"
-                              ? "bg-white text-slate-900 shadow-sm ring-1 ring-sky-200/80"
-                              : "text-slate-600 hover:text-slate-900"
-                          }`}
+                      <div className="flex shrink-0 flex-wrap items-center gap-2">
+                        <div
+                          className="inline-flex rounded-xl border border-slate-200 bg-slate-50/80 p-0.5 text-xs font-semibold shadow-sm"
+                          role="group"
+                          aria-label="목록 보기 범위"
                         >
-                          모든 VOC
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setVocViewScope("mine")}
-                          aria-pressed={vocViewScope === "mine"}
-                          className={`rounded-lg px-3 py-1.5 transition ${
-                            vocViewScope === "mine"
-                              ? "bg-white text-slate-900 shadow-sm ring-1 ring-sky-200/80"
-                              : "text-slate-600 hover:text-slate-900"
-                          }`}
-                        >
-                          내 VOC만
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => setVocViewScope("all")}
+                            aria-pressed={vocViewScope === "all"}
+                            className={`rounded-lg px-3 py-1.5 transition ${
+                              vocViewScope === "all"
+                                ? "bg-white text-slate-900 shadow-sm ring-1 ring-sky-200/80"
+                                : "text-slate-600 hover:text-slate-900"
+                            }`}
+                          >
+                            모든 VOC
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setVocViewScope("mine")}
+                            aria-pressed={vocViewScope === "mine"}
+                            className={`rounded-lg px-3 py-1.5 transition ${
+                              vocViewScope === "mine"
+                                ? "bg-white text-slate-900 shadow-sm ring-1 ring-sky-200/80"
+                                : "text-slate-600 hover:text-slate-900"
+                            }`}
+                          >
+                            내 VOC만
+                          </button>
+                        </div>
+
+                        {vocQuery.isFetching ? (
+                          <Loader2
+                            className="h-4 w-4 shrink-0 animate-spin text-sky-600"
+                            aria-hidden
+                          />
+                        ) : null}
                       </div>
-
-                      {vocQuery.isFetching ? (
-                        <Loader2
-                          className="h-4 w-4 animate-spin text-sky-600"
-                          aria-hidden
-                        />
-                      ) : null}
                     </div>
-                  </div>
 
-                  <div className="rounded-2xl border border-sky-200 bg-white p-4 shadow-sm shadow-sky-100/40 sm:p-5">
+                    <div className="flex-1 p-4 sm:p-5">
                     {vocQuery.isPending ? (
                       <div className="py-12 text-center">
                         <Loader2 className="mx-auto h-7 w-7 animate-spin text-sky-600" />
@@ -1183,6 +1150,7 @@ export function VocPlaceholderContent() {
                         ))}
                       </div>
                     )}
+                    </div>
                   </div>
                 </div>
               </div>

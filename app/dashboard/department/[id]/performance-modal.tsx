@@ -14,10 +14,11 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Download, Eye, FilePenLine, ImageIcon, Loader2, Upload, X } from "lucide-react";
+import { Download, Loader2, Upload, X } from "lucide-react";
 import {
   PERF_LEGACY_PENDING,
   PERF_STATUS_APPROVED,
+  PERF_STATUS_DRAFT,
   PERF_STATUS_PENDING_FINAL,
   PERF_STATUS_PENDING_PRIMARY,
   isWriterPerformanceLockedByStep,
@@ -70,6 +71,7 @@ import {
 } from "@/src/lib/rbac";
 import { AppToast, type ToastState } from "@/src/components/ui/toast";
 import {
+  useDeleteDraftMonthlyPerformanceMutation,
   useKpiPerformances,
   useUpsertMonthPerformance,
   useWithdrawPendingPerformanceMutation,
@@ -274,22 +276,20 @@ type Props = {
   isOpen: boolean;
   onClose: () => void;
   kpiItem: KpiModalItem | null;
-  startMode: "viewer" | "editor";
   /** 선임/프로·권한 없음 등: 뷰어만 */
   canEditPerformance?: boolean;
   /** 로그인 사용자 `profiles.role` (한글·영문) — 승인 버튼 노출용 */
   profileRole?: string | null;
   /** 로그인 사용자 `profiles.id` — 제출 회수(submitted_by 검증) */
   profileUserId?: string | null;
-  /** 관리자·팀장·그룹장 KPI 항목 삭제 */
-  canDeleteKpiItem?: boolean;
-  onDeleteKpiItem?: (kpiId: string) => Promise<void> | void;
   canFinalizeKpiItem?: boolean;
   onFinalizeKpiItem?: (
     kpiId: string,
     completed?: boolean
   ) => Promise<boolean> | boolean;
   onExtendPeriodEndMonth?: (kpiId: string) => Promise<boolean> | boolean;
+  /** 부서 상세 딥링크 등에서 모달 열 때 선택할 월 */
+  initialEditorMonth?: MonthKey | null;
 };
 
 function toNumber(v: string): number | null {
@@ -331,6 +331,41 @@ function findRowByMonth(
   m: MonthKey
 ): ItemPerformanceRow | null {
   return rows.find((r) => halfTypeLabelToMonth(r.half_type) === m) ?? null;
+}
+
+/** 저장 확인·Primary 버튼 라벨 — 해당 월에 이미 저장된 실적 입력이 있는지 */
+function rowHasSavedPerformanceInput(
+  rows: ItemPerformanceRow[],
+  month: MonthKey,
+  indicatorType: KpiIndicatorType
+): boolean {
+  const row = findRowByMonth(rows, month);
+  if (!row) return false;
+  const rawSubmitted =
+    row.achievement_rate !== null &&
+    row.achievement_rate !== undefined &&
+    !Number.isNaN(Number(row.achievement_rate))
+      ? Number(row.achievement_rate)
+      : null;
+  return monthHasSubmittedPerformanceInput(indicatorType, row, rawSubmitted);
+}
+
+/** 반려·회수 후 draft로 돌아온 월 — 저장 확인·버튼에 '재등록' 문구 사용 */
+function isDraftRowReregisterContext(
+  er: ItemPerformanceRow | null | undefined,
+  uid: string | null | undefined
+): boolean {
+  if (!uid?.trim() || !er?.id) return false;
+  const st = (er.approval_step ?? "").trim().toLowerCase();
+  const isDraft = !st || st === PERF_STATUS_DRAFT;
+  if (!isDraft) return false;
+  const u = uid.trim();
+  const rr = er.rejection_reason?.trim() ?? "";
+  const sub = er.submitted_by?.trim() ?? "";
+  const wby = er.withdrawn_by?.trim() ?? "";
+  const rejectedMine = rr.length > 0 && sub === u;
+  const withdrawnMine = wby === u;
+  return rejectedMine || withdrawnMine;
 }
 
 function buildRowByMonthMap(rows: ItemPerformanceRow[]): Map<MonthKey, ItemPerformanceRow> {
@@ -440,11 +475,13 @@ function performanceStatusLabelKo(status: string | null | undefined): string {
   return status?.trim() ? status.trim() : "—";
 }
 
-function ragColor(rate: number | null, selected: boolean, challengeMet: boolean): string {
-  if (challengeMet) return "#f59e0b";
-  if (rate === null || !Number.isFinite(rate)) return selected ? "#0369a1" : "#0284c7";
-  if (rate >= 95) return selected ? "#047857" : "#10b981";
-  if (rate >= 80) return selected ? "#b45309" : "#f59e0b";
+function performanceAchievementBarColor(rate: number | null, selected: boolean): string {
+  if (rate === null || !Number.isFinite(rate)) {
+    return selected ? "#b91c1c" : "#ef4444";
+  }
+  if (rate >= 100) {
+    return selected ? "#047857" : "#10b981";
+  }
   return selected ? "#b91c1c" : "#ef4444";
 }
 
@@ -489,7 +526,7 @@ function KpiChartTooltip({
     <div className="rounded-xl border border-sky-200 bg-white/95 px-3 py-2 text-xs shadow-lg backdrop-blur-sm">
       <p className="font-semibold text-slate-800">{d.periodLabel}</p>
       {d.isBenchmark ? (
-        <p className="text-indigo-700">B/M {d.barTopLabel || chartValueLabel(indicatorType, d.actual)}</p>
+        <p className="text-slate-600">B/M {d.barTopLabel || chartValueLabel(indicatorType, d.actual)}</p>
       ) : (
         <>
           <p className="text-slate-600">
@@ -503,86 +540,173 @@ function KpiChartTooltip({
           {previewComment(d.description, 72)}
         </p>
       ) : (
-        <p className="mt-1 text-[11px] text-slate-400">코멘트 없음</p>
+        <p className="mt-1 text-[11px] text-slate-400">진행 내용 없음</p>
       )}
     </div>
   );
 }
 
-const CHART_BAR_LEGEND_FILL = "#0284c7";
+const CHART_BAR_LEGEND_FILL = "#10b981";
 const CHART_TARGET_LINE_STROKE = "#dc2626";
+/** 벤치마크(B/M) 막대 — 연한 회색(가독성 유지) */
+const CHART_BENCHMARK_BAR_FILL = "#8b93a0";
 
-/** 차트 아래 범례 (순서 고정) */
+/**
+ * 실적 막대 최소 높이(px). 표시 전용(픽셀)으로만 쓰이며 Y축 도메인·툴팁 값은 원 데이터 그대로.
+ * 잡는 법: 라벨 폰트 크기(여기서는 10px) + 위아래 여백을 합친 뒤, 차트 높이(약 320~360px)에서
+ * 막대가 과하게 두껍게 보이지 않는 범위로 조정. 일반적으로 20~28px.
+ */
+const CHART_BAR_MIN_PIXEL_HEIGHT = 24;
+/**
+ * 그려진 막대 높이가 이보다 작으면 실적 숫자를 막대 안이 아니라 위(바깥)에 둔다.
+ * 보통 CHART_BAR_MIN_PIXEL_HEIGHT보다 1~4px 작게 두면 “안에 넣기 어려운” 경우만 바깥으로 보낸다.
+ */
+const CHART_BAR_LABEL_OUTSIDE_IF_BELOW_PX = 22;
+
+function fillForInsideBarLabel(barFill: string): string {
+  return barFill === CHART_BENCHMARK_BAR_FILL ? "#0f172a" : "#ffffff";
+}
+
+function ActualPerformanceBarShape(
+  props: {
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    fill?: string;
+    payload?: ChartDatum;
+  }
+) {
+  const x = props.x ?? 0;
+  const y = props.y ?? 0;
+  const width = props.width ?? 0;
+  const height = props.height ?? 0;
+  const fill = props.fill ?? CHART_BAR_LEGEND_FILL;
+  const payload = props.payload;
+  if (!payload || width <= 0) return null;
+
+  const barTop = Math.min(y, y + height);
+  const barBottom = Math.max(y, y + height);
+  const rawH = barBottom - barTop;
+  const labelText = payload.barTopLabel?.trim() ?? "";
+  const hasLabel = Boolean(labelText);
+  const numericActual = Number(payload.actual);
+  const isZeroMetric =
+    !payload.isBenchmark && Number.isFinite(numericActual) && numericActual === 0;
+
+  let displayH = rawH;
+  if (hasLabel && rawH > 0) {
+    if (!isZeroMetric || payload.isBenchmark) {
+      displayH = Math.max(rawH, CHART_BAR_MIN_PIXEL_HEIGHT);
+    }
+  }
+  if (hasLabel && isZeroMetric) {
+    displayH = Math.max(rawH, 6);
+  }
+
+  const displayY = barBottom - displayH;
+  const rx = Math.min(6, Math.max(0, displayH / 2));
+  const cx = x + width / 2;
+  const labelInside =
+    hasLabel && displayH >= CHART_BAR_LABEL_OUTSIDE_IF_BELOW_PX;
+  const insideFill = fillForInsideBarLabel(fill);
+
+  return (
+    <g className="recharts-bar-rectangle" style={{ outline: "none" }}>
+      {displayH > 0 ? (
+        <rect
+          x={x}
+          y={displayY}
+          width={width}
+          height={displayH}
+          rx={rx}
+          ry={rx}
+          fill={fill}
+          className="cursor-pointer"
+          style={{ outline: "none" }}
+        />
+      ) : null}
+      {hasLabel ? (
+        <text
+          x={cx}
+          y={
+            labelInside
+              ? displayY + displayH / 2
+              : displayY - (displayH > 0 ? 6 : 2)
+          }
+          fill={labelInside ? insideFill : "#0f172a"}
+          fontSize={10}
+          fontWeight={600}
+          textAnchor="middle"
+          dominantBaseline={labelInside ? "middle" : "auto"}
+          pointerEvents="none"
+          className="tabular-nums"
+        >
+          {labelText}
+        </text>
+      ) : null}
+    </g>
+  );
+}
+
+/** 차트 아래 범례: B/M 막대 · 목표선 · 미달 막대 · 달성 막대 */
 function KpiChartFullLegend() {
   return (
     <ul
       className="mt-4 flex list-none flex-wrap items-center justify-center gap-x-4 gap-y-2 text-[11px] font-medium text-slate-800 sm:gap-x-5"
       aria-label="차트 범례"
     >
-        <li className="flex items-center gap-1.5">
-          <span
-            className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
-            style={{ backgroundColor: "#6366f1" }}
-            aria-hidden
-          />
-          <span>B/M</span>
-        </li>
-        <li className="flex items-center gap-1.5">
-          <span className="inline-flex shrink-0" aria-hidden>
-            <svg width={28} height={10} viewBox="0 0 28 10">
-              <line
-                x1={1}
-                y1={5}
-                x2={27}
-                y2={5}
-                stroke={CHART_TARGET_LINE_STROKE}
-                strokeWidth={2}
-                strokeDasharray="5 4"
-              />
-              <circle
-                cx={14}
-                cy={5}
-                r={3}
-                fill="#fff"
-                stroke={CHART_TARGET_LINE_STROKE}
-                strokeWidth={1.5}
-              />
-            </svg>
-          </span>
-          <span>목표</span>
-        </li>
-        <li className="flex items-center gap-1.5">
-          <span
-            className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
-            style={{ backgroundColor: "#ef4444" }}
-            aria-hidden
-          />
-          <span>실적 &lt;80%</span>
-        </li>
-        <li className="flex items-center gap-1.5">
-          <span
-            className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
-            style={{ backgroundColor: "#f59e0b" }}
-            aria-hidden
-          />
-          <span>실적 80~95%</span>
-        </li>
-        <li className="flex items-center gap-1.5">
-          <span
-            className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
-            style={{ backgroundColor: "#10b981" }}
-            aria-hidden
-          />
-          <span>실적 ≥95%</span>
-        </li>
-        <li className="flex items-center gap-1.5">
-          <span
-            className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
-            style={{ backgroundColor: "#0284c7" }}
-            aria-hidden
-          />
-          <span>집계 전</span>
-        </li>
+      <li className="flex items-center gap-1.5">
+        <span
+          className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
+          style={{ backgroundColor: CHART_BENCHMARK_BAR_FILL }}
+          aria-hidden
+        />
+        <span>B/M</span>
+      </li>
+      <li className="flex items-center gap-1.5">
+        <span className="inline-flex shrink-0 items-center" aria-hidden>
+          {/* 목표선 범례: 짧은 실선 — 원 — 짧은 실선 (- O -), 점선 패턴 없음 */}
+          <svg width={44} height={12} viewBox="0 0 44 12" className="overflow-visible">
+            <line
+              x1={10}
+              y1={6}
+              x2={14}
+              y2={6}
+              stroke={CHART_TARGET_LINE_STROKE}
+              strokeWidth={2}
+              strokeLinecap="round"
+            />
+            <circle cx={22} cy={6} r={2.75} fill={CHART_TARGET_LINE_STROKE} />
+            <line
+              x1={30}
+              y1={6}
+              x2={34}
+              y2={6}
+              stroke={CHART_TARGET_LINE_STROKE}
+              strokeWidth={2}
+              strokeLinecap="round"
+            />
+          </svg>
+        </span>
+        <span>목표</span>
+      </li>
+      <li className="flex items-center gap-1.5">
+        <span
+          className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
+          style={{ backgroundColor: "#ef4444" }}
+          aria-hidden
+        />
+        <span>미달</span>
+      </li>
+      <li className="flex items-center gap-1.5">
+        <span
+          className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
+          style={{ backgroundColor: "#10b981" }}
+          aria-hidden
+        />
+        <span>달성</span>
+      </li>
     </ul>
   );
 }
@@ -732,51 +856,74 @@ function benchmarkLabel(indicatorType: KpiIndicatorType, raw: string): string {
 
 type ChartYDomain = { min: number; max: number };
 
-function niceAxisStep(rawStep: number): number {
-  if (!Number.isFinite(rawStep) || rawStep <= 0) return 1;
-  const exponent = Math.floor(Math.log10(rawStep));
-  const base = 10 ** exponent;
-  const fraction = rawStep / base;
-  if (fraction <= 1) return base;
-  if (fraction <= 2) return 2 * base;
-  if (fraction <= 5) return 5 * base;
-  return 10 * base;
+const CHART_Y_DOMAIN_DEGENERATE_EPS = 1e-9;
+
+/**
+ * Y축: 목표·실적·B/M에 쓰인 유효 숫자 범위에 1.1배 여유를 둔다.
+ * - 양수만 있으면 상한 = max×1.1, 하한은 보통 0(아래 참)
+ * - 음수만 있으면 상한 0, 하한 = min×1.1(더 음수로)
+ * - 음·양 섞이면 [min×1.1, max×1.1]
+ * - **차트에 들어간 모든 점**의 min === max일 때만 [mid±spread](예: 전부 0이면 대략 [-1,1]). B/M 등 하나라도 1건이면 범위가 생겨 이 규칙은 적용되지 않는다.
+ * - 최솟값이 정확히 0이고 위로 값이 있는 경우: 하한을 살짝 음수로 두어 0선이 차트 맨 아래에 붙지 않게 한다.
+ * chartData가 바뀌면(저장·refetch 등) 도메인도 함께 갱신된다.
+ */
+function computeDynamicChartYDomain(chartData: ChartDatum[]): ChartYDomain {
+  const values: number[] = [];
+  for (const d of chartData) {
+    if (Number.isFinite(d.actual)) values.push(d.actual);
+    if (d.target !== null && Number.isFinite(d.target)) values.push(d.target);
+  }
+  if (values.length === 0) {
+    return { min: 0, max: 100 };
+  }
+  const dataMin = Math.min(...values);
+  const dataMax = Math.max(...values);
+  if (!Number.isFinite(dataMin) || !Number.isFinite(dataMax)) {
+    return { min: 0, max: 100 };
+  }
+
+  if (dataMax - dataMin < CHART_Y_DOMAIN_DEGENERATE_EPS) {
+    const mid = dataMin;
+    const spread = Math.max(Math.abs(mid) * 0.1, 1);
+    return { min: mid - spread, max: mid + spread };
+  }
+
+  let minY = dataMin < 0 ? dataMin * 1.1 : 0;
+  const maxY = dataMax > 0 ? dataMax * 1.1 : 0;
+
+  if (dataMin >= 0 && dataMin === 0 && dataMax > dataMin) {
+    const span = maxY - minY;
+    const belowZero = Math.max(maxY * 0.05, span * 0.03, 1e-9);
+    minY = -belowZero;
+  }
+
+  return { min: minY, max: maxY };
 }
 
-function centeredChartYDomain(
-  values: number[],
-  percentClamped: boolean,
-  centerValue?: number | null
-): ChartYDomain {
-  const finiteValues = values.filter((v) => Number.isFinite(v));
-  if (finiteValues.length === 0) {
-    return { min: percentClamped ? -6 : -2, max: percentClamped ? 120 : 100 };
+/** Y축 눈금: 0이 도메인 안에 있으면 반드시 한 칸에 포함(0%·0건 등 단위 표기용). */
+function buildYAxisTicks(min: number, max: number, segmentCount = 6): number[] {
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return [0, 1];
+  const span = max - min;
+  if (span < CHART_Y_DOMAIN_DEGENERATE_EPS) return [min];
+
+  const ticks: number[] = [];
+  const steps = Math.max(2, segmentCount);
+  for (let i = 0; i < steps; i += 1) {
+    ticks.push(min + (span * i) / (steps - 1));
   }
-
-  const rawMax = Math.max(...finiteValues);
-  if (!Number.isFinite(rawMax) || rawMax <= 0) {
-    return { min: percentClamped ? -6 : -0.1, max: percentClamped ? 120 : 1 };
+  if (min <= 0 && max >= 0) {
+    const hasNearZero = ticks.some(
+      (t) => Math.abs(t) <= Math.max(1e-6, span * 1e-4)
+    );
+    if (!hasNearZero) ticks.push(0);
   }
-
-  if (percentClamped) {
-    return { min: -6, max: 120 };
+  ticks.sort((a, b) => a - b);
+  const dedup: number[] = [];
+  const tol = Math.max(span * 0.0005, 1e-7);
+  for (const t of ticks) {
+    if (!dedup.some((d) => Math.abs(d - t) < tol)) dedup.push(t);
   }
-
-  const desiredTop =
-    centerValue !== null &&
-    centerValue !== undefined &&
-    Number.isFinite(centerValue) &&
-    centerValue > 0
-      ? centerValue * 2
-      : rawMax * 2;
-  const step = niceAxisStep(desiredTop / 4);
-  let max = Math.ceil(desiredTop / step) * step;
-
-  if (max <= 0) {
-    max = step;
-  }
-
-  return { min: -step * 0.25, max };
+  return dedup;
 }
 
 /** 차트 세로축 단위 안내 — % 그래프 설명과 혼동 방지 */
@@ -811,21 +958,19 @@ export function PerformanceModal({
   isOpen,
   onClose,
   kpiItem,
-  startMode,
   canEditPerformance = true,
   profileRole = null,
   profileUserId = null,
-  canDeleteKpiItem = false,
-  onDeleteKpiItem,
   canFinalizeKpiItem = false,
   onFinalizeKpiItem,
   onExtendPeriodEndMonth,
+  initialEditorMonth = null,
 }: Props) {
   const perfQuery = useKpiPerformances(isOpen && kpiItem ? kpiItem.id : null);
   const saveMutation = useUpsertMonthPerformance();
   const workflowMut = useWorkflowReviewMutation();
   const withdrawMut = useWithdrawPendingPerformanceMutation();
-  const [mode, setMode] = useState<"viewer" | "editor">("viewer");
+  const deleteDraftMut = useDeleteDraftMonthlyPerformanceMutation();
   const [selectedMonth, setSelectedMonth] = useState<MonthKey>(1);
   const [editorMonth, setEditorMonth] = useState<MonthKey>(1);
   const [editorRate, setEditorRate] = useState("");
@@ -847,6 +992,38 @@ export function PerformanceModal({
     message: "",
     tone: "info",
   });
+  const actionConfirmResolverRef = useRef<((value: boolean) => void) | null>(
+    null
+  );
+  const [actionConfirm, setActionConfirm] = useState<{
+    open: boolean;
+    title: string;
+    message: string;
+  }>({ open: false, title: "", message: "" });
+
+  const resolveActionConfirm = useCallback((result: boolean) => {
+    setActionConfirm((prev) => ({ ...prev, open: false }));
+    const resolve = actionConfirmResolverRef.current;
+    actionConfirmResolverRef.current = null;
+    if (resolve) resolve(result);
+  }, []);
+
+  const requestActionConfirm = useCallback((title: string, message: string) => {
+    return new Promise<boolean>((resolve) => {
+      actionConfirmResolverRef.current = resolve;
+      setActionConfirm({ open: true, title, message });
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      const r = actionConfirmResolverRef.current;
+      if (r) {
+        actionConfirmResolverRef.current = null;
+        r(false);
+      }
+    };
+  }, []);
 
   const effectiveIndicatorType = useMemo(
     () =>
@@ -1086,13 +1263,14 @@ export function PerformanceModal({
 
   useEffect(() => {
     if (!isOpen || !kpiItem) return;
-    const effectiveMode =
-      canEditPerformance ? startMode : "viewer";
-    setMode(effectiveMode);
     const firstActive = activeMonthList[0] ?? KPI_MONTHS[0]!;
-    setSelectedMonth(firstActive);
-    setEditorMonth(firstActive);
-  }, [isOpen, kpiItem, startMode, canEditPerformance, activeMonthList]);
+    const prefer =
+      initialEditorMonth != null && activeMonthList.includes(initialEditorMonth)
+        ? initialEditorMonth
+        : firstActive;
+    setSelectedMonth(prefer);
+    setEditorMonth(prefer);
+  }, [isOpen, kpiItem, canEditPerformance, activeMonthList, initialEditorMonth]);
 
   useEffect(() => {
     if (!isOpen || !kpiItem) return;
@@ -1335,33 +1513,13 @@ export function PerformanceModal({
 
   const chartYDomain = useMemo((): ChartYDomain => {
     if (!kpiItem) return { min: 0, max: 100 };
-    const normalMetricYAxis =
-      effectiveIndicatorType === "normal" && kpiItem.targetDirection !== "na";
-    const higherNormalPercentYAxis =
-      effectiveIndicatorType === "normal" && kpiItem.targetDirection !== "down";
-    const percentClamped =
-      !indicatorUsesComputedAchievement(effectiveIndicatorType) &&
-      (!normalMetricYAxis || higherNormalPercentYAxis);
-    const targetValues = chartData
-      .filter((d) => !d.isBenchmark && d.target !== null && Number.isFinite(d.target))
-      .map((d) => d.target as number);
-    const lowerTargetCenter =
-      kpiItem.targetDirection === "down" && targetValues.length > 0
-        ? Math.max(...targetValues)
-        : null;
-    const values: number[] = [];
+    return computeDynamicChartYDomain(chartData);
+  }, [kpiItem, chartData]);
 
-    for (const d of chartData) {
-      if (d.target !== null && Number.isFinite(d.target) && d.target !== 0) {
-        values.push(d.target);
-      }
-      if ((d.isBenchmark || d.barTopLabel || d.actual !== 0) && Number.isFinite(d.actual)) {
-        values.push(d.actual);
-      }
-    }
-
-    return centeredChartYDomain(values, percentClamped, lowerTargetCenter);
-  }, [kpiItem, chartData, effectiveIndicatorType]);
+  const yAxisTicks = useMemo(
+    () => buildYAxisTicks(chartYDomain.min, chartYDomain.max),
+    [chartYDomain.min, chartYDomain.max]
+  );
 
   const hasTargetNoteLabels = useMemo(
     () =>
@@ -1370,9 +1528,6 @@ export function PerformanceModal({
       ),
     [chartData]
   );
-  const hidePercentHeadroomTick =
-    effectiveIndicatorType === "normal" && kpiItem?.targetDirection !== "down";
-
   const selectedRow = rowByMonth.get(selectedMonth) ?? null;
   const selectedChartDatum =
     chartData.find((d) => d.month === selectedMonth && !d.isBenchmark) ?? null;
@@ -1408,14 +1563,6 @@ export function PerformanceModal({
     .filter((item) => Boolean(item.path));
   const selectedStatus = selectedRow?.approval_step ?? null;
   const selectedRejectionReason = selectedRow?.rejection_reason ?? null;
-  const selectedMonthWritableByWriter = !monthLockedForEditor(
-    selectedStatus,
-    isPrivilegedEditor
-  );
-  const canOpenRegister = canEditPerformance;
-  const canOpenModify = isPrivilegedEditor && canEditPerformance;
-  const writerLockedNow =
-    !isPrivilegedEditor && isWriterPerformanceLockedByStep(selectedStatus);
 
   const notify = useCallback((tone: ToastState["tone"], message: string) => {
     setToast({ open: true, message, tone });
@@ -1434,7 +1581,7 @@ export function PerformanceModal({
     downloadFileName?: string | null
   ) {
     if (!storedValue) {
-      notify("info", "보고서가 없습니다.");
+      notify("info", "첨부 파일이 없습니다.");
       return;
     }
     const relPath = evidencePathFromStoredValue(storedValue);
@@ -1553,6 +1700,28 @@ export function PerformanceModal({
     canEditPerformance,
   ]);
 
+  /** 반려함·회수함에서 넘어온 제출 전 건만 삭제 허용 — 편집 월(`editorMonth`) 기준 */
+  const canDeleteInboxDraft = useMemo(() => {
+    if (!profileUserId?.trim() || !canEditPerformance) return false;
+    const er = rowByMonth.get(editorMonth) ?? null;
+    return isDraftRowReregisterContext(er, profileUserId);
+  }, [
+    profileUserId,
+    canEditPerformance,
+    editorMonth,
+    rowByMonth,
+  ]);
+
+  /** 저장 확인·주 버튼 — 반려·회수 재제출이면 '재등록' 카피 */
+  const editorMonthIsReregisterContext = useMemo(
+    () =>
+      isDraftRowReregisterContext(
+        rowByMonth.get(editorMonth),
+        profileUserId
+      ),
+    [editorMonth, rowByMonth, profileUserId]
+  );
+
   const editorRow = findRowByMonth(liveRows, editorMonth);
   const editorMonthLocked = monthLockedForEditor(
     editorRow?.approval_step,
@@ -1606,7 +1775,7 @@ export function PerformanceModal({
   /** 편집 월만 바뀔 때 대기 중인 첨부 초기화(실적 쿼리 30초 refetch 때는 유지) */
   const prevEditorMonthForPendingFilesRef = useRef<MonthKey | null>(null);
   useEffect(() => {
-    if (mode !== "editor") {
+    if (!canEditPerformance) {
       prevEditorMonthForPendingFilesRef.current = null;
       return;
     }
@@ -1615,7 +1784,7 @@ export function PerformanceModal({
       setEditorFiles([]);
     }
     prevEditorMonthForPendingFilesRef.current = editorMonth;
-  }, [mode, editorMonth]);
+  }, [canEditPerformance, editorMonth]);
 
   /** KPI·편집월·모달 열림 조합당 1회 폼 로드 (실적 refetch 시에는 재동기화하지 않음 — 입력·첨부 유지) */
   const editorFormBootstrapKeyRef = useRef<string | null>(null);
@@ -1624,7 +1793,7 @@ export function PerformanceModal({
       editorFormBootstrapKeyRef.current = null;
       return;
     }
-    if (mode !== "editor" || !kpiItem) return;
+    if (!canEditPerformance || !kpiItem) return;
     if (!perfQuery.isSuccess) return;
     const key = `${kpiItem.id}:${editorMonth}`;
     if (editorFormBootstrapKeyRef.current === key) return;
@@ -1632,12 +1801,33 @@ export function PerformanceModal({
     syncEditorFromMonth(editorMonth);
   }, [
     isOpen,
-    mode,
+    canEditPerformance,
     editorMonth,
     kpiItem?.id,
     perfQuery.isSuccess,
     syncEditorFromMonth,
   ]);
+
+  /** 선택 월이 KPI 기간 밖이면 첫 활성 월로 보정 */
+  useEffect(() => {
+    if (!canEditPerformance) return;
+    if (!displayMonthList.length) return;
+    if (!displayMonthList.includes(editorMonth)) {
+      setEditorMonth(displayMonthList[0]!);
+    }
+  }, [canEditPerformance, displayMonthList, editorMonth]);
+
+  const editorMonthHasExistingSavedInput = useMemo(
+    () =>
+      isOpen && kpiItem
+        ? rowHasSavedPerformanceInput(
+            liveRows,
+            editorMonth,
+            effectiveIndicatorType
+          )
+        : false,
+    [isOpen, kpiItem, liveRows, editorMonth, effectiveIndicatorType]
+  );
 
   if (!isOpen || !kpiItem) return null;
   const item = kpiItem;
@@ -1738,7 +1928,23 @@ export function PerformanceModal({
     return updates;
   }
 
-  async function handleSaveMonth(options?: { finalizeAfterSave?: boolean }) {
+  function editorMonthHasSavedInputForConfirm(month: MonthKey): boolean {
+    return rowHasSavedPerformanceInput(
+      liveRows,
+      month,
+      effectiveIndicatorType
+    );
+  }
+
+  async function handleSaveMonth(options?: {
+    finalizeAfterSave?: boolean;
+    /** KPI 완료 경로 등에서 월별 등록/수정 확인 생략 */
+    skipMonthConfirm?: boolean;
+  }) {
+    if (!canEditPerformance) {
+      notify("error", "실적을 저장할 권한이 없습니다.");
+      return;
+    }
     if (!activeSet.has(editorMonth)) {
       notify("error", "해당 월은 프로젝트 기간에 포함되지 않습니다.");
       return;
@@ -1824,6 +2030,22 @@ export function PerformanceModal({
         return;
       }
       rateNum = n;
+    }
+    if (!options?.skipMonthConfirm) {
+      const hasSaved = editorMonthHasSavedInputForConfirm(editorMonth);
+      const ok = await requestActionConfirm(
+        hasSaved
+          ? editorMonthIsReregisterContext
+            ? "실적 재등록"
+            : "실적 수정"
+          : "실적 등록",
+        hasSaved
+          ? editorMonthIsReregisterContext
+            ? `${editorMonth}월에 이미 입력된 실적이 있습니다.\n재등록하여 저장하시겠습니까?`
+            : `${editorMonth}월에 이미 입력된 실적이 있습니다.\n수정하여 저장하시겠습니까?`
+          : `${editorMonth}월 실적을 등록하시겠습니까?`
+      );
+      if (!ok) return;
     }
     if (!editorHasEvidenceForSave) {
       notify("error", "증빙 파일을 첨부해야 실적을 등록할 수 있습니다.");
@@ -1919,6 +2141,22 @@ export function PerformanceModal({
     }
   }
 
+  async function handleKpiFinalizeClick() {
+    if (!canFinalComplete || !onFinalizeKpiItem || item.isFinalCompleted) {
+      notify(
+        "error",
+        "최종 완료(KPI 완료) 처리는 관리자·그룹장·팀장만 가능하거나, 이미 완료된 항목입니다."
+      );
+      return;
+    }
+    const ok = await requestActionConfirm(
+      "KPI 최종 완료",
+      "이 KPI 항목을 최종 완료 처리하시겠습니까?\n현재 입력 내용이 저장되며, 항목이 최종 완료로 표시됩니다."
+    );
+    if (!ok) return;
+    await handleSaveMonth({ finalizeAfterSave: true, skipMonthConfirm: true });
+  }
+
   async function handleModalApprovePrimary() {
     const rid = selectedRow?.id;
     if (!rid) return;
@@ -1978,6 +2216,32 @@ export function PerformanceModal({
     }
   }
 
+  async function handleModalDeleteDraft() {
+    const er = rowByMonth.get(editorMonth) ?? null;
+    const rid = er?.id;
+    if (!rid) return;
+    const ok = await requestActionConfirm(
+      "실적 삭제",
+      `${editorMonth}월에 저장된 실적을 삭제합니다.\n삭제 후에는 복구할 수 없습니다. 계속하시겠습니까?`
+    );
+    if (!ok) return;
+    try {
+      const hasMonthly = await getKpiTargetsHasPerformanceMonthlyColumn();
+      await deleteDraftMut.mutateAsync({
+        performanceId: rid,
+        ...(hasMonthly ? { month: editorMonth } : {}),
+      });
+      const refreshed = await perfQuery.refetch();
+      if (refreshed.data) setLiveRows(refreshed.data);
+      notify("success", "실적이 삭제되었습니다.");
+    } catch (e) {
+      notify(
+        "error",
+        e instanceof Error ? e.message : "삭제 처리에 실패했습니다."
+      );
+    }
+  }
+
   function openRejectModal() {
     const rid = selectedRow?.id;
     if (!rid) {
@@ -2017,12 +2281,6 @@ export function PerformanceModal({
     }
   }
 
-  async function handleDeleteKpiItemInModal() {
-    if (!kpiItem || !canDeleteKpiItem || !onDeleteKpiItem) return;
-    await onDeleteKpiItem(kpiItem.id);
-    onClose();
-  }
-
   async function handleWithdrawFinalCompletionInModal() {
     if (!kpiItem || !canFinalComplete || !onFinalizeKpiItem) return;
     const ok = await onFinalizeKpiItem(kpiItem.id, false);
@@ -2030,91 +2288,39 @@ export function PerformanceModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3"
+      role="presentation"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <AppToast
         state={toast}
         onClose={() => setToast((prev) => ({ ...prev, open: false }))}
         position="top-center"
       />
-      <div className="relative flex max-h-[95vh] w-full max-w-7xl flex-col overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-2xl shadow-sky-200/50">
+      <div className="relative flex max-h-[95vh] w-full max-w-[min(100%,88rem)] flex-col overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-2xl shadow-sky-200/50">
         <div className="shrink-0 border-b border-sky-200 bg-gradient-to-br from-sky-600 to-sky-700 px-5 py-5 text-white">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-sky-100/90">
-                세부활동
-              </p>
-              <h3 className="mt-1.5 text-lg font-bold leading-snug tracking-tight sm:text-xl">
-                {item.detailActivity?.trim() ? item.detailActivity : "—"}
-              </h3>
-              <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs font-medium text-sky-100/95">
-                <span className="inline-flex items-center gap-1 rounded-md bg-white/15 px-2 py-0.5">
-                  <Eye className="h-3.5 w-3.5 shrink-0 opacity-90" aria-hidden />
-                  KPI 뷰어
+              <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold leading-snug text-sky-50 sm:text-base">
+                <span className="min-w-0 break-words" title={`${item.mainTopic} / ${item.subTopic}`}>
+                  <span>{item.mainTopic}</span>
+                  <span className="mx-1.5 font-normal text-sky-200/95">/</span>
+                  <span>{item.subTopic}</span>
                 </span>
                 {item.isFinalCompleted ? (
-                  <>
-                    <span className="text-sky-100/80">·</span>
-                    <span className="inline-flex items-center gap-1 rounded-md bg-emerald-400/25 px-2 py-0.5 text-emerald-50">
-                      최종 완료
-                    </span>
-                  </>
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-emerald-400/25 px-2 py-0.5 text-xs font-semibold text-emerald-50">
+                    최종 완료
+                  </span>
                 ) : null}
-                <span className="text-sky-100/80">·</span>
-                <span className="truncate text-sky-50/95" title={`${item.mainTopic} · ${item.subTopic}`}>
-                  {item.mainTopic} · {item.subTopic}
-                </span>
               </p>
+              <h3 className="mt-2 text-lg font-bold leading-snug tracking-tight text-white sm:text-xl">
+                {item.detailActivity?.trim() ? item.detailActivity : "—"}
+              </h3>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              {canOpenRegister ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditorMonth(selectedMonth);
-                    setMode("editor");
-                  }}
-                  disabled={writerLockedNow || (!isPrivilegedEditor && !selectedMonthWritableByWriter)}
-                  className="inline-flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-xs font-semibold text-sky-800 shadow-sm hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <FilePenLine className="h-3.5 w-3.5" />
-                  실적 등록
-                </button>
-              ) : null}
-              {canWithdrawPendingSubmission && mode === "viewer" ? (
-                <button
-                  type="button"
-                  onClick={() => void handleModalWithdrawSubmission()}
-                  disabled={withdrawMut.isPending || workflowMut.isPending}
-                  className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-white/95 px-2.5 py-1.5 text-xs font-semibold text-amber-900 shadow-sm hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {withdrawMut.isPending ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : null}
-                  제출 회수
-                </button>
-              ) : null}
-              {canOpenModify ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditorMonth(selectedMonth);
-                    setMode("editor");
-                  }}
-                  className="inline-flex items-center gap-1 rounded-lg border border-white/60 bg-sky-700/80 px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-sky-700"
-                >
-                  <FilePenLine className="h-3.5 w-3.5" />
-                  실적 수정
-                </button>
-              ) : null}
-              {canDeleteKpiItem ? (
-                <button
-                  type="button"
-                  onClick={() => void handleDeleteKpiItemInModal()}
-                  className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-red-700 shadow-sm hover:bg-red-50"
-                >
-                  삭제
-                </button>
-              ) : null}
               {canFinalComplete && item.isFinalCompleted ? (
                 <button
                   type="button"
@@ -2201,6 +2407,7 @@ export function PerformanceModal({
                   const hit = chartData.find((d) => d.periodLabel === label);
                   if (hit?.month !== null && hit?.month !== undefined && hit.month !== 0) {
                     setSelectedMonth(hit.month);
+                    setEditorMonth(hit.month);
                   }
                 }}
               >
@@ -2215,11 +2422,10 @@ export function PerformanceModal({
                 <YAxis
                   domain={[chartYDomain.min, chartYDomain.max]}
                   allowDataOverflow
-                  ticks={hidePercentHeadroomTick ? [20, 40, 60, 80, 100] : undefined}
+                  ticks={yAxisTicks}
                   tickFormatter={(v) => {
                     const numeric = typeof v === "number" ? v : Number(v);
-                    if (numeric < 0) return "";
-                    if (hidePercentHeadroomTick && numeric > 100) return "";
+                    if (!Number.isFinite(numeric)) return "";
                     return chartValueLabel(effectiveIndicatorType, numeric);
                   }}
                   axisLine={{ stroke: "#94a3b8", strokeWidth: 1 }}
@@ -2238,19 +2444,13 @@ export function PerformanceModal({
                   fill={CHART_BAR_LEGEND_FILL}
                   activeBar={false}
                   maxBarSize={44}
-                  radius={[6, 6, 0, 0]}
+                  shape={ActualPerformanceBarShape}
                   style={{ outline: "none" }}
-                  minPointSize={(value, index) => {
-                    const d = chartData[index];
-                    if (!d?.barTopLabel) return 0;
-                    const v = Number(value);
-                    if (!Number.isFinite(v) || v !== 0) return 0;
-                    return 6;
-                  }}
                   onClick={(data: unknown) => {
                     const row = data as ChartDatum | undefined;
                     if (!row || row.month === 0) return;
                     setSelectedMonth(row.month);
+                    setEditorMonth(row.month);
                   }}
                 >
                   {chartData.map((entry) => {
@@ -2260,24 +2460,14 @@ export function PerformanceModal({
                         key={entry.periodLabel}
                         fill={
                           entry.isBenchmark
-                            ? "#6366f1"
-                            : ragColor(entry.submittedPercent, isSel, entry.challengeMet)
+                            ? CHART_BENCHMARK_BAR_FILL
+                            : performanceAchievementBarColor(entry.submittedPercent, isSel)
                         }
-                        stroke={entry.challengeMet ? "#b45309" : undefined}
-                        strokeWidth={entry.challengeMet ? 2 : undefined}
                         className="cursor-pointer outline-none focus:outline-none"
                         style={{ outline: "none" }}
                       />
                     );
                   })}
-                  <LabelList
-                    dataKey="barTopLabel"
-                    position="top"
-                    offset={6}
-                    fill="#0f172a"
-                    fontSize={10}
-                    fontWeight={600}
-                  />
                   <LabelList dataKey="commentLabel" content={KpiCommentBubbleLabel} />
                 </Bar>
                 <Line
@@ -2311,14 +2501,17 @@ export function PerformanceModal({
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
               월 선택
             </p>
-            <div className="flex flex-wrap gap-2">
+            <div className="-mx-1 flex flex-nowrap gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:thin]">
               {displayMonthList.map((mo) => {
                 const on = mo === selectedMonth;
                 return (
                   <button
                     key={mo}
                     type="button"
-                    onClick={() => setSelectedMonth(mo)}
+                    onClick={() => {
+                      setSelectedMonth(mo);
+                      setEditorMonth(mo);
+                    }}
                     className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
                       on
                         ? "bg-sky-600 text-white shadow-md shadow-sky-300/40"
@@ -2396,14 +2589,14 @@ export function PerformanceModal({
             ) : null}
 
             <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <p className="text-[11px] font-semibold text-slate-500">코멘트</p>
+              <p className="text-[11px] font-semibold text-slate-500">진행 내용</p>
               <p className="mt-0.5 text-sm text-slate-800">
-                {selectedDescription?.trim() ? selectedDescription : "등록된 코멘트가 없습니다."}
+                {selectedDescription?.trim() ? selectedDescription : "등록된 진행 내용이 없습니다."}
               </p>
             </div>
 
             <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <p className="text-[11px] font-semibold text-slate-500">보고서</p>
+              <p className="text-[11px] font-semibold text-slate-500">첨부 파일</p>
               {selectedEvidenceItems.length > 0 ? (
                 <div className="mt-1 space-y-2">
                   {selectedEvidenceItems.map((item, idx) => (
@@ -2429,12 +2622,11 @@ export function PerformanceModal({
                   ))}
                 </div>
               ) : (
-                <p className="mt-1 text-sm text-slate-500">보고서가 없습니다</p>
+                <p className="mt-1 text-sm text-slate-500">첨부 파일이 없습니다</p>
               )}
             </div>
 
-            {mode === "viewer" &&
-            (workflowPrimaryVisible || workflowFinalVisible) ? (
+            {workflowPrimaryVisible || workflowFinalVisible ? (
               <div className="mt-4 border-t border-sky-200/80 pt-4">
                 <p className="mb-2 text-xs font-semibold text-slate-700">
                   승인 처리 (그룹장·팀장·관리자)
@@ -2474,24 +2666,12 @@ export function PerformanceModal({
           </div>
           </div>
 
-        </div>
-
-        {mode === "editor" && canEditPerformance ? (
-          <div className="absolute inset-y-0 right-0 z-20 flex w-full max-w-md flex-col border-l border-sky-200 bg-white shadow-2xl">
-            <div className="flex shrink-0 items-center justify-between border-b border-sky-200 px-4 py-3">
-              <div className="flex items-center gap-2">
-                <ImageIcon className="h-4 w-4 text-sky-600" />
-                <h4 className="text-sm font-semibold text-slate-800">실적 등록</h4>
-              </div>
-              <button
-                type="button"
-                onClick={() => setMode("viewer")}
-                className="rounded p-1 text-slate-500 hover:bg-slate-100"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
+          <aside
+            className="flex min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-sky-200 bg-white lg:w-[22rem] lg:max-w-[22rem] lg:flex-shrink-0 lg:border-l lg:border-t-0"
+            aria-label="실적 입력"
+          >
+            {canEditPerformance ? (
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
               <div>
                 <div className="mb-1 flex items-center justify-between gap-2">
@@ -2508,29 +2688,27 @@ export function PerformanceModal({
                     </button>
                   ) : null}
                 </div>
-                <select
-                  value={editorMonth}
-                  onChange={(e) => setEditorMonth(Number(e.target.value) as MonthKey)}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-[#1a1a1a] outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200"
-                >
-                  {displayMonthList.map((mo) => {
-                    const row = findRowByMonth(liveRows, mo);
-                    const locked = monthLockedForEditor(
-                      row?.approval_step,
-                      isPrivilegedEditor
-                    );
-                    return (
-                      <option
-                        key={mo}
-                        value={mo}
-                        disabled={locked}
-                      >
+                {displayMonthList.length === 0 ? (
+                  <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    KPI 평가 기간에 해당하는 월이 없습니다.
+                  </p>
+                ) : (
+                  <select
+                    value={editorMonth}
+                    onChange={(e) => {
+                      const mo = Number(e.target.value) as MonthKey;
+                      setEditorMonth(mo);
+                      setSelectedMonth(mo);
+                    }}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-[#1a1a1a] outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200"
+                  >
+                    {displayMonthList.map((mo) => (
+                      <option key={mo} value={mo}>
                         {formatAxisLabel(mo)}
-                        {locked ? " (승인대기/완료·잠금)" : ""}
                       </option>
-                    );
-                  })}
-                </select>
+                    ))}
+                  </select>
+                )}
                 {editorMonthLocked ? (
                   <p className="mt-1 text-[11px] text-amber-700">
                     승인 대기 중이거나 승인 완료된 월은 그룹장·팀장·관리자만 수정할 수 있습니다.
@@ -2738,14 +2916,42 @@ export function PerformanceModal({
               </div>
             </div>
 
-            <div className="flex shrink-0 justify-end gap-2 border-t border-sky-200 bg-white px-4 py-3">
-              <button
-                type="button"
-                onClick={() => setMode("viewer")}
-                className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-              >
-                닫기
-              </button>
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-sky-200 bg-white px-4 py-3">
+              {canDeleteInboxDraft ? (
+                <button
+                  type="button"
+                  onClick={() => void handleModalDeleteDraft()}
+                  disabled={
+                    deleteDraftMut.isPending ||
+                    saveMutation.isPending ||
+                    uploading
+                  }
+                  className="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
+                >
+                  {deleteDraftMut.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : null}
+                  실적 삭제
+                </button>
+              ) : null}
+              {canWithdrawPendingSubmission ? (
+                <button
+                  type="button"
+                  onClick={() => void handleModalWithdrawSubmission()}
+                  disabled={
+                    withdrawMut.isPending ||
+                    workflowMut.isPending ||
+                    saveMutation.isPending ||
+                    uploading
+                  }
+                  className="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-60"
+                >
+                  {withdrawMut.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : null}
+                  제출 회수
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => void handleSaveMonth()}
@@ -2774,17 +2980,16 @@ export function PerformanceModal({
                 {saveMutation.isPending || uploading ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : null}
-                {normalizeRole(profileRole) === "team_leader" ||
-                normalizeRole(profileRole) === "group_team_leader"
-                  ? "저장 (즉시 승인 적용)"
-                  : normalizeRole(profileRole) === "group_leader"
-                    ? "저장 (최종 승인 대기로 제출)"
-                    : "저장 (1차 승인 대기로 제출)"}
+                {editorMonthHasExistingSavedInput
+                  ? editorMonthIsReregisterContext
+                    ? "재등록"
+                    : "수정"
+                  : "저장"}
               </button>
               {canFinalComplete && !item.isFinalCompleted ? (
                 <button
                   type="button"
-                  onClick={() => void handleSaveMonth({ finalizeAfterSave: true })}
+                  onClick={() => void handleKpiFinalizeClick()}
                   disabled={
                     saveMutation.isPending ||
                     uploading ||
@@ -2810,9 +3015,62 @@ export function PerformanceModal({
                   {saveMutation.isPending || uploading ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : null}
-                  저장 후 최종 완료
+                  KPI 완료
                 </button>
               ) : null}
+            </div>
+          </div>
+            ) : (
+              <div className="flex min-h-[100px] flex-1 flex-col justify-center px-3 py-6 lg:min-h-0">
+                <p className="text-center text-[11px] leading-relaxed text-slate-500">
+                  실적 입력 권한이 없어 이 영역에서는 조회만 가능합니다.
+                </p>
+              </div>
+            )}
+          </aside>
+
+        </div>
+
+        {actionConfirm.open ? (
+          <div
+            className="pointer-events-auto absolute inset-0 z-[70] flex items-center justify-center bg-transparent p-4"
+            role="presentation"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) resolveActionConfirm(false);
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="action-confirm-title"
+              className="w-full max-w-md rounded-2xl border border-sky-200 bg-white p-5 shadow-[0_25px_50px_-12px_rgba(15,23,42,0.35)] ring-1 ring-slate-200/90"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h4
+                id="action-confirm-title"
+                className="text-base font-semibold text-slate-900"
+              >
+                {actionConfirm.title}
+              </h4>
+              <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-slate-600">
+                {actionConfirm.message}
+              </p>
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => resolveActionConfirm(false)}
+                  className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  아니오
+                </button>
+                <button
+                  type="button"
+                  onClick={() => resolveActionConfirm(true)}
+                  className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
+                >
+                  예
+                </button>
+              </div>
             </div>
           </div>
         ) : null}
