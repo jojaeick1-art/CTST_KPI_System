@@ -1618,7 +1618,7 @@ function FocusedCommentBubbleLabelFactory(
     const fallbackValueFromDatum =
       kind === "secondary" ? d.commentLabelSecondary ?? "" : d.commentLabel ?? "";
     const fallbackFromRows =
-      d.month !== 0 && commentsByMonth
+      commentsByMonth
         ? commentsByMonth.get(d.month)?.bubble_note ??
           findLatestPriorRowWithSubmittedValue(commentsByMonth, d.month, monthList)?.row
             ?.bubble_note ??
