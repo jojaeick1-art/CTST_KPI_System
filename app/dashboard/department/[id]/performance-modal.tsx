@@ -1606,7 +1606,7 @@ function FocusedCommentBubbleLabelFactory(
     value?: unknown;
     payload?: ChartDatum;
     index?: number;
-    viewBox?: { x?: number | string; y?: number | string; width?: number | string };
+    viewBox?: unknown;
   }) {
     const byIndex =
       typeof p.index === "number" && p.index >= 0 ? chartData[p.index] : undefined;
@@ -1629,9 +1629,14 @@ function FocusedCommentBubbleLabelFactory(
       resolvedValue = draftValue.trim();
     }
     if (!resolvedValue.trim()) return null;
-    const resolvedX = p.x ?? p.viewBox?.x;
-    const resolvedY = p.y ?? p.viewBox?.y;
-    const resolvedWidth = p.width ?? p.viewBox?.width;
+    const vb = (p.viewBox ?? {}) as {
+      x?: number | string;
+      y?: number | string;
+      width?: number | string;
+    };
+    const resolvedX = p.x ?? vb.x;
+    const resolvedY = p.y ?? vb.y;
+    const resolvedWidth = p.width ?? vb.width;
     return kind === "secondary" ? (
       <KpiCommentBubbleLabelSecondary
         {...p}
@@ -1668,7 +1673,7 @@ function FocusedTargetBubbleLabelFactory(
     value?: unknown;
     payload?: ChartDatum;
     index?: number;
-    viewBox?: { x?: number | string; y?: number | string };
+    viewBox?: unknown;
   }) {
     const byIndex =
       typeof p.index === "number" && p.index >= 0 ? chartData[p.index] : undefined;
@@ -1687,24 +1692,30 @@ function FocusedTargetBubbleLabelFactory(
           ? fallbackValue
           : "";
     if (!resolvedValue.trim()) return null;
-    const rawX = p.x ?? p.viewBox?.x;
+    const vb = (p.viewBox ?? {}) as { x?: number | string; y?: number | string };
+    const rawX = p.x ?? vb.x;
     const resolvedX =
       typeof rawX === "number"
         ? rawX + shiftX
         : Number.isFinite(Number(rawX))
           ? Number(rawX) + shiftX
           : rawX;
-    const resolvedY = p.y ?? p.viewBox?.y;
+    const resolvedY = p.y ?? vb.y;
     return renderer({ x: resolvedX, y: resolvedY, value: resolvedValue });
   };
 }
 
 function CompositeTargetLineShapeFactory(shiftX: number) {
   return function CompositeTargetLineShape(props: {
-    points?: Array<{ x?: number; y?: number; value?: number | null; payload?: ChartDatum }>;
+    points?: ReadonlyArray<{
+      x?: number | null;
+      y?: number | null;
+      value?: number | null;
+      payload?: ChartDatum;
+    }>;
     stroke?: string;
-    strokeWidth?: number;
-    strokeDasharray?: string;
+    strokeWidth?: number | string;
+    strokeDasharray?: number | string;
   }) {
     const src = Array.isArray(props.points) ? props.points : [];
     const valid = src.filter(
@@ -1715,7 +1726,10 @@ function CompositeTargetLineShapeFactory(shiftX: number) {
       .map((p, i) => `${i === 0 ? "M" : "L"}${p.x + shiftX},${p.y}`)
       .join(" ");
     const stroke = props.stroke ?? "#0ea5e9";
-    const strokeWidth = props.strokeWidth ?? 2;
+    const parsedStrokeWidth = Number(props.strokeWidth);
+    const strokeWidth = Number.isFinite(parsedStrokeWidth) ? parsedStrokeWidth : 2;
+    const strokeDasharray =
+      props.strokeDasharray !== undefined ? String(props.strokeDasharray) : undefined;
     return (
       <g>
         <path
@@ -1731,7 +1745,7 @@ function CompositeTargetLineShapeFactory(shiftX: number) {
           fill="none"
           stroke={stroke}
           strokeWidth={strokeWidth}
-          strokeDasharray={props.strokeDasharray}
+          strokeDasharray={strokeDasharray}
           strokeLinecap="round"
           strokeLinejoin="round"
         />
