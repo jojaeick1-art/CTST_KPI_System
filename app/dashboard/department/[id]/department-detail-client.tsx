@@ -1351,6 +1351,11 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                                 <p className="mt-0.5 line-clamp-2 text-xs text-slate-500">
                                   {item.detailActivity?.trim() ? item.detailActivity : "세부 내용 없음"}
                                 </p>
+                                {item.linkedSecondary ? (
+                                  <span className="mt-1 inline-flex rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-800 ring-1 ring-indigo-200">
+                                    2목표
+                                  </span>
+                                ) : null}
                                 {item.needsStructureReview ? (
                                   <span className="mt-1 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800 ring-1 ring-amber-200">
                                     KPI 구조 수정 필요
@@ -1496,20 +1501,60 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                 targetPpm: editingKpiItem.targetPpm,
                 monthlyTargets: editingKpiItem.monthlyTargets,
                 monthlyTargetNotes: editingKpiItem.monthlyTargetNotes,
+                linkedSecondary: editingKpiItem.linkedSecondary
+                  ? {
+                      id: editingKpiItem.linkedSecondary.id,
+                      mainTopic: editingKpiItem.linkedSecondary.mainTopic,
+                      subTopic: editingKpiItem.linkedSecondary.subTopic,
+                      detailActivity: editingKpiItem.linkedSecondary.detailActivity,
+                      bm: editingKpiItem.linkedSecondary.bm,
+                      owner: editingKpiItem.linkedSecondary.owner,
+                      weight: editingKpiItem.linkedSecondary.weight,
+                      evaluationType: editingKpiItem.linkedSecondary.evaluationType,
+                      unit: editingKpiItem.linkedSecondary.unit,
+                      indicatorType: editingKpiItem.linkedSecondary.indicatorType,
+                      targetDirection: editingKpiItem.linkedSecondary.targetDirection,
+                      qualitativeCalcType: editingKpiItem.linkedSecondary.qualitativeCalcType,
+                      aggregationType: editingKpiItem.linkedSecondary.aggregationType,
+                      targetFillPolicy: editingKpiItem.linkedSecondary.targetFillPolicy,
+                      achievementCap: editingKpiItem.linkedSecondary.achievementCap,
+                      periodStartMonth: editingKpiItem.linkedSecondary.periodStartMonth,
+                      periodEndMonth: editingKpiItem.linkedSecondary.periodEndMonth,
+                      targetPpm: editingKpiItem.linkedSecondary.targetPpm,
+                      monthlyTargets: editingKpiItem.linkedSecondary.monthlyTargets,
+                      monthlyTargetNotes: editingKpiItem.linkedSecondary.monthlyTargetNotes,
+                    }
+                  : null,
               }
             : null
         }
         submitting={createManualKpiMutation.isPending || updateManualKpiMutation.isPending}
-        onSubmit={async (payload, options) => {
+        onSubmit={async (payloads, options) => {
           try {
             if (options?.kpiId) {
-              await updateManualKpiMutation.mutateAsync({ ...payload, kpiId: options.kpiId });
+              const first = payloads[0];
+              if (!first) throw new Error("수정할 KPI 데이터가 없습니다.");
+              await updateManualKpiMutation.mutateAsync({ ...first, kpiId: options.kpiId });
             } else {
-              await createManualKpiMutation.mutateAsync(payload);
+              let primaryKpiId: string | null = null;
+              for (let i = 0; i < payloads.length; i += 1) {
+                const payload = payloads[i]!;
+                const id = await createManualKpiMutation.mutateAsync({
+                  ...payload,
+                  ...(i > 0 && primaryKpiId ? { primaryKpiId } : {}),
+                });
+                if (i === 0) primaryKpiId = id;
+              }
             }
             await detailQuery.refetch();
             setEditingKpiItem(null);
-            window.alert(options?.kpiId ? "KPI 항목이 수정되었습니다." : "KPI 항목이 등록되었습니다.");
+            if (options?.kpiId) {
+              window.alert("KPI 항목이 수정되었습니다.");
+            } else if (payloads.length > 1) {
+              window.alert(`${payloads.length}개의 KPI 항목이 등록되었습니다. (동일 대분류·소분류, 서로 다른 월별 목표)`);
+            } else {
+              window.alert("KPI 항목이 등록되었습니다.");
+            }
           } catch (e) {
             window.alert(
               e instanceof Error

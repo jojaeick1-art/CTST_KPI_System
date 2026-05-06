@@ -1316,6 +1316,10 @@ export type DepartmentKpiDetailItem = {
   hasRejectionNotice: boolean;
   /** 항목의 현재 승인 상태 (대표값) */
   currentApprovalStep: string | null;
+  /** 두 번째 목표 행이 참조하는 첫 번째 KPI id (본 행이 부목표일 때만) */
+  primaryKpiId: string | null;
+  /** 같은 등록 흐름의 두 번째 목표(부모 행에만 채워짐) */
+  linkedSecondary?: DepartmentKpiDetailItem;
 };
 
 type ScoreTrack = "threshold" | "progress" | "qualitative";
@@ -1926,9 +1930,17 @@ export async function fetchDepartmentKpiDetail(
         : null;
     const averageAchievement =
       overallFromPeriod ?? representativeAchievementPercentForRates(rates);
+    const primaryKpiIdRaw = item.primary_kpi_id;
+    const primaryKpiId =
+      typeof primaryKpiIdRaw === "string" && primaryKpiIdRaw.trim().length > 0
+        ? primaryKpiIdRaw.trim()
+        : null;
     // 부서 상단 "전체 평균 달성률"은 대시보드 부서 카드와 동일하게
     // 등록된 KPI 항목 수를 분모로 하고, 승인 실적 없음은 0%로 포함한다.
-    departmentRates.push(averageAchievement ?? 0);
+    // 묶인 두 번째 목표 행은 목록에서 숨기므로 평균에도 포함하지 않음.
+    if (!primaryKpiId) {
+      departmentRates.push(averageAchievement ?? 0);
+    }
     const monthlyAchievementRates = monthlyAchievementRatesByMonth(targets, rateContext);
     const firstDraftRow = targetRows.find(
       (t) => String(t.approval_step ?? "").trim().toLowerCase() === PERF_STATUS_DRAFT
@@ -1986,7 +1998,9 @@ export async function fetchDepartmentKpiDetail(
     const bm = pickText(item, ["bm", "base_measure", "benchmark"]);
     const weightText = pickText(item, ["weight", "weight_rate", "weighted_score"]);
     const track = resolveScoreTrack(indicatorType, bm);
-    pushWeightedScore(track, averageAchievement, weightText);
+    if (!primaryKpiId) {
+      pushWeightedScore(track, averageAchievement, weightText);
+    }
 
     return {
       id: typeof item.id === "string" ? item.id : `kpi-${itemIdText}`,
@@ -2034,8 +2048,11 @@ export async function fetchDepartmentKpiDetail(
       targetCount: targets.length,
       hasRejectionNotice: targetsHaveRejectionReason(targets),
       currentApprovalStep: aggregateApprovalStepForItem(targets),
+      primaryKpiId,
     };
   });
+
+  const mergedDetailItems = mergeLinkedKpiDetailItems(detailItems);
 
   const departmentAverageAchievement =
     departmentRates.length > 0
@@ -2057,8 +2074,35 @@ export async function fetchDepartmentKpiDetail(
     progressScore,
     qualitativeScore,
     compositeScore,
-    items: detailItems,
+    items: mergedDetailItems,
   };
+}
+
+/** 두 번째 목표 행(primary_kpi_id 있음)은 부모 행에만 연결하고 목록에서는 제외. 부모가 없으면 단독 행으로 표시 */
+function mergeLinkedKpiDetailItems(
+  items: DepartmentKpiDetailItem[]
+): DepartmentKpiDetailItem[] {
+  const byId = new Map(items.map((it) => [it.id, it]));
+  const secondaries = new Map<string, DepartmentKpiDetailItem>();
+  for (const it of items) {
+    if (it.primaryKpiId) secondaries.set(it.primaryKpiId, it);
+  }
+  const out: DepartmentKpiDetailItem[] = [];
+  for (const it of items) {
+    if (it.primaryKpiId) {
+      if (!byId.has(it.primaryKpiId)) {
+        out.push({ ...it, primaryKpiId: null });
+      }
+      continue;
+    }
+    const sec = secondaries.get(it.id);
+    out.push(
+      sec
+        ? { ...it, primaryKpiId: null, linkedSecondary: sec }
+        : { ...it, primaryKpiId: null }
+    );
+  }
+  return out;
 }
 
 export async function fetchDashboardSummaryStats(
@@ -5262,6 +5306,8 @@ export type CreateManualKpiInput = {
   periodStartMonth: number;
   periodEndMonth: number;
   monthlyTargets: Array<{ month: number; targetValue: number; note?: string | null }>;
+  /** 두 번째 목표 행 등록 시 첫 번째 KPI id */
+  primaryKpiId?: string | null;
 };
 
 export type UpdateManualKpiInput = CreateManualKpiInput & {
@@ -5314,18 +5360,21 @@ export async function createManualKpiItem(
   if (!Number.isFinite(safeWeight) || safeWeight < 1 || safeWeight > 100) {
     throw new Error("가중치는 1~100 사이 정수로 입력해 주세요.");
   }
+  const linkedToPrimary = Boolean(String(input.primaryKpiId ?? "").trim());
   const { data: existingItems, error: sumErr } = await supabase
     .from("kpi_items")
-    .select("weight")
+    .select("weight, primary_kpi_id")
     .eq("dept_id", input.deptId);
   if (sumErr) {
     throw new Error(sumErr.message);
   }
   const existingSum = (existingItems ?? []).reduce((sum, row) => {
-    const n = Number(String((row as Record<string, unknown>).weight ?? "").trim());
+    const r = row as Record<string, unknown>;
+    if (r.primary_kpi_id) return sum;
+    const n = Number(String(r.weight ?? "").trim());
     return Number.isFinite(n) ? sum + n : sum;
   }, 0);
-  if (existingSum + safeWeight > 100) {
+  if (!linkedToPrimary && existingSum + safeWeight > 100) {
     throw new Error(
       `부서 가중치 합계가 100점을 초과합니다. 현재 ${existingSum}점, 추가 ${safeWeight}점으로 ${
         existingSum + safeWeight
@@ -5373,31 +5422,35 @@ export async function createManualKpiItem(
       input.aggregationType
     );
 
+  const pk = String(input.primaryKpiId ?? "").trim();
+  const insertPayload: Record<string, unknown> = {
+    dept_id: input.deptId,
+    main_topic: input.mainTopic.trim(),
+    sub_topic: input.subTopic.trim(),
+    detail_activity: input.detailActivity.trim(),
+    benchmark: input.bmValue.trim(),
+    standard: input.baselineLabel.trim(),
+    weight: safeWeight,
+    manager_name: input.owner.trim(),
+    evaluation_type: input.evaluationType,
+    unit: input.unit,
+    indicator_type: input.indicatorType,
+    target_value: input.targetValue,
+    qualitative_calc_type: input.qualitativeCalcType,
+    aggregation_type: input.aggregationType,
+    target_fill_policy: input.targetFillPolicy,
+    achievement_cap: input.achievementCap,
+    kpi_structure_version: 2,
+    period_start_month: input.periodStartMonth,
+    period_end_month: input.periodEndMonth,
+    target_direction: input.targetDirection,
+    target_final_value: finalTarget,
+  };
+  if (pk) insertPayload.primary_kpi_id = pk;
+
   const { data: inserted, error: itemErr } = await supabase
     .from("kpi_items")
-    .insert({
-      dept_id: input.deptId,
-      main_topic: input.mainTopic.trim(),
-      sub_topic: input.subTopic.trim(),
-      detail_activity: input.detailActivity.trim(),
-      benchmark: input.bmValue.trim(),
-      standard: input.baselineLabel.trim(),
-      weight: safeWeight,
-      manager_name: input.owner.trim(),
-      evaluation_type: input.evaluationType,
-      unit: input.unit,
-      indicator_type: input.indicatorType,
-      target_value: input.targetValue,
-      qualitative_calc_type: input.qualitativeCalcType,
-      aggregation_type: input.aggregationType,
-      target_fill_policy: input.targetFillPolicy,
-      achievement_cap: input.achievementCap,
-      kpi_structure_version: 2,
-      period_start_month: input.periodStartMonth,
-      period_end_month: input.periodEndMonth,
-      target_direction: input.targetDirection,
-      target_final_value: finalTarget,
-    })
+    .insert(insertPayload)
     .select("id")
     .single();
   if (itemErr || !inserted?.id) {
@@ -5472,13 +5525,15 @@ export async function updateManualKpiItem(
 
   const { data: existingItems, error: sumErr } = await supabase
     .from("kpi_items")
-    .select("id, weight")
+    .select("id, weight, primary_kpi_id")
     .eq("dept_id", input.deptId);
   if (sumErr) throw new Error(sumErr.message);
   const existingSumExcludingCurrent = (existingItems ?? []).reduce((sum, row) => {
-    const rowId = String((row as Record<string, unknown>).id ?? "");
+    const r = row as Record<string, unknown>;
+    const rowId = String(r.id ?? "");
     if (rowId === cleanKpiId) return sum;
-    const n = Number(String((row as Record<string, unknown>).weight ?? "").trim());
+    if (r.primary_kpi_id) return sum;
+    const n = Number(String(r.weight ?? "").trim());
     return Number.isFinite(n) ? sum + n : sum;
   }, 0);
   if (existingSumExcludingCurrent + safeWeight > 100) {
