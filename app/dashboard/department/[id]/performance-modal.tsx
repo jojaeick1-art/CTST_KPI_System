@@ -130,32 +130,38 @@ function KpiSummaryMetricGrid({
   item,
   effectiveIndicatorType,
   displayedFinalTargetValue,
+  tone = "primary",
 }: {
   item: KpiModalItem;
   effectiveIndicatorType: KpiIndicatorType;
   displayedFinalTargetValue: number | null;
+  tone?: "primary" | "secondary";
 }) {
+  const cellClassName =
+    tone === "secondary"
+      ? "min-w-0 rounded-lg bg-orange-100 px-2.5 py-2"
+      : "min-w-0 rounded-lg bg-sky-100 px-2.5 py-2";
   return (
     <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-      <div className="min-w-0 rounded-lg bg-sky-100 px-2.5 py-2">
+      <div className={cellClassName}>
         <p className="truncate text-[10px] font-semibold text-slate-500">평가 유형</p>
         <p className="mt-0.5 truncate whitespace-nowrap text-[13px] font-semibold text-slate-800">
           {item.evaluationType === "qualitative" ? "정성 평가" : "정량 평가"}
         </p>
       </div>
-      <div className="min-w-0 rounded-lg bg-sky-100 px-2.5 py-2">
+      <div className={cellClassName}>
         <p className="truncate text-[10px] font-semibold text-slate-500">B/M</p>
         <p className="mt-0.5 truncate whitespace-nowrap text-[13px] font-semibold text-slate-800">
           {item.bm ? benchmarkLabel(effectiveIndicatorType, item.bm) : "—"}
         </p>
       </div>
-      <div className="min-w-0 rounded-lg bg-sky-100 px-2.5 py-2">
+      <div className={cellClassName}>
         <p className="truncate text-[10px] font-semibold text-slate-500">평가 기간</p>
         <p className="mt-0.5 truncate whitespace-nowrap text-[13px] font-semibold text-slate-800">
           {periodRangeLabel(item.periodStartMonth, item.periodEndMonth)}
         </p>
       </div>
-      <div className="min-w-0 rounded-lg bg-sky-100 px-2.5 py-2">
+      <div className={cellClassName}>
         <p className="truncate text-[10px] font-semibold text-slate-500">최종 목표값</p>
         <p className="mt-0.5 truncate whitespace-nowrap text-[13px] font-semibold text-slate-800">
           {displayedFinalTargetValue !== null &&
@@ -164,13 +170,13 @@ function KpiSummaryMetricGrid({
             : "—"}
         </p>
       </div>
-      <div className="min-w-0 rounded-lg bg-sky-100 px-2.5 py-2">
+      <div className={cellClassName}>
         <p className="truncate text-[10px] font-semibold text-slate-500">가중치</p>
         <p className="mt-0.5 truncate whitespace-nowrap text-[13px] font-semibold text-slate-800">
           {item.weight || "—"}
         </p>
       </div>
-      <div className="min-w-0 rounded-lg bg-sky-100 px-2.5 py-2">
+      <div className={cellClassName}>
         <p className="truncate text-[10px] font-semibold text-slate-500">담당자</p>
         <p className="mt-0.5 truncate whitespace-nowrap text-[13px] font-semibold text-slate-800">
           {item.owner || "—"}
@@ -178,6 +184,45 @@ function KpiSummaryMetricGrid({
       </div>
     </div>
   );
+}
+
+function KpiSummaryCard({
+  title,
+  item,
+  effectiveIndicatorType,
+  displayedFinalTargetValue,
+  tone = "primary",
+}: {
+  title: string;
+  item: KpiModalItem;
+  effectiveIndicatorType: KpiIndicatorType;
+  displayedFinalTargetValue: number | null;
+  tone?: "primary" | "secondary";
+}) {
+  const cardClassName =
+    tone === "secondary"
+      ? "rounded-xl border border-orange-200 bg-white p-4"
+      : "rounded-xl border border-sky-200 bg-white p-4";
+  const titleClassName =
+    tone === "secondary"
+      ? "mb-2 truncate text-xs font-semibold text-orange-700"
+      : "mb-2 truncate text-xs font-semibold text-sky-700";
+  return (
+    <section className={cardClassName}>
+      <p className={titleClassName}>{title}</p>
+      <KpiSummaryMetricGrid
+        item={item}
+        effectiveIndicatorType={effectiveIndicatorType}
+        displayedFinalTargetValue={displayedFinalTargetValue}
+        tone={tone}
+      />
+    </section>
+  );
+}
+
+function kpiSummaryCardTitle(goalLabel: string, item: KpiModalItem): string {
+  const detail = item.detailActivity.trim();
+  return detail ? `${goalLabel} : ${detail}` : goalLabel;
 }
 
 function computedActualLabel(t: KpiIndicatorType): string {
@@ -246,6 +291,10 @@ function computedKindSummaryKo(t: KpiIndicatorType): string {
   if (t === "uph") return "생산성(UPH)";
   if (t === "cpk") return "공정능력(Cpk)";
   return "";
+}
+
+function chartAxisTitle(indicatorType: KpiIndicatorType): string {
+  return indicatorType === "normal" ? "%" : computedKindSummaryKo(indicatorType);
 }
 
 type ChartDatum = {
@@ -478,6 +527,19 @@ function findLatestPriorRowWithSubmittedValue(
     }
   }
   return null;
+}
+
+function chartDatumFromClickData(data: unknown): ChartDatum | null {
+  const rec = data && typeof data === "object" ? (data as Record<string, unknown>) : null;
+  const payload = rec?.payload;
+  const candidate =
+    payload && typeof payload === "object"
+      ? (payload as Record<string, unknown>)
+      : rec;
+  if (!candidate) return null;
+  const month = candidate.month;
+  if (typeof month !== "number" || month === 0) return null;
+  return candidate as unknown as ChartDatum;
 }
 
 function resolveMonthlyTargetForMonth(
@@ -812,22 +874,26 @@ function monthLockedForEditor(
 }
 
 type HoveredCompositeSeries = "primary" | "secondary" | null;
+type ChartViewMode = "primary" | "secondary" | "composite";
 
 type FocusedBubbleMonth = MonthKey | null;
 type FocusedBubbleKind = "primary" | "secondary" | null;
-type BubbleDisplayMode = "target" | "comment";
+type BubbleDisplayMode = "none" | "target" | "comment" | "bar";
 
 function KpiChartTooltip({
   active,
   payload,
   indicatorType,
   hoveredCompositeSeries,
+  disabled,
 }: {
   active?: boolean;
   payload?: { payload?: ChartDatum }[];
   indicatorType: KpiIndicatorType;
   hoveredCompositeSeries?: HoveredCompositeSeries;
+  disabled?: boolean;
 }) {
+  if (disabled) return null;
   if (!active || !payload?.length) return null;
   const d =
     payload.find((p) => p.payload)?.payload ?? (payload[0]!.payload as ChartDatum | undefined);
@@ -1239,10 +1305,11 @@ function KpiCommentBubbleLabel(props: {
   x?: number | string;
   y?: number | string;
   width?: number | string;
+  chartBottom?: number | string;
   value?: unknown;
   payload?: ChartDatum;
 }) {
-  const { x, y, width, value, payload } = props;
+  const { x, y, width, chartBottom, value, payload } = props;
   if (typeof value !== "string" || !value.trim()) return null;
   const nx = Number(x);
   const ny = Number(y);
@@ -1259,9 +1326,11 @@ function KpiCommentBubbleLabel(props: {
   const month = typeof payload?.month === "number" ? payload.month : 0;
   const jitterX = month % 2 === 0 ? -6 : 6;
   const boxX = anchorX - boxWidth / 2 + jitterX;
-  const boxY = anchorY + 12;
+  const bottomRaw = Number(chartBottom);
+  const maxBoxY = Number.isFinite(bottomRaw) ? bottomRaw - 26 : Number.POSITIVE_INFINITY;
+  const boxY = Math.max(2, Math.min(anchorY + 12, maxBoxY));
   const tipX = boxX + boxWidth / 2;
-  const tipY = boxY;
+  const tipY = boxY <= anchorY ? boxY + 22 : boxY;
 
   return (
     <g pointerEvents="none">
@@ -1304,10 +1373,11 @@ function KpiCommentBubbleLabelSecondary(props: {
   x?: number | string;
   y?: number | string;
   width?: number | string;
+  chartBottom?: number | string;
   value?: unknown;
   payload?: ChartDatum;
 }) {
-  const { x, y, width, value, payload } = props;
+  const { x, y, width, chartBottom, value, payload } = props;
   if (typeof value !== "string" || !value.trim()) return null;
   const nx = Number(x);
   const ny = Number(y);
@@ -1325,9 +1395,11 @@ function KpiCommentBubbleLabelSecondary(props: {
   // 목표1과 반대로 살짝 이동
   const jitterX = month % 2 === 0 ? 10 : -10;
   const boxX = anchorX - boxWidth / 2 + jitterX;
-  const boxY = anchorY + 34;
+  const bottomRaw = Number(chartBottom);
+  const maxBoxY = Number.isFinite(bottomRaw) ? bottomRaw - 26 : Number.POSITIVE_INFINITY;
+  const boxY = Math.max(2, Math.min(anchorY - 34, maxBoxY));
   const tipX = boxX + boxWidth / 2;
-  const tipY = boxY;
+  const tipY = boxY + 22;
 
   return (
     <g pointerEvents="none">
@@ -1365,8 +1437,135 @@ function KpiCommentBubbleLabelSecondary(props: {
   );
 }
 
-/** 목표 말풍선: 점 위쪽으로 더 올려 실적 말풍선·막대와 겹침 완화 */
-const TARGET_BUBBLE_LIFT_PX = 52;
+function resolveFocusedCommentBubbleValue(opts: {
+  datum: ChartDatum | undefined;
+  focusedMonth: FocusedBubbleMonth;
+  focusedKind: FocusedBubbleKind;
+  displayMode: BubbleDisplayMode;
+  kind: "primary" | "secondary";
+  draftValue?: string;
+  commentsByMonth?: Map<MonthKey, ItemPerformanceRow>;
+  monthList?: MonthKey[];
+}): string | null {
+  const {
+    datum: d,
+    focusedMonth,
+    focusedKind,
+    displayMode,
+    kind,
+    draftValue = "",
+    commentsByMonth,
+    monthList = [],
+  } = opts;
+  if (!d || typeof d.month !== "number" || d.month === 0) return null;
+  if (displayMode !== "comment" && displayMode !== "bar") return null;
+  if (displayMode === "bar" && focusedMonth === null) return null;
+  if (focusedMonth !== null && focusedMonth !== d.month) return null;
+  if (focusedKind !== null && focusedKind !== kind) return null;
+
+  const fallbackValueFromDatum =
+    kind === "secondary" ? d.commentLabelSecondary ?? "" : d.commentLabel ?? "";
+  const fallbackFromRows =
+    commentsByMonth
+      ? commentsByMonth.get(d.month)?.bubble_note ??
+        findLatestPriorRowWithSubmittedValue(commentsByMonth, d.month, monthList)?.row
+          ?.bubble_note ??
+        ""
+      : "";
+  const resolvedValue =
+    displayMode === "bar" && draftValue.trim()
+      ? draftValue.trim()
+      : fallbackValueFromDatum || fallbackFromRows || draftValue.trim();
+
+  return resolvedValue.trim() ? resolvedValue.trim() : null;
+}
+
+function CompositeActualPerformanceBarShape(props: {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  fill?: string;
+  payload?: ChartDatum;
+  kind: "primary" | "secondary";
+  focusedMonth: FocusedBubbleMonth;
+  focusedKind: FocusedBubbleKind;
+  displayMode: BubbleDisplayMode;
+  draftValue?: string;
+  commentsByMonth?: Map<MonthKey, ItemPerformanceRow>;
+  monthList?: MonthKey[];
+  showBubble?: boolean;
+}) {
+  const x = props.x ?? 0;
+  const y = props.y ?? 0;
+  const width = props.width ?? 0;
+  const height = props.height ?? 0;
+  const fill = props.fill ?? (props.kind === "secondary" ? "#ea580c" : "#0284c7");
+  if (width <= 0) return null;
+
+  const barTop = Math.min(y, y + height);
+  const barBottom = Math.max(y, y + height);
+  const displayH = barBottom - barTop;
+  const rx = Math.min(4, Math.max(0, displayH / 2));
+  const bubbleValue =
+    props.showBubble === false
+      ? null
+      : resolveFocusedCommentBubbleValue({
+          datum: props.payload,
+          focusedMonth: props.focusedMonth,
+          focusedKind: props.focusedKind,
+          displayMode: props.displayMode,
+          kind: props.kind,
+          draftValue: props.draftValue,
+          commentsByMonth: props.commentsByMonth,
+          monthList: props.monthList,
+        });
+
+  return (
+    <g className="recharts-bar-rectangle" style={{ outline: "none" }}>
+      {displayH > 0 ? (
+        <rect
+          x={x}
+          y={barTop}
+          width={width}
+          height={displayH}
+          rx={rx}
+          ry={rx}
+          fill={fill}
+          className="cursor-pointer"
+          style={{ outline: "none" }}
+        />
+      ) : null}
+      {bubbleValue ? (
+        props.kind === "secondary" ? (
+          <KpiCommentBubbleLabelSecondary
+            x={x}
+            y={barTop}
+            width={width}
+            chartBottom={barBottom}
+            value={bubbleValue}
+            payload={props.payload}
+          />
+        ) : (
+          <KpiCommentBubbleLabel
+            x={x}
+            y={barTop}
+            width={width}
+            chartBottom={barBottom}
+            value={bubbleValue}
+            payload={props.payload}
+          />
+        )
+      ) : null}
+    </g>
+  );
+}
+
+/** 목표 말풍선: 목을 짧게 유지하고, 차트 좌측에서는 B/M 막대를 피해서 오른쪽에 둔다. */
+const TARGET_BUBBLE_LIFT_PX = 28;
+const TARGET_BUBBLE_EDGE_AVOID_X_PX = 150;
+const TARGET_BUBBLE_GAP_PX = 12;
+const TARGET_BUBBLE_BOTTOM_FLIP_Y_PX = 244;
 
 function KpiTargetBubbleLabel({
   x,
@@ -1388,8 +1587,11 @@ function KpiTargetBubbleLabel({
   const boxWidth = Math.max(42, Math.min(92, label.length * 8 + 18));
   const anchorX = nx;
   const anchorY = ny;
-  const placeLeft = anchorX > boxWidth + 22;
-  const boxX = placeLeft ? anchorX - boxWidth - 16 : anchorX + 16;
+  const forceRight = anchorX < TARGET_BUBBLE_EDGE_AVOID_X_PX;
+  const placeLeft = !forceRight && anchorX > boxWidth + TARGET_BUBBLE_GAP_PX + 8;
+  const boxX = placeLeft
+    ? anchorX - boxWidth - TARGET_BUBBLE_GAP_PX
+    : anchorX + TARGET_BUBBLE_GAP_PX;
   const boxY = Math.max(0, anchorY - TARGET_BUBBLE_LIFT_PX);
   const connectorY = boxY + 11;
   const pointerX = placeLeft ? boxX + boxWidth : boxX;
@@ -1430,8 +1632,8 @@ function KpiTargetBubbleLabel({
   );
 }
 
-const COMPOSITE_GOAL1_BUBBLE_LIFT_PX = 48;
-const COMPOSITE_GOAL2_BUBBLE_LIFT_PX = 76;
+const COMPOSITE_GOAL1_BUBBLE_LIFT_PX = 30;
+const COMPOSITE_GOAL2_BUBBLE_DROP_PX = 18;
 const COMPOSITE_BAR_SIZE_PX = 26;
 const COMPOSITE_BAR_GAP_PX = 8;
 const COMPOSITE_BAR_CENTER_SHIFT_PX =
@@ -1459,8 +1661,11 @@ function KpiTargetBubbleLabelGoal1({
   const boxWidth = Math.max(42, Math.min(92, label.length * 8 + 18));
   const anchorX = nx;
   const anchorY = ny;
-  const placeLeft = anchorX > boxWidth + 22;
-  const boxX = placeLeft ? anchorX - boxWidth - 16 : anchorX + 16;
+  const forceRight = anchorX < TARGET_BUBBLE_EDGE_AVOID_X_PX;
+  const placeLeft = !forceRight && anchorX > boxWidth + TARGET_BUBBLE_GAP_PX + 8;
+  const boxX = placeLeft
+    ? anchorX - boxWidth - TARGET_BUBBLE_GAP_PX
+    : anchorX + TARGET_BUBBLE_GAP_PX;
   const boxY = Math.max(0, anchorY - COMPOSITE_GOAL1_BUBBLE_LIFT_PX);
   const connectorY = boxY + 11;
   const pointerX = placeLeft ? boxX + boxWidth : boxX;
@@ -1521,10 +1726,16 @@ function KpiTargetBubbleLabelGoal2({
   const boxWidth = Math.max(42, Math.min(92, label.length * 8 + 18));
   const anchorX = nx;
   const anchorY = ny;
-  const placeLeft = anchorX > boxWidth + 22;
-  const boxX = placeLeft ? anchorX - boxWidth - 16 : anchorX + 16;
-  const boxY = Math.max(0, anchorY - COMPOSITE_GOAL2_BUBBLE_LIFT_PX);
-  const connectorY = boxY + 11;
+  const forceRight = anchorX < TARGET_BUBBLE_EDGE_AVOID_X_PX;
+  const placeLeft = !forceRight && anchorX > boxWidth + TARGET_BUBBLE_GAP_PX + 8;
+  const boxX = placeLeft
+    ? anchorX - boxWidth - TARGET_BUBBLE_GAP_PX
+    : anchorX + TARGET_BUBBLE_GAP_PX;
+  const placeAbove = anchorY > TARGET_BUBBLE_BOTTOM_FLIP_Y_PX;
+  const boxY = placeAbove
+    ? Math.max(2, anchorY - COMPOSITE_GOAL1_BUBBLE_LIFT_PX)
+    : anchorY + COMPOSITE_GOAL2_BUBBLE_DROP_PX;
+  const connectorY = placeAbove ? boxY + 22 : boxY;
   const pointerX = placeLeft ? boxX + boxWidth : boxX;
 
   return (
@@ -1586,6 +1797,7 @@ function FocusedCommentBubbleLabelFactory(
     draftValue?: string;
     commentsByMonth?: Map<MonthKey, ItemPerformanceRow>;
     monthList?: MonthKey[];
+    shiftX?: number;
   }
 ) {
   const {
@@ -1597,12 +1809,14 @@ function FocusedCommentBubbleLabelFactory(
     draftValue = "",
     commentsByMonth,
     monthList = [],
+    shiftX = 0,
   } =
     opts;
   return function FocusedCommentBubbleLabel(p: {
     x?: number | string;
     y?: number | string;
     width?: number | string;
+    height?: number | string;
     value?: unknown;
     payload?: ChartDatum;
     index?: number;
@@ -1612,37 +1826,48 @@ function FocusedCommentBubbleLabelFactory(
       typeof p.index === "number" && p.index >= 0 ? chartData[p.index] : undefined;
     const d = p.payload ?? byIndex;
     if (!d || typeof d.month !== "number" || d.month === 0) return null;
-    if (displayMode !== "comment") return null;
+    if (displayMode !== "comment" && displayMode !== "bar") return null;
+    if (displayMode === "bar" && focusedMonth === null) return null;
     if (focusedMonth !== null && focusedMonth !== d.month) return null;
     if (focusedKind !== null && focusedKind !== kind) return null;
-    const fallbackValueFromDatum =
-      kind === "secondary" ? d.commentLabelSecondary ?? "" : d.commentLabel ?? "";
-    const fallbackFromRows =
-      commentsByMonth
-        ? commentsByMonth.get(d.month)?.bubble_note ??
-          findLatestPriorRowWithSubmittedValue(commentsByMonth, d.month, monthList)?.row
-            ?.bubble_note ??
-          ""
-        : "";
-    let resolvedValue = fallbackValueFromDatum || fallbackFromRows;
-    if (!resolvedValue.trim() && draftValue.trim()) {
-      resolvedValue = draftValue.trim();
-    }
-    if (!resolvedValue.trim()) return null;
+    const resolvedValue = resolveFocusedCommentBubbleValue({
+      datum: d,
+      focusedMonth,
+      focusedKind,
+      displayMode,
+      kind,
+      draftValue,
+      commentsByMonth,
+      monthList,
+    });
+    if (!resolvedValue) return null;
     const vb = (p.viewBox ?? {}) as {
       x?: number | string;
       y?: number | string;
       width?: number | string;
+      height?: number | string;
     };
-    const resolvedX = p.x ?? vb.x;
+    const rawX = p.x ?? vb.x;
+    const resolvedX =
+      typeof rawX === "number"
+        ? rawX + shiftX
+        : Number.isFinite(Number(rawX))
+          ? Number(rawX) + shiftX
+          : rawX;
     const resolvedY = p.y ?? vb.y;
     const resolvedWidth = p.width ?? vb.width;
+    const rawHeight = p.height ?? vb.height;
+    const resolvedChartBottom =
+      Number.isFinite(Number(resolvedY)) && Number.isFinite(Number(rawHeight))
+        ? Number(resolvedY) + Number(rawHeight)
+        : undefined;
     return kind === "secondary" ? (
       <KpiCommentBubbleLabelSecondary
         {...p}
         x={resolvedX}
         y={resolvedY}
         width={resolvedWidth}
+        chartBottom={resolvedChartBottom}
         value={resolvedValue}
       />
     ) : (
@@ -1651,6 +1876,7 @@ function FocusedCommentBubbleLabelFactory(
         x={resolvedX}
         y={resolvedY}
         width={resolvedWidth}
+        chartBottom={resolvedChartBottom}
         value={resolvedValue}
       />
     );
@@ -1679,7 +1905,8 @@ function FocusedTargetBubbleLabelFactory(
       typeof p.index === "number" && p.index >= 0 ? chartData[p.index] : undefined;
     const d = p.payload ?? byIndex;
     if (!d || typeof d.month !== "number" || d.month === 0) return null;
-    if (displayMode !== "target") return null;
+    if (displayMode !== "target" && displayMode !== "bar") return null;
+    if (displayMode === "bar" && focusedMonth === null) return null;
     if (focusedMonth !== null && focusedMonth !== d.month) return null;
     if (focusedMonth !== null && focusedKind !== null && focusedKind !== targetKind) {
       return null;
@@ -1774,6 +2001,34 @@ type ChartYDomain = { min: number; max: number };
 
 const CHART_Y_DOMAIN_DEGENERATE_EPS = 1e-9;
 
+function computeDynamicChartYDomainFromValues(values: number[]): ChartYDomain {
+  if (values.length === 0) {
+    return { min: 0, max: 100 };
+  }
+  const dataMin = Math.min(...values);
+  const dataMax = Math.max(...values);
+  if (!Number.isFinite(dataMin) || !Number.isFinite(dataMax)) {
+    return { min: 0, max: 100 };
+  }
+
+  if (dataMax - dataMin < CHART_Y_DOMAIN_DEGENERATE_EPS) {
+    const mid = dataMin;
+    const spread = Math.max(Math.abs(mid) * 0.1, 1);
+    return { min: mid - spread, max: mid + spread };
+  }
+
+  let minY = dataMin < 0 ? dataMin * 1.1 : 0;
+  const maxY = dataMax > 0 ? dataMax * 1.1 : 0;
+
+  if (dataMin >= 0 && dataMin === 0 && dataMax > dataMin) {
+    const span = maxY - minY;
+    const belowZero = Math.max(maxY * 0.05, span * 0.03, 1e-9);
+    minY = -belowZero;
+  }
+
+  return { min: minY, max: maxY };
+}
+
 /**
  * Y축: 목표·실적·B/M에 쓰인 유효 숫자 범위에 1.1배 여유를 둔다.
  * - 양수만 있으면 상한 = max×1.1, 하한은 보통 0(아래 참)
@@ -1802,31 +2057,34 @@ function computeDynamicChartYDomain(chartData: ChartDatum[]): ChartYDomain {
       values.push(d.barSecondary);
     }
   }
-  if (values.length === 0) {
-    return { min: 0, max: 100 };
-  }
-  const dataMin = Math.min(...values);
-  const dataMax = Math.max(...values);
-  if (!Number.isFinite(dataMin) || !Number.isFinite(dataMax)) {
-    return { min: 0, max: 100 };
-  }
+  return computeDynamicChartYDomainFromValues(values);
+}
 
-  if (dataMax - dataMin < CHART_Y_DOMAIN_DEGENERATE_EPS) {
-    const mid = dataMin;
-    const spread = Math.max(Math.abs(mid) * 0.1, 1);
-    return { min: mid - spread, max: mid + spread };
+function computeCompositeChartYDomain(
+  chartData: ChartDatum[],
+  series: "primary" | "secondary"
+): ChartYDomain {
+  const values: number[] = [];
+  for (const d of chartData) {
+    if (series === "primary") {
+      if (d.target !== null && Number.isFinite(d.target)) values.push(d.target);
+      if (d.barPrimary !== undefined && Number.isFinite(d.barPrimary)) {
+        values.push(d.barPrimary);
+      }
+    } else {
+      if (
+        d.targetSecondary !== null &&
+        d.targetSecondary !== undefined &&
+        Number.isFinite(d.targetSecondary)
+      ) {
+        values.push(d.targetSecondary);
+      }
+      if (d.barSecondary !== undefined && Number.isFinite(d.barSecondary)) {
+        values.push(d.barSecondary);
+      }
+    }
   }
-
-  let minY = dataMin < 0 ? dataMin * 1.1 : 0;
-  const maxY = dataMax > 0 ? dataMax * 1.1 : 0;
-
-  if (dataMin >= 0 && dataMin === 0 && dataMax > dataMin) {
-    const span = maxY - minY;
-    const belowZero = Math.max(maxY * 0.05, span * 0.03, 1e-9);
-    minY = -belowZero;
-  }
-
-  return { min: minY, max: maxY };
+  return computeDynamicChartYDomainFromValues(values);
 }
 
 /** Y축 눈금: 0이 도메인 안에 있으면 반드시 한 칸에 포함(0%·0건 등 단위 표기용). */
@@ -1905,9 +2163,8 @@ export function PerformanceModal({
   const [perfEditTarget, setPerfEditTarget] = useState<"primary" | "secondary">(
     "primary"
   );
-  const [chartViewMode, setChartViewMode] = useState<"primary" | "secondary" | "composite">(
-    "composite"
-  );
+  const [chartViewMode, setChartViewMode] =
+    useState<ChartViewMode>("composite");
   const [hoveredCompositeSeries, setHoveredCompositeSeries] =
     useState<HoveredCompositeSeries>(null);
   const [focusedBubbleMonth, setFocusedBubbleMonth] =
@@ -1915,7 +2172,7 @@ export function PerformanceModal({
   const [focusedBubbleKind, setFocusedBubbleKind] =
     useState<FocusedBubbleKind>(null);
   const [bubbleDisplayMode, setBubbleDisplayMode] =
-    useState<BubbleDisplayMode>("target");
+    useState<BubbleDisplayMode>("none");
   const barClickHandledRef = useRef(false);
   const perfQuery =
     perfEditTarget === "secondary" && linkedSecondaryItem
@@ -2235,14 +2492,18 @@ export function PerformanceModal({
   }, [linkedSecondaryItem, activeMonthListSecondary]);
 
   const dualChartAndSummaryEligible = useMemo(
-    () =>
-      Boolean(
-        linkedSecondaryItem &&
-          effectiveIndicatorTypePrimary === "normal" &&
-          effectiveIndicatorTypeSecondary === "normal"
-      ),
-    [linkedSecondaryItem, effectiveIndicatorTypePrimary, effectiveIndicatorTypeSecondary]
+    () => Boolean(linkedSecondaryItem),
+    [linkedSecondaryItem]
   );
+
+  const chartViewOptions = useMemo<Array<{ mode: ChartViewMode; label: string }>>(() => {
+    if (!linkedSecondaryItem) return [] as Array<{ mode: ChartViewMode; label: string }>;
+    return [
+      { mode: "primary", label: "목표 1" },
+      { mode: "secondary", label: "목표 2" },
+      { mode: "composite", label: "종합" },
+    ];
+  }, [linkedSecondaryItem]);
 
   const activeMonthListEditor = useMemo(() => {
     if (!editorKpiItem) return [] as MonthKey[];
@@ -2485,12 +2746,12 @@ export function PerformanceModal({
   useEffect(() => {
     if (!isOpen || !kpiItem) return;
     setPerfEditTarget("primary");
-    setChartViewMode("composite");
+    setChartViewMode(dualChartAndSummaryEligible ? "composite" : "primary");
     setHoveredCompositeSeries(null);
     setFocusedBubbleMonth(null);
     setFocusedBubbleKind(null);
-    setBubbleDisplayMode("target");
-  }, [isOpen, kpiItem?.id, linkedSecondaryItem?.id]);
+    setBubbleDisplayMode("none");
+  }, [isOpen, kpiItem?.id, linkedSecondaryItem?.id, dualChartAndSummaryEligible]);
 
   useEffect(() => {
     if (!linkedSecondaryItem) return;
@@ -2517,44 +2778,45 @@ export function PerformanceModal({
     if (!kpiItem) return [];
 
     const dualEligible = dualChartAndSummaryEligible;
+    const hasSecondaryChart = Boolean(linkedSecondaryItem);
     const modeComposite =
       Boolean(linkedSecondaryItem) && dualEligible && chartViewMode === "composite";
 
-    const chartMonths = !dualEligible
+    const chartMonths = !hasSecondaryChart
       ? displayMonthList
-      : chartViewMode === "primary"
+      : chartViewMode === "primary" || (chartViewMode === "composite" && !modeComposite)
         ? activeMonthListPrimary
         : chartViewMode === "secondary"
           ? activeMonthListSecondary
           : displayMonthList;
 
     const sliceItem: KpiModalItem =
-      dualEligible && chartViewMode === "secondary" && linkedSecondaryItem
+      hasSecondaryChart && chartViewMode === "secondary" && linkedSecondaryItem
         ? linkedSecondaryItem
         : kpiItem;
 
     const rowMap =
-      dualEligible && chartViewMode === "secondary"
+      hasSecondaryChart && chartViewMode === "secondary"
         ? rowByMonthSecondary
         : rowByMonthPrimary;
 
     const sliceEffType: KpiIndicatorType =
-      dualEligible && chartViewMode === "secondary"
+      hasSecondaryChart && chartViewMode === "secondary"
         ? effectiveIndicatorTypeSecondary
         : effectiveIndicatorTypePrimary;
 
     const normMonthlyCtx =
-      dualEligible && chartViewMode === "secondary"
+      hasSecondaryChart && chartViewMode === "secondary"
         ? normalMonthlyContextSecondary
         : normalMonthlyContextPrimary;
 
     const computedTargetMetric =
-      dualEligible && chartViewMode === "secondary"
+      hasSecondaryChart && chartViewMode === "secondary"
         ? computedTargetMetricSecondary
         : computedTargetMetricPrimary;
 
     const dispFinalTarget =
-      dualEligible && chartViewMode === "secondary"
+      hasSecondaryChart && chartViewMode === "secondary"
         ? displayedFinalTargetValueSecondary
         : displayedFinalTargetValuePrimary;
 
@@ -2920,16 +3182,19 @@ export function PerformanceModal({
   );
 
   const chartAxisIndicatorType: KpiIndicatorType = chartShowsDualGroupedBars
-    ? "normal"
-    : dualChartAndSummaryEligible && chartViewMode === "secondary"
+    ? effectiveIndicatorTypePrimary === effectiveIndicatorTypeSecondary
+      ? effectiveIndicatorTypePrimary
+      : "normal"
+    : linkedSecondaryItem && chartViewMode === "secondary"
       ? effectiveIndicatorTypeSecondary
       : effectiveIndicatorTypePrimary;
 
   useEffect(() => {
     if (!isOpen || !kpiItem) return;
-    const months = !dualChartAndSummaryEligible
+    const months = !linkedSecondaryItem
       ? displayMonthList
-      : chartViewMode === "primary"
+      : chartViewMode === "primary" ||
+          (chartViewMode === "composite" && !dualChartAndSummaryEligible)
         ? activeMonthListPrimary
         : chartViewMode === "secondary"
           ? activeMonthListSecondary
@@ -2944,6 +3209,7 @@ export function PerformanceModal({
     isOpen,
     kpiItem,
     dualChartAndSummaryEligible,
+    linkedSecondaryItem,
     chartViewMode,
     displayMonthList,
     activeMonthListPrimary,
@@ -2953,12 +3219,25 @@ export function PerformanceModal({
 
   const chartYDomain = useMemo((): ChartYDomain => {
     if (!kpiItem) return { min: 0, max: 100 };
-    return computeDynamicChartYDomain(chartData);
-  }, [kpiItem, chartData]);
+    return chartShowsDualGroupedBars
+      ? computeCompositeChartYDomain(chartData, "primary")
+      : computeDynamicChartYDomain(chartData);
+  }, [kpiItem, chartData, chartShowsDualGroupedBars]);
+
+  const chartYDomainSecondary = useMemo((): ChartYDomain => {
+    if (!kpiItem) return { min: 0, max: 100 };
+    return chartShowsDualGroupedBars
+      ? computeCompositeChartYDomain(chartData, "secondary")
+      : chartYDomain;
+  }, [kpiItem, chartData, chartShowsDualGroupedBars, chartYDomain]);
 
   const yAxisTicks = useMemo(
     () => buildYAxisTicks(chartYDomain.min, chartYDomain.max),
     [chartYDomain.min, chartYDomain.max]
+  );
+  const yAxisTicksSecondary = useMemo(
+    () => buildYAxisTicks(chartYDomainSecondary.min, chartYDomainSecondary.max),
+    [chartYDomainSecondary.min, chartYDomainSecondary.max]
   );
 
   const hasTargetNoteLabels = useMemo(
@@ -3343,7 +3622,8 @@ export function PerformanceModal({
 
   function applyMonthSelection(
     mo: MonthKey,
-    goalHint?: "primary" | "secondary"
+    goalHint?: "primary" | "secondary",
+    options?: { keepBubbles?: boolean }
   ) {
     if (linkedSecondaryItem) {
       const inP = activeMonthListPrimary.includes(mo);
@@ -3360,16 +3640,30 @@ export function PerformanceModal({
     }
     setSelectedMonth(mo);
     setEditorMonth(mo);
+    if (options?.keepBubbles) return;
+    setFocusedBubbleMonth(null);
+    setFocusedBubbleKind(null);
+    setBubbleDisplayMode("none");
   }
 
   function focusBubblesByBarClick(
     mo: MonthKey,
     goalKind: "primary" | "secondary"
   ) {
-    applyMonthSelection(mo, goalKind);
-    setFocusedBubbleMonth(null);
-    setFocusedBubbleKind(null);
-    setBubbleDisplayMode("comment");
+    applyMonthSelection(mo, goalKind, { keepBubbles: true });
+    setFocusedBubbleMonth(mo);
+    setFocusedBubbleKind(goalKind);
+    setBubbleDisplayMode("bar");
+  }
+
+  function handlePerformanceBarClick(
+    data: unknown,
+    goalKind: "primary" | "secondary"
+  ) {
+    barClickHandledRef.current = true;
+    const row = chartDatumFromClickData(data);
+    if (!row) return;
+    focusBubblesByBarClick(row.month as MonthKey, goalKind);
   }
 
   const currentPeriodEndMonth =
@@ -3928,33 +4222,39 @@ export function PerformanceModal({
         <div className="flex min-h-0 flex-1 flex-col lg:flex-row lg:overflow-hidden">
           <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5">
 
-          <div className="mb-4 rounded-xl border border-sky-200 bg-white p-4">
+          <div className="mb-4">
             {headerItem.needsStructureReview ? (
               <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
                 KPI 평가 구조가 Rev02 이전 형식입니다. 수정 화면에서 평가 유형, 단위, 계산 기준, 목표 공백 처리, 달성률 상한을 확인해 저장해 주세요.
               </p>
             ) : null}
-            {dualChartAndSummaryEligible && linkedSecondaryItem ? (
+            {linkedSecondaryItem && chartViewMode === "composite" ? (
               <div className="grid gap-3 lg:grid-cols-2">
-                <section className="rounded-lg border border-sky-200/80 bg-sky-50/30 p-3">
-                  <p className="mb-2 text-xs font-semibold text-sky-700">목표 1</p>
-                  <KpiSummaryMetricGrid
-                    item={kpiItem}
-                    effectiveIndicatorType={effectiveIndicatorTypePrimary}
-                    displayedFinalTargetValue={displayedFinalTargetValuePrimary}
-                  />
-                </section>
-                <section className="rounded-lg border border-sky-200/80 bg-sky-50/30 p-3">
-                  <p className="mb-2 text-xs font-semibold text-sky-700">목표 2</p>
-                  <KpiSummaryMetricGrid
-                    item={linkedSecondaryItem}
-                    effectiveIndicatorType={effectiveIndicatorTypeSecondary}
-                    displayedFinalTargetValue={displayedFinalTargetValueSecondary}
-                  />
-                </section>
+                <KpiSummaryCard
+                  title={kpiSummaryCardTitle("목표 1", kpiItem)}
+                  item={kpiItem}
+                  effectiveIndicatorType={effectiveIndicatorTypePrimary}
+                  displayedFinalTargetValue={displayedFinalTargetValuePrimary}
+                />
+                <KpiSummaryCard
+                  title={kpiSummaryCardTitle("목표 2", linkedSecondaryItem)}
+                  item={linkedSecondaryItem}
+                  effectiveIndicatorType={effectiveIndicatorTypeSecondary}
+                  displayedFinalTargetValue={displayedFinalTargetValueSecondary}
+                  tone="secondary"
+                />
               </div>
+            ) : linkedSecondaryItem && chartViewMode === "secondary" ? (
+              <KpiSummaryCard
+                title={kpiSummaryCardTitle("목표 2", linkedSecondaryItem)}
+                item={linkedSecondaryItem}
+                effectiveIndicatorType={effectiveIndicatorTypeSecondary}
+                displayedFinalTargetValue={displayedFinalTargetValueSecondary}
+                tone="secondary"
+              />
             ) : (
-              <KpiSummaryMetricGrid
+              <KpiSummaryCard
+                title={kpiSummaryCardTitle("목표 1", kpiItem)}
                 item={kpiItem}
                 effectiveIndicatorType={effectiveIndicatorTypePrimary}
                 displayedFinalTargetValue={displayedFinalTargetValuePrimary}
@@ -3962,16 +4262,10 @@ export function PerformanceModal({
             )}
           </div>
 
-          <div className="kpi-modal-composed-chart flex h-[320px] flex-col rounded-xl border border-sky-200 bg-white p-2 sm:h-[360px] [&_.recharts-wrapper]:outline-none [&_.recharts-surface]:outline-none [&_svg]:outline-none">
-            {dualChartAndSummaryEligible ? (
+          <div className="kpi-modal-composed-chart flex h-[320px] flex-col rounded-xl border border-sky-200 bg-white p-1 sm:h-[360px] [&_.recharts-wrapper]:outline-none [&_.recharts-surface]:outline-none [&_svg]:outline-none">
+            {chartViewOptions.length > 0 ? (
               <div className="mb-1 flex items-center justify-end gap-3 px-1">
-                {(
-                  [
-                    { mode: "primary" as const, label: "목표 1" },
-                    { mode: "secondary" as const, label: "목표 2" },
-                    { mode: "composite" as const, label: "종합" },
-                  ] as const
-                ).map(({ mode, label }) => (
+                {chartViewOptions.map(({ mode, label }) => (
                   <label
                     key={mode}
                     className="inline-flex cursor-pointer items-center gap-1 text-[11px] font-medium text-slate-700"
@@ -3982,6 +4276,9 @@ export function PerformanceModal({
                       onChange={() => {
                         setChartViewMode(mode);
                         setHoveredCompositeSeries(null);
+                        setFocusedBubbleMonth(null);
+                        setFocusedBubbleKind(null);
+                        setBubbleDisplayMode("none");
                       }}
                       className="h-3.5 w-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
                     />
@@ -3990,13 +4287,28 @@ export function PerformanceModal({
                 ))}
               </div>
             ) : null}
-            <div className="min-h-0 flex-1">
+            <div className="relative min-h-0 flex-1">
+              {chartShowsDualGroupedBars ? (
+                <>
+                  <span className="pointer-events-none absolute bottom-0 left-5 z-10 rounded border border-sky-200 bg-sky-50/95 px-2 py-0.5 text-[11px] font-bold text-sky-700 shadow-sm">
+                    {chartAxisTitle(effectiveIndicatorTypePrimary)}
+                  </span>
+                  <span className="pointer-events-none absolute bottom-0 right-5 z-10 rounded border border-red-200 bg-white/95 px-2 py-0.5 text-[11px] font-bold text-orange-700 shadow-sm">
+                    {chartAxisTitle(effectiveIndicatorTypeSecondary)}
+                  </span>
+                </>
+              ) : null}
               <ResponsiveContainer width="100%" height="100%" key={`kpi-chart-${chartViewMode}`}>
                 <ComposedChart
                 data={chartData}
                 accessibilityLayer={false}
                 style={{ outline: "none" }}
-                margin={{ top: 24, right: 16, left: 4, bottom: 8 }}
+                margin={{
+                  top: 22,
+                  right: chartShowsDualGroupedBars ? 26 : 8,
+                  left: chartShowsDualGroupedBars ? 14 : -4,
+                  bottom: 6,
+                }}
                 {...(chartShowsDualGroupedBars
                   ? {
                       barSize: COMPOSITE_BAR_SIZE_PX,
@@ -4008,10 +4320,10 @@ export function PerformanceModal({
                     barClickHandledRef.current = false;
                     return;
                   }
-                  // 실적 막대 외 영역 클릭 시: 목표 말풍선을 전체 복귀
+                  // 실적 막대 외 영역 클릭 시: 선택 말풍선 해제
                   setFocusedBubbleMonth(null);
                   setFocusedBubbleKind(null);
-                  setBubbleDisplayMode("target");
+                  setBubbleDisplayMode("none");
                 }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="#dbeafe" />
@@ -4023,6 +4335,8 @@ export function PerformanceModal({
                   tick={{ fill: "#334155", fontSize: 11 }}
                 />
                 <YAxis
+                  yAxisId="primary"
+                  width={chartShowsDualGroupedBars ? 52 : 40}
                   domain={[chartYDomain.min, chartYDomain.max]}
                   allowDataOverflow
                   ticks={yAxisTicks}
@@ -4036,19 +4350,40 @@ export function PerformanceModal({
                   tickMargin={6}
                   tick={{ fill: "#64748b", fontSize: 11 }}
                 />
+                {chartShowsDualGroupedBars ? (
+                  <YAxis
+                    yAxisId="secondary"
+                    orientation="right"
+                    width={58}
+                    domain={[chartYDomainSecondary.min, chartYDomainSecondary.max]}
+                    allowDataOverflow
+                    ticks={yAxisTicksSecondary}
+                    tickFormatter={(v) => {
+                      const numeric = typeof v === "number" ? v : Number(v);
+                      if (!Number.isFinite(numeric)) return "";
+                      return chartValueLabel(effectiveIndicatorTypeSecondary, numeric);
+                    }}
+                    axisLine={{ stroke: CHART_COMPOSITE_GOAL2_TARGET_STROKE, strokeWidth: 1 }}
+                    tickLine={{ stroke: CHART_COMPOSITE_GOAL2_TARGET_STROKE }}
+                    tickMargin={6}
+                    tick={{ fill: "#9a3412", fontSize: 11 }}
+                  />
+                ) : null}
                 <Tooltip
                   cursor={false}
                   content={
                     <KpiChartTooltip
                       indicatorType={chartAxisIndicatorType}
                       hoveredCompositeSeries={hoveredCompositeSeries}
+                      disabled={bubbleDisplayMode === "bar"}
                     />
                   }
                 />
-                <ReferenceLine y={0} stroke="#dbeafe" strokeDasharray="3 3" strokeWidth={1} />
+                <ReferenceLine yAxisId="primary" y={0} stroke="#dbeafe" strokeDasharray="3 3" strokeWidth={1} />
                 {chartShowsDualGroupedBars ? (
                   <>
                     <Line
+                      yAxisId="primary"
                       type="linear"
                       dataKey="target"
                       name="목표 1"
@@ -4079,6 +4414,7 @@ export function PerformanceModal({
                       ) : null}
                     </Line>
                     <Line
+                      yAxisId="secondary"
                       type="linear"
                       dataKey="targetSecondary"
                       name="목표 2"
@@ -4109,6 +4445,7 @@ export function PerformanceModal({
                       ) : null}
                     </Line>
                     <Bar
+                      yAxisId="primary"
                       dataKey="barPrimary"
                       name="실적 1"
                       fill="#0284c7"
@@ -4117,15 +4454,29 @@ export function PerformanceModal({
                       activeBar={false}
                       maxBarSize={26}
                       radius={[2, 2, 0, 0]}
+                      shape={(props: unknown) => (
+                        <CompositeActualPerformanceBarShape
+                          {...(props as {
+                            x?: number;
+                            y?: number;
+                            width?: number;
+                            height?: number;
+                            fill?: string;
+                            payload?: ChartDatum;
+                          })}
+                          kind="primary"
+                          focusedMonth={focusedBubbleMonth}
+                          focusedKind={focusedBubbleKind}
+                          displayMode={bubbleDisplayMode}
+                          draftValue={focusedDraftCommentPrimary}
+                          commentsByMonth={rowByMonthPrimary}
+                          monthList={displayMonthList}
+                          showBubble={false}
+                        />
+                      )}
                       style={{ outline: "none" }}
                       isAnimationActive={false}
-                      onClick={(data: unknown) => {
-                        barClickHandledRef.current = true;
-                        const row = data as ChartDatum | undefined;
-                        if (!row) return;
-                        if (row.month === 0) return;
-                        focusBubblesByBarClick(row.month, "primary");
-                      }}
+                      onClick={(data: unknown) => handlePerformanceBarClick(data, "primary")}
                       onMouseEnter={() => setHoveredCompositeSeries("primary")}
                       onMouseLeave={() => setHoveredCompositeSeries(null)}
                     >
@@ -4142,21 +4493,9 @@ export function PerformanceModal({
                           }}
                         />
                       ))}
-                      <LabelList
-                        dataKey="periodLabel"
-                        content={FocusedCommentBubbleLabelFactory({
-                          focusedMonth: focusedBubbleMonth,
-                          focusedKind: focusedBubbleKind,
-                          displayMode: bubbleDisplayMode,
-                          kind: "primary",
-                          chartData,
-                          draftValue: focusedDraftCommentPrimary,
-                          commentsByMonth: rowByMonthPrimary,
-                          monthList: displayMonthList,
-                        })}
-                      />
                     </Bar>
                     <Bar
+                      yAxisId="secondary"
                       dataKey="barSecondary"
                       name="실적 2"
                       fill="#ea580c"
@@ -4165,15 +4504,29 @@ export function PerformanceModal({
                       activeBar={false}
                       maxBarSize={26}
                       radius={[2, 2, 0, 0]}
+                      shape={(props: unknown) => (
+                        <CompositeActualPerformanceBarShape
+                          {...(props as {
+                            x?: number;
+                            y?: number;
+                            width?: number;
+                            height?: number;
+                            fill?: string;
+                            payload?: ChartDatum;
+                          })}
+                          kind="secondary"
+                          focusedMonth={focusedBubbleMonth}
+                          focusedKind={focusedBubbleKind}
+                          displayMode={bubbleDisplayMode}
+                          draftValue={focusedDraftCommentSecondary}
+                          commentsByMonth={rowByMonthSecondary}
+                          monthList={displayMonthList}
+                          showBubble={false}
+                        />
+                      )}
                       style={{ outline: "none" }}
                       isAnimationActive={false}
-                      onClick={(data: unknown) => {
-                        barClickHandledRef.current = true;
-                        const row = data as ChartDatum | undefined;
-                        if (!row) return;
-                        if (row.month === 0) return;
-                        focusBubblesByBarClick(row.month, "secondary");
-                      }}
+                      onClick={(data: unknown) => handlePerformanceBarClick(data, "secondary")}
                       onMouseEnter={() => setHoveredCompositeSeries("secondary")}
                       onMouseLeave={() => setHoveredCompositeSeries(null)}
                     >
@@ -4190,6 +4543,48 @@ export function PerformanceModal({
                           }}
                         />
                       ))}
+                    </Bar>
+                    <Line
+                      yAxisId="primary"
+                      type="linear"
+                      dataKey="barPrimary"
+                      stroke="transparent"
+                      strokeWidth={0}
+                      dot={false}
+                      activeDot={false}
+                      isAnimationActive={false}
+                      connectNulls
+                      legendType="none"
+                      tooltipType="none"
+                    >
+                      <LabelList
+                        dataKey="periodLabel"
+                        content={FocusedCommentBubbleLabelFactory({
+                          focusedMonth: focusedBubbleMonth,
+                          focusedKind: focusedBubbleKind,
+                          displayMode: bubbleDisplayMode,
+                          kind: "primary",
+                          chartData,
+                          draftValue: focusedDraftCommentPrimary,
+                          commentsByMonth: rowByMonthPrimary,
+                          monthList: displayMonthList,
+                          shiftX: COMPOSITE_GOAL1_X_SHIFT,
+                        })}
+                      />
+                    </Line>
+                    <Line
+                      yAxisId="secondary"
+                      type="linear"
+                      dataKey="barSecondary"
+                      stroke="transparent"
+                      strokeWidth={0}
+                      dot={false}
+                      activeDot={false}
+                      isAnimationActive={false}
+                      connectNulls
+                      legendType="none"
+                      tooltipType="none"
+                    >
                       <LabelList
                         dataKey="periodLabel"
                         content={FocusedCommentBubbleLabelFactory({
@@ -4201,13 +4596,73 @@ export function PerformanceModal({
                           draftValue: focusedDraftCommentSecondary,
                           commentsByMonth: rowByMonthSecondary,
                           monthList: displayMonthList,
+                          shiftX: COMPOSITE_GOAL2_X_SHIFT,
                         })}
                       />
-                    </Bar>
+                    </Line>
+                    <Line
+                      yAxisId="primary"
+                      type="linear"
+                      dataKey="target"
+                      stroke="transparent"
+                      strokeWidth={0}
+                      dot={false}
+                      activeDot={false}
+                      isAnimationActive={false}
+                      connectNulls
+                      legendType="none"
+                      tooltipType="none"
+                    >
+                      {hasTargetNoteLabels ? (
+                        <LabelList
+                          dataKey="targetNoteLabel"
+                          content={FocusedTargetBubbleLabelFactory(
+                            KpiTargetBubbleLabelGoal1,
+                            focusedBubbleMonth,
+                            focusedBubbleKind,
+                            bubbleDisplayMode,
+                            "primary",
+                            "targetNoteLabel",
+                            chartData,
+                            COMPOSITE_GOAL1_X_SHIFT
+                          )}
+                        />
+                      ) : null}
+                    </Line>
+                    <Line
+                      yAxisId="secondary"
+                      type="linear"
+                      dataKey="targetSecondary"
+                      stroke="transparent"
+                      strokeWidth={0}
+                      dot={false}
+                      activeDot={false}
+                      isAnimationActive={false}
+                      connectNulls
+                      legendType="none"
+                      tooltipType="none"
+                    >
+                      {hasTargetNoteLabelsSecondary ? (
+                        <LabelList
+                          dataKey="targetNoteSecondaryLabel"
+                          content={FocusedTargetBubbleLabelFactory(
+                            KpiTargetBubbleLabelGoal2,
+                            focusedBubbleMonth,
+                            focusedBubbleKind,
+                            bubbleDisplayMode,
+                            "secondary",
+                            "targetNoteSecondaryLabel",
+                            chartData,
+                            COMPOSITE_GOAL2_X_SHIFT
+                          )}
+                        />
+                      ) : null}
+                    </Line>
                   </>
                 ) : (
                   <>
                     <Bar
+                      yAxisId="primary"
                       dataKey="actual"
                       name="실적"
                       fill={CHART_BAR_LEGEND_FILL}
@@ -4215,13 +4670,7 @@ export function PerformanceModal({
                       maxBarSize={44}
                       shape={ActualPerformanceBarShape}
                       style={{ outline: "none" }}
-                      onClick={(data: unknown) => {
-                        barClickHandledRef.current = true;
-                        const row = data as ChartDatum | undefined;
-                        if (!row) return;
-                        if (row.month === 0) return;
-                        focusBubblesByBarClick(row.month, "primary");
-                      }}
+                      onClick={(data: unknown) => handlePerformanceBarClick(data, "primary")}
                     >
                       {chartData.map((entry) => {
                         const isSel = entry.month === selectedMonth;
@@ -4261,6 +4710,7 @@ export function PerformanceModal({
                       />
                     </Bar>
                     <Line
+                      yAxisId="primary"
                       type="linear"
                       dataKey="target"
                       name="목표"
@@ -4313,9 +4763,9 @@ export function PerformanceModal({
                     key={mo}
                     type="button"
                     onClick={() => {
-                      if (dualChartAndSummaryEligible && chartViewMode === "primary") {
+                      if (linkedSecondaryItem && chartViewMode === "primary") {
                         applyMonthSelection(mo, "primary");
-                      } else if (dualChartAndSummaryEligible && chartViewMode === "secondary") {
+                      } else if (linkedSecondaryItem && chartViewMode === "secondary") {
                         applyMonthSelection(mo, "secondary");
                       } else {
                         applyMonthSelection(mo);
@@ -4339,10 +4789,40 @@ export function PerformanceModal({
               {formatAxisLabel(selectedMonth)} 상세
             </h4>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-              {indicatorUsesComputedAchievement(effectiveIndicatorType) ? (
+              {dualChartAndSummaryEligible &&
+              chartViewMode === "composite" &&
+              linkedSecondaryItem ? (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                  <p className="text-[11px] font-semibold text-slate-500">실적 지표값</p>
+                  <p className="mt-0.5 grid grid-cols-2 items-baseline gap-x-2 text-base font-bold tabular-nums text-slate-900">
+                    <span className="min-w-0 whitespace-nowrap">
+                      목표 1 :{" "}
+                      {(() => {
+                        const v = selectedChartDatum?.barPrimary;
+                        return v !== null &&
+                          v !== undefined &&
+                          Number.isFinite(Number(v))
+                          ? chartValueLabel(effectiveIndicatorTypePrimary, Number(v))
+                          : "—";
+                      })()}
+                    </span>
+                    <span className="min-w-0 whitespace-nowrap text-right">
+                      목표 2 :{" "}
+                      {(() => {
+                        const v = selectedChartDatum?.barSecondary;
+                        return v !== null &&
+                          v !== undefined &&
+                          Number.isFinite(Number(v))
+                          ? chartValueLabel(effectiveIndicatorTypeSecondary, Number(v))
+                          : "—";
+                      })()}
+                    </span>
+                  </p>
+                </div>
+              ) : indicatorUsesComputedAchievement(effectiveIndicatorType) ? (
                 <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                   <p className="text-[11px] font-semibold text-slate-500">
-                    {computedActualLabel(effectiveIndicatorType)}
+                    실적 지표값
                   </p>
                   <p className="mt-0.5 text-base font-bold text-slate-900">
                     {selectedChartDatum &&
@@ -4354,41 +4834,6 @@ export function PerformanceModal({
                           Number(selectedChartDatum.actual)
                         )
                       : "—"}
-                  </p>
-                </div>
-              ) : null}
-              {dualChartAndSummaryEligible &&
-              chartViewMode === "composite" &&
-              linkedSecondaryItem &&
-              effectiveIndicatorTypePrimary === "normal" &&
-              effectiveIndicatorTypeSecondary === "normal" ? (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                  <p className="text-[11px] font-semibold text-slate-500">실적 지표값</p>
-                  <p className="mt-1 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 text-sm font-bold tabular-nums text-slate-900">
-                    <span className="min-w-0 whitespace-nowrap">
-                      목표 1 :{" "}
-                      {(() => {
-                        const r = rowByMonthPrimary.get(selectedMonth);
-                        const v = r?.actual_value;
-                        return v !== null &&
-                          v !== undefined &&
-                          Number.isFinite(Number(v))
-                          ? chartValueLabel("normal", Number(v))
-                          : "—";
-                      })()}
-                    </span>
-                    <span className="min-w-0 whitespace-nowrap">
-                      목표 2 :{" "}
-                      {(() => {
-                        const r = rowByMonthSecondary.get(selectedMonth);
-                        const v = r?.actual_value;
-                        return v !== null &&
-                          v !== undefined &&
-                          Number.isFinite(Number(v))
-                          ? chartValueLabel("normal", Number(v))
-                          : "—";
-                      })()}
-                    </span>
                   </p>
                 </div>
               ) : effectiveIndicatorType === "normal" ? (
@@ -4410,7 +4855,7 @@ export function PerformanceModal({
               selectedChartDatum ? (
                 <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                   <p className="text-[11px] font-semibold text-slate-500">계산 달성률</p>
-                  <p className="mt-1 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 text-sm font-bold tabular-nums text-sky-800">
+                  <p className="mt-0.5 grid grid-cols-2 items-baseline gap-x-2 text-base font-bold tabular-nums text-sky-800">
                     <span className="min-w-0 whitespace-nowrap">
                       목표 1 :{" "}
                       {selectedChartDatum.compositeAchievementGoal1Percent !== null &&
@@ -4419,7 +4864,7 @@ export function PerformanceModal({
                         ? formatKoPercentMax2(selectedChartDatum.compositeAchievementGoal1Percent)
                         : "—"}
                     </span>
-                    <span className="min-w-0 whitespace-nowrap">
+                    <span className="min-w-0 whitespace-nowrap text-right">
                       목표 2 :{" "}
                       {selectedChartDatum.submittedPercentSecondary !== null &&
                       selectedChartDatum.submittedPercentSecondary !== undefined &&
