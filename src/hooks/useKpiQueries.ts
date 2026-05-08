@@ -93,6 +93,16 @@ export type DashboardProfileData = {
   profile: ProfileRow;
 };
 
+function uniqueDepartmentIds(ids: Array<string | null | undefined>): string[] {
+  return Array.from(
+    new Set(
+      ids
+        .map((id) => (typeof id === "string" ? id.trim() : ""))
+        .filter((id) => id.length > 0)
+    )
+  );
+}
+
 /**
  * 세션은 Supabase 클라이언트에서 읽고, role 등은 항상 `profiles` 테이블에서 조회합니다.
  * (JWT 메타데이터가 아닌 DB가 권한의 단일 소스)
@@ -118,6 +128,21 @@ export async function fetchDashboardProfile(): Promise<DashboardProfileData | nu
     throw new Error("profiles.id가 로그인한 사용자와 일치하지 않습니다.");
   }
 
+  const { data: departmentRoleRows, error: departmentRoleError } = await supabase
+    .from("profile_department_roles")
+    .select("dept_id")
+    .eq("profile_id", session.user.id);
+  if (departmentRoleError && departmentRoleError.code !== "42P01") {
+    throw new Error(departmentRoleError.message);
+  }
+
+  const deptIds = uniqueDepartmentIds([
+    typeof row.dept_id === "string" ? row.dept_id : null,
+    ...(departmentRoleRows ?? []).map((r) =>
+      typeof r.dept_id === "string" ? r.dept_id : null
+    ),
+  ]);
+
   const dbRoleRaw =
     row.role === null || row.role === undefined ? "" : String(row.role);
   const normalizedRole =
@@ -138,6 +163,7 @@ export async function fetchDashboardProfile(): Promise<DashboardProfileData | nu
     full_name: typeof row.full_name === "string" ? row.full_name : null,
     role: normalizedRole,
     dept_id: row.dept_id,
+    dept_ids: deptIds,
   };
 
   return { session, profile };
@@ -190,7 +216,7 @@ export function useDepartmentKpiSummary(enabled: boolean) {
 
 export function useDashboardSummaryStats(
   enabled: boolean,
-  filterDeptId?: string | null
+  filterDeptId?: string | string[] | null
 ) {
   return useQuery({
     queryKey: ["supabase", "dashboard-summary-stats", filterDeptId ?? "all"],
@@ -355,7 +381,7 @@ export function usePendingPerformances(
   enabled: boolean,
   options: {
     stage: ApprovalWorkflowStage;
-    filterDeptId?: string | null;
+    filterDeptId?: string | string[] | null;
   }
 ) {
   return useQuery({

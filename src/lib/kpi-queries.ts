@@ -2105,11 +2105,36 @@ function mergeLinkedKpiDetailItems(
   return out;
 }
 
+type DepartmentFilterScope = string | string[] | null | undefined;
+
+function normalizeDepartmentFilterScope(scope: DepartmentFilterScope): string[] | null {
+  if (!scope) return null;
+  const values = Array.isArray(scope) ? scope : [scope];
+  const ids = Array.from(
+    new Set(
+      values
+        .map((id) => (typeof id === "string" ? id.trim() : ""))
+        .filter((id) => id.length > 0)
+    )
+  );
+  return ids.length > 0 ? ids : null;
+}
+
+function departmentFilterIncludes(
+  scope: DepartmentFilterScope,
+  deptId: string | null | undefined
+): boolean {
+  const ids = normalizeDepartmentFilterScope(scope);
+  if (!ids) return true;
+  return typeof deptId === "string" && ids.includes(deptId);
+}
+
 export async function fetchDashboardSummaryStats(
-  filterDeptId?: string | null
+  filterDeptId?: DepartmentFilterScope
 ): Promise<DashboardSummaryStats> {
   const supabase = createBrowserSupabase();
   const hasYear = await getKpiTargetsHasYearColumn();
+  const filterDeptIds = normalizeDepartmentFilterScope(filterDeptId);
 
   let q = supabase.from("kpi_targets").select("*, kpi_items(dept_id)");
   if (hasYear) q = q.eq("year", CURRENT_KPI_YEAR);
@@ -2117,14 +2142,14 @@ export async function fetchDashboardSummaryStats(
   if (error) throw new Error(error.message);
 
   const scoped = (data ?? []).filter((row) => {
-    if (!filterDeptId) return true;
+    if (!filterDeptIds) return true;
     const rec = asRecord(row as unknown as Record<string, unknown>);
     const itemRaw = rec.kpi_items;
     const item = Array.isArray(itemRaw) ? itemRaw[0] : itemRaw;
     const deptId = item && typeof (item as Record<string, unknown>).dept_id === "string"
-      ? (item as Record<string, unknown>).dept_id
+      ? String((item as Record<string, unknown>).dept_id)
       : null;
-    return deptId === filterDeptId;
+    return departmentFilterIncludes(filterDeptIds, deptId);
   });
 
   let pendingPrimaryCount = 0;
@@ -2165,8 +2190,8 @@ export async function fetchDashboardSummaryStats(
   // 상단 "전체 평균 달성률"은 KPI 항목 단위가 아니라
   // "부서별 통합 달성률(카드 값)"들의 평균으로 계산한다.
   const deptSummaries = await fetchDepartmentKpiSummary();
-  const scopedDeptSummaries = (filterDeptId
-    ? deptSummaries.filter((d) => d.id === filterDeptId)
+  const scopedDeptSummaries = (filterDeptIds
+    ? deptSummaries.filter((d) => departmentFilterIncludes(filterDeptIds, d.id))
     : deptSummaries
   ).filter((d) => d.kpiItemCount > 0);
   const averageAchievement =
@@ -2187,7 +2212,7 @@ export async function fetchDashboardSummaryStats(
   let finalCompletedKpiCount = 0;
   {
     let itemQuery = supabase.from("kpi_items").select("id, dept_id, status");
-    if (filterDeptId) itemQuery = itemQuery.eq("dept_id", filterDeptId);
+    if (filterDeptIds) itemQuery = itemQuery.in("dept_id", filterDeptIds);
     const { data: itemRows, error: itemStatusErr } = await itemQuery;
     if (itemStatusErr) throw new Error(itemStatusErr.message);
     finalCompletedKpiCount = (itemRows ?? []).filter((row) => {
@@ -3373,13 +3398,14 @@ function performanceSubmitKindFromMonthlyCell(
 export async function fetchPerformancesPendingStage(options: {
   stage: ApprovalWorkflowStage;
   /** 그룹장·팀장 소속 부서 UUID (있으면 해당 부서만) */
-  filterDeptId?: string;
+  filterDeptId?: DepartmentFilterScope;
 }): Promise<PendingPerformanceListRow[]> {
   const supabase = createBrowserSupabase();
   const hasYear = await getKpiTargetsHasYearColumn();
   const hasTargetHalf = await getKpiTargetsHasHalfTypeColumn();
   const hasH1TargetPctColumn = await getKpiTargetsHasColumn("h1_target_pct");
   const hasH2TargetPctColumn = await getKpiTargetsHasColumn("h2_target_pct");
+  const filterDeptIds = normalizeDepartmentFilterScope(options.filterDeptId);
 
   let tq = supabase
     .from("kpi_targets")
@@ -3437,7 +3463,7 @@ export async function fetchPerformancesPendingStage(options: {
     ]).trim();
     const ownerName = ownerNameRaw.length > 0 ? ownerNameRaw : null;
 
-    if (options.filterDeptId && deptId !== options.filterDeptId) {
+    if (filterDeptIds && !departmentFilterIncludes(filterDeptIds, deptId)) {
       continue;
     }
     if (deptId) deptIds.add(deptId);
@@ -4098,7 +4124,7 @@ export async function fetchMyPerformanceInbox(userId: string): Promise<{
 
 /** @deprecated 2단계 워크플로로 대체 — {@link reviewPerformanceWorkflow} 사용 */
 export async function fetchPendingPerformancesForApproval(options?: {
-  filterDeptId?: string;
+  filterDeptId?: DepartmentFilterScope;
 }): Promise<PendingPerformanceListRow[]> {
   return fetchPerformancesPendingStage({
     stage: "primary",

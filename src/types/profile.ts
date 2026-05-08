@@ -23,4 +23,6 @@ export type ProfileRow = {
   full_name?: string | null;
   /** 본인 소속 부서 (선임/프로 입력권·1차 검토 범위 등에 사용) */
   dept_id?: string | null;
+  /** 주 소속 + 추가 담당 부서 UUID 목록 */
+  dept_ids?: string[];
 };

@@ -173,6 +173,21 @@ export function canAccessApprovalsPage(role: string | null | undefined): boolean
 
 const NO_ASSIGNED_DEPARTMENT_APPROVAL_FILTER = "__no_assigned_department__";
 
+export type DepartmentApprovalScope = string | string[] | null | undefined;
+
+function normalizeDepartmentApprovalScope(
+  scope: DepartmentApprovalScope
+): string[] {
+  const values = Array.isArray(scope) ? scope : [scope];
+  return Array.from(
+    new Set(
+      values
+        .map((id) => (typeof id === "string" ? id.trim() : ""))
+        .filter((id) => id.length > 0)
+    )
+  );
+}
+
 /**
  * 실적 승인 알림 배지 범위.
  * - 관리자·대표: 전체 부서 기준
@@ -181,12 +196,13 @@ const NO_ASSIGNED_DEPARTMENT_APPROVAL_FILTER = "__no_assigned_department__";
  */
 export function approvalNotificationDeptFilter(
   role: string | null | undefined,
-  userDeptId: string | null | undefined
-): string | null {
+  userDeptId: DepartmentApprovalScope
+): string | string[] | null {
   const n = normalizeRole(role);
   if (n === "admin" || n === "ceo") return null;
   if (n === "team_leader" || n === "group_leader" || n === "group_team_leader") {
-    return userDeptId?.trim() ? userDeptId : NO_ASSIGNED_DEPARTMENT_APPROVAL_FILTER;
+    const deptIds = normalizeDepartmentApprovalScope(userDeptId);
+    return deptIds.length > 0 ? deptIds : NO_ASSIGNED_DEPARTMENT_APPROVAL_FILTER;
   }
   return NO_ASSIGNED_DEPARTMENT_APPROVAL_FILTER;
 }

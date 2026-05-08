@@ -231,11 +231,18 @@ export function KpiInboxPage({
     typeof profileData.profile.dept_id === "string"
       ? profileData.profile.dept_id
       : null;
+  const userDeptIds = useMemo(
+    () =>
+      profileQuery.isSuccess && profileData != null
+        ? profileData.profile.dept_ids ?? (userDeptId ? [userDeptId] : [])
+        : [],
+    [profileQuery.isSuccess, profileData, userDeptId]
+  );
   const canSeeApprovals =
     resolvedRole !== undefined && canAccessApprovalsPage(resolvedRole);
   const summaryStatsQuery = useDashboardSummaryStats(
     profileQuery.isSuccess && profileQuery.data !== null && canSeeApprovals,
-    approvalNotificationDeptFilter(resolvedRole, userDeptId)
+    approvalNotificationDeptFilter(resolvedRole, userDeptIds)
   );
   const featureQuery = useAppFeatureAvailability(
     profileQuery.isSuccess && profileQuery.data !== null
@@ -362,9 +369,10 @@ export function KpiInboxPage({
     const p = profileQuery.data;
     if (!p || !perfModalDeptId) return false;
     if (isAdminRole(p.profile.role)) return true;
-    const d =
-      typeof p.profile.dept_id === "string" ? p.profile.dept_id : null;
-    return Boolean(d && d === perfModalDeptId);
+    const deptIds =
+      p.profile.dept_ids ??
+      (typeof p.profile.dept_id === "string" ? [p.profile.dept_id] : []);
+    return deptIds.includes(perfModalDeptId);
   }, [profileQuery.data, perfModalDeptId]);
 
   async function handleSignOut() {

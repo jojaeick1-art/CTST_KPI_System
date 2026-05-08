@@ -285,10 +285,14 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   const profile = profileQuery.data?.profile ?? null;
   const userDeptId =
     profile && typeof profile.dept_id === "string" ? profile.dept_id : null;
+  const userDeptIds = useMemo(
+    () => profile?.dept_ids ?? (userDeptId ? [userDeptId] : []),
+    [profile, userDeptId]
+  );
   const role = profile?.role ?? "";
   const summaryStatsQuery = useDashboardSummaryStats(
     profileQuery.isSuccess && !!profile && canAccessApprovalsPage(role),
-    approvalNotificationDeptFilter(role, userDeptId)
+    approvalNotificationDeptFilter(role, userDeptIds)
   );
   const featureQuery = useAppFeatureAvailability(
     profileQuery.isSuccess && profileQuery.data !== null
@@ -623,6 +627,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   const ensuredProfile = profileQuery.data.profile;
   const ensuredUserDeptId =
     typeof ensuredProfile.dept_id === "string" ? ensuredProfile.dept_id : null;
+  const ensuredUserDeptIds = ensuredProfile.dept_ids ?? (ensuredUserDeptId ? [ensuredUserDeptId] : []);
   const ensuredRole = ensuredProfile.role;
   const pendingApprovalCount =
     approvalNotificationCount(
@@ -644,7 +649,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     normalizedRole === "team_leader" ||
     normalizedRole === "group_team_leader";
   const isOwnDepartment =
-    Boolean(ensuredUserDeptId) && ensuredUserDeptId === departmentId;
+    ensuredUserDeptIds.includes(departmentId);
   const canConfigureIndicator =
     canConfigureKpiIndicatorType(ensuredRole) && (isAdmin || isOwnDepartment);
   /** 소속 부서 KPI는 역할과 무관하게 실적 입력·수정 가능(승인 단계 잠금은 모달 내부 규칙 유지) */

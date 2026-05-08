@@ -128,6 +128,13 @@ export function DashboardClient() {
     typeof profileData.profile.dept_id === "string"
       ? profileData.profile.dept_id
       : null;
+  const userDeptIds = useMemo(
+    () =>
+      profileQuery.isSuccess && profileData != null
+        ? profileData.profile.dept_ids ?? (userDeptId ? [userDeptId] : [])
+        : [],
+    [profileQuery.isSuccess, profileData, userDeptId]
+  );
   const summaryStatsQuery = useDashboardSummaryStats(
     profileQuery.isSuccess && profileQuery.data !== null,
     null
@@ -137,7 +144,7 @@ export function DashboardClient() {
       profileQuery.data !== null &&
       resolvedRole !== undefined &&
       canAccessApprovalsPage(resolvedRole),
-    approvalNotificationDeptFilter(resolvedRole, userDeptId)
+    approvalNotificationDeptFilter(resolvedRole, userDeptIds)
   );
   const featureQuery = useAppFeatureAvailability(
     profileQuery.isSuccess && profileQuery.data !== null
@@ -194,6 +201,7 @@ export function DashboardClient() {
     profileQuery.data,
     resolvedRole,
     userDeptId,
+    userDeptIds,
     pathname,
     router,
     searchParams,
@@ -203,9 +211,9 @@ export function DashboardClient() {
     const raw = deptQuery.data ?? [];
     if (!profileData || resolvedRole === undefined) return [];
     if (canViewAllDepartmentCards(resolvedRole)) return raw;
-    if (userDeptId) return raw.filter((d) => d.id === userDeptId);
+    if (userDeptIds.length > 0) return raw.filter((d) => userDeptIds.includes(d.id));
     return [];
-  }, [deptQuery.data, profileData, resolvedRole, userDeptId]);
+  }, [deptQuery.data, profileData, resolvedRole, userDeptIds]);
 
   async function handleSignOut() {
     const supabase = createBrowserSupabase();
