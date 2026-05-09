@@ -34,8 +34,6 @@ import {
   isWriterPerformanceLockedByStep,
   evidenceFileNameFromStoredValue,
   evidencePathFromStoredValue,
-  resolveEvidencePublicUrl,
-  storageObjectPublicUrl,
   getKpiTargetsHasPerformanceMonthlyColumn,
   computedAchievementPercent,
   qualitativeAchievementPercent,
@@ -55,10 +53,7 @@ import {
   resolveNormalMonthlyTargetMetric,
   type NormalMonthlyTargetContext,
 } from "@/src/lib/kpi-queries";
-import {
-  getKpiWebBridgeTestBucket,
-  notifyWidgetUploadToTest,
-} from "@/src/lib/kpi-web-bridge";
+import { requestEvidenceSignedUrl } from "@/src/lib/evidence-download-requests";
 import {
   KPI_MONTHS,
   activeMonthsForSchedule,
@@ -3353,70 +3348,20 @@ export function PerformanceModal({
       (downloadFileName?.trim() && downloadFileName.trim()) ||
       evidenceFileNameFromStoredValue(storedValue);
 
-    async function tryDownloadWithPreferredName(url: string): Promise<boolean> {
-      try {
-        const res = await fetch(url, { mode: "cors" });
-        if (!res.ok) return false;
-        const blob = await res.blob();
-        const objUrl = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = objUrl;
-        a.download = preferredName;
-        a.rel = "noopener";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        window.setTimeout(() => URL.revokeObjectURL(objUrl), 60_000);
-        return true;
-      } catch {
-        return false;
-      }
-    }
-
+    let downloadWindow: Window | null = null;
     try {
       setDownloadingEvidence(true);
-      const bridge = await notifyWidgetUploadToTest(relPath);
-      if (bridge.ok) {
-        const bucket =
-          bridge.bucket.trim() || getKpiWebBridgeTestBucket();
-        const testUrl = storageObjectPublicUrl(bucket, bridge.path);
-        if (testUrl) {
-          if (await tryDownloadWithPreferredName(testUrl)) return;
-          window.open(testUrl, "_blank", "noopener,noreferrer");
-          return;
-        }
-      } else if (bridge.status === 409) {
-        notify("error", bridge.error);
-        return;
+      notify("info", `${preferredName} 파일을 준비 중입니다.`);
+      downloadWindow = window.open("about:blank", "_blank");
+      if (downloadWindow) downloadWindow.opener = null;
+      const signedUrl = await requestEvidenceSignedUrl(relPath);
+      if (downloadWindow) {
+        downloadWindow.location.href = signedUrl;
+      } else {
+        window.open(signedUrl, "_blank", "noopener,noreferrer");
       }
-
-      const fallbackUrl = resolveEvidencePublicUrl(storedValue);
-      if (fallbackUrl) {
-        if (await tryDownloadWithPreferredName(fallbackUrl)) {
-          if (!bridge.ok) {
-            notify(
-              "info",
-              "웹 브리지를 쓰지 못해 Supabase(kpi-evidence) 원본 링크로 받았습니다."
-            );
-          }
-          return;
-        }
-        window.open(fallbackUrl, "_blank", "noopener,noreferrer");
-        if (!bridge.ok) {
-          notify(
-            "info",
-            "웹 브리지를 쓰지 못해 Supabase(kpi-evidence) 원본 링크로 열었습니다."
-          );
-        }
-        return;
-      }
-
-      throw new Error(
-        bridge.ok
-          ? "test 버킷 공개 URL을 만들 수 없습니다."
-          : bridge.error
-      );
     } catch (e) {
+      downloadWindow?.close();
       notify("error", e instanceof Error ? e.message : "파일 다운로드 중 오류가 발생했습니다.");
     } finally {
       setDownloadingEvidence(false);

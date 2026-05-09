@@ -2,7 +2,7 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { PerformanceModal } from "./department/[id]/performance-modal";
-import { ExternalLink, Loader2, Paperclip } from "lucide-react";
+import { Loader2, Paperclip } from "lucide-react";
 import { CtstAppSidebar } from "@/src/components/ctst-app-sidebar";
 import { createBrowserSupabase } from "@/src/lib/supabase";
 import { CtstUserProfileMenu } from "@/src/components/ctst-user-profile-menu";
@@ -17,6 +17,8 @@ import type {
   DepartmentKpiDetailItem,
   MyPerformanceInboxRow,
 } from "@/src/lib/kpi-queries";
+import { evidencePathFromStoredValue } from "@/src/lib/kpi-queries";
+import { requestEvidenceSignedUrl } from "@/src/lib/evidence-download-requests";
 import { markInboxRowSeen } from "@/src/lib/kpi-inbox-seen";
 import type { MonthKey } from "@/src/lib/kpi-month";
 import {
@@ -71,10 +73,14 @@ function InboxTable({
   rows,
   variant,
   onOpenDetail,
+  onDownloadEvidence,
+  downloadingEvidenceId,
 }: {
   rows: MyPerformanceInboxRow[];
   variant: "rejected" | "withdrawn";
   onOpenDetail: (row: MyPerformanceInboxRow) => void;
+  onDownloadEvidence: (evidenceUrl: string, requestKey: string) => void;
+  downloadingEvidenceId: string | null;
 }) {
   if (!rows.length) {
     return (
@@ -176,16 +182,15 @@ function InboxTable({
                     onKeyDown={(e) => e.stopPropagation()}
                   >
                     {row.evidence_url ? (
-                      <a
-                        href={row.evidence_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                      <button
+                        type="button"
+                        disabled={downloadingEvidenceId === row.id}
+                        onClick={() => onDownloadEvidence(row.evidence_url!, row.id)}
                         className="inline-flex items-center gap-1.5 rounded-lg border border-sky-200 bg-sky-50/50 px-2.5 py-1.5 text-xs font-medium text-sky-800 transition hover:bg-sky-100"
                       >
                         <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                        열기
-                        <ExternalLink className="h-3 w-3 shrink-0 opacity-70" />
-                      </a>
+                        {downloadingEvidenceId === row.id ? "준비 중" : "열기"}
+                      </button>
                     ) : (
                       <span className="text-xs text-slate-400">없음</span>
                     )}
@@ -280,6 +285,11 @@ export function KpiInboxPage({
     message: "",
     tone: "info",
   });
+  const [downloadingEvidenceId, setDownloadingEvidenceId] = useState<string | null>(null);
+
+  const notify = useCallback((tone: ToastState["tone"], message: string) => {
+    setToast({ open: true, tone, message });
+  }, []);
 
   useEffect(() => {
     if (!toast.open) return;
@@ -363,6 +373,38 @@ export function KpiInboxPage({
       });
     },
     [profileQuery.data?.session.user.id]
+  );
+
+  const handleDownloadEvidence = useCallback(
+    async (evidenceUrl: string, requestKey: string) => {
+      const storagePath = evidencePathFromStoredValue(evidenceUrl);
+      if (!storagePath) {
+        notify("error", "다운로드용 저장 경로를 확인할 수 없습니다.");
+        return;
+      }
+      let downloadWindow: Window | null = null;
+      try {
+        setDownloadingEvidenceId(requestKey);
+        notify("info", "첨부 파일을 준비 중입니다.");
+        downloadWindow = window.open("about:blank", "_blank");
+        if (downloadWindow) downloadWindow.opener = null;
+        const signedUrl = await requestEvidenceSignedUrl(storagePath);
+        if (downloadWindow) {
+          downloadWindow.location.href = signedUrl;
+        } else {
+          window.open(signedUrl, "_blank", "noopener,noreferrer");
+        }
+      } catch (e) {
+        downloadWindow?.close();
+        notify(
+          "error",
+          e instanceof Error ? e.message : "파일 다운로드 중 오류가 발생했습니다."
+        );
+      } finally {
+        setDownloadingEvidenceId(null);
+      }
+    },
+    [notify]
   );
 
   const canEditPerformanceModal = useMemo(() => {
@@ -497,6 +539,8 @@ export function KpiInboxPage({
                     rows={rows}
                     variant={variant}
                     onOpenDetail={handleOpenPerfFromInboxRow}
+                    onDownloadEvidence={handleDownloadEvidence}
+                    downloadingEvidenceId={downloadingEvidenceId}
                   />
                 )}
               </div>

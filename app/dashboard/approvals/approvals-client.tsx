@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { ExternalLink, Loader2, Paperclip, X } from "lucide-react";
+import { Loader2, Paperclip, X } from "lucide-react";
 import { CtstAppSidebar } from "@/src/components/ctst-app-sidebar";
 import { createBrowserSupabase } from "@/src/lib/supabase";
 import { CtstUserProfileMenu } from "@/src/components/ctst-user-profile-menu";
@@ -13,6 +13,8 @@ import type {
   MySubmittedPerformanceProgressRow,
   PendingPerformanceListRow,
 } from "@/src/lib/kpi-queries";
+import { evidencePathFromStoredValue } from "@/src/lib/kpi-queries";
+import { requestEvidenceSignedUrl } from "@/src/lib/evidence-download-requests";
 import type { MonthKey } from "@/src/lib/kpi-month";
 import {
   useAppFeatureAvailability,
@@ -85,9 +87,13 @@ function progressBadgeClass(label: string): string {
 function MySubmittedProgressTable({
   rows,
   onOpenRow,
+  onDownloadEvidence,
+  downloadingEvidenceId,
 }: {
   rows: MySubmittedPerformanceProgressRow[];
   onOpenRow: (row: MySubmittedPerformanceProgressRow) => void;
+  onDownloadEvidence: (evidenceUrl: string, requestKey: string) => void;
+  downloadingEvidenceId: string | null;
 }) {
   function rowOpenable(r: MySubmittedPerformanceProgressRow): boolean {
     return Boolean(r.deptId?.trim() && r.kpiItemId?.trim());
@@ -194,16 +200,15 @@ function MySubmittedProgressTable({
                     onKeyDown={(e) => e.stopPropagation()}
                   >
                     {row.evidence_url ? (
-                      <a
-                        href={row.evidence_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                      <button
+                        type="button"
+                        disabled={downloadingEvidenceId === row.id}
+                        onClick={() => onDownloadEvidence(row.evidence_url!, row.id)}
                         className="inline-flex items-center gap-1.5 rounded-lg border border-sky-200 bg-sky-50/50 px-2.5 py-1.5 text-xs font-medium text-sky-800 transition hover:bg-sky-100"
                       >
                         <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                        열기
-                        <ExternalLink className="h-3 w-3 shrink-0 opacity-70" />
-                      </a>
+                        {downloadingEvidenceId === row.id ? "준비 중" : "열기"}
+                      </button>
                     ) : (
                       <span className="text-xs text-slate-400">없음</span>
                     )}
@@ -230,19 +235,23 @@ function PendingTable({
   subtitle,
   rows,
   busyId,
+  downloadingEvidenceId,
   workflowPending,
   variant,
   onApprove,
   onRejectClick,
+  onDownloadEvidence,
 }: {
   title: string;
   subtitle: string;
   rows: PendingPerformanceListRow[];
   busyId: string | null;
+  downloadingEvidenceId: string | null;
   workflowPending: boolean;
   variant: "primary" | "final";
   onApprove: (row: PendingPerformanceListRow) => void;
   onRejectClick: (row: PendingPerformanceListRow) => void;
+  onDownloadEvidence: (evidenceUrl: string, requestKey: string) => void;
 }) {
   return (
     <section className="mb-10">
@@ -335,16 +344,15 @@ function PendingTable({
                       </td>
                       <td className="max-w-0 px-4 py-3">
                         {row.evidence_url ? (
-                          <a
-                            href={row.evidence_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                          <button
+                            type="button"
+                            disabled={downloadingEvidenceId === row.id}
+                            onClick={() => onDownloadEvidence(row.evidence_url!, row.id)}
                             className="inline-flex items-center gap-1.5 rounded-lg border border-sky-200 bg-sky-50/50 px-2.5 py-1.5 text-xs font-medium text-sky-800 transition hover:bg-sky-100"
                           >
                             <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                            열기
-                            <ExternalLink className="h-3 w-3 shrink-0 opacity-70" />
-                          </a>
+                            {downloadingEvidenceId === row.id ? "준비 중" : "열기"}
+                          </button>
                         ) : (
                           <span className="text-xs text-slate-400">없음</span>
                         )}
@@ -464,6 +472,7 @@ export function ApprovalsClient() {
     message: "",
     tone: "info",
   });
+  const [downloadingEvidenceId, setDownloadingEvidenceId] = useState<string | null>(null);
 
   type PerfOpenReq = {
     deptId: string;
@@ -494,6 +503,38 @@ export function ApprovalsClient() {
     (tone: ToastState["tone"], message: string) =>
       setToast({ open: true, tone, message }),
     []
+  );
+
+  const handleDownloadEvidence = useCallback(
+    async (evidenceUrl: string, requestKey: string) => {
+      const storagePath = evidencePathFromStoredValue(evidenceUrl);
+      if (!storagePath) {
+        notify("error", "다운로드용 저장 경로를 확인할 수 없습니다.");
+        return;
+      }
+      let downloadWindow: Window | null = null;
+      try {
+        setDownloadingEvidenceId(requestKey);
+        notify("info", "첨부 파일을 준비 중입니다.");
+        downloadWindow = window.open("about:blank", "_blank");
+        if (downloadWindow) downloadWindow.opener = null;
+        const signedUrl = await requestEvidenceSignedUrl(storagePath);
+        if (downloadWindow) {
+          downloadWindow.location.href = signedUrl;
+        } else {
+          window.open(signedUrl, "_blank", "noopener,noreferrer");
+        }
+      } catch (e) {
+        downloadWindow?.close();
+        notify(
+          "error",
+          e instanceof Error ? e.message : "파일 다운로드 중 오류가 발생했습니다."
+        );
+      } finally {
+        setDownloadingEvidenceId(null);
+      }
+    },
+    [notify]
   );
 
   const handleOpenPerfFromProgressRow = useCallback(
@@ -760,6 +801,8 @@ export function ApprovalsClient() {
                 <MySubmittedProgressTable
                   rows={myProgressQuery.data ?? []}
                   onOpenRow={handleOpenPerfFromProgressRow}
+                  onDownloadEvidence={handleDownloadEvidence}
+                  downloadingEvidenceId={downloadingEvidenceId}
                 />
               )}
             </section>
@@ -791,6 +834,7 @@ export function ApprovalsClient() {
                     subtitle="실적이 제출되면 여기에 표시됩니다. 승인 시 팀장에게 최종 승인 요청이 전달됩니다."
                     rows={primaryQuery.data ?? []}
                     busyId={actingId}
+                    downloadingEvidenceId={downloadingEvidenceId}
                     workflowPending={workflowMut.isPending}
                     variant="primary"
                     onApprove={(row) => void handleApprovePrimary(row)}
@@ -798,6 +842,7 @@ export function ApprovalsClient() {
                       setRejectForId(row.id);
                       setRejectReason("");
                     }}
+                    onDownloadEvidence={handleDownloadEvidence}
                   />
                 ) : null}
                 {isTeamLeader ? (
@@ -806,6 +851,7 @@ export function ApprovalsClient() {
                     subtitle="팀장 최종 승인이 필요한 실적이 표시됩니다. 승인 시 대시보드 달성률에 반영됩니다."
                     rows={finalQuery.data ?? []}
                     busyId={actingId}
+                    downloadingEvidenceId={downloadingEvidenceId}
                     workflowPending={workflowMut.isPending}
                     variant="final"
                     onApprove={(row) => void handleApproveFinal(row)}
@@ -813,6 +859,7 @@ export function ApprovalsClient() {
                       setRejectForId(row.id);
                       setRejectReason("");
                     }}
+                    onDownloadEvidence={handleDownloadEvidence}
                   />
                 ) : null}
               </>
