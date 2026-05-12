@@ -119,6 +119,17 @@ export function canBulkUploadKpiExcel(role: string | null | undefined): boolean 
   return n === "admin" || n === "group_leader" || n === "group_team_leader";
 }
 
+/** CTST 2Campus 공사 일정 주간 실적 등록/수정 — 그룹장·팀장·관리자 */
+export function canEditCampus2Schedule(role: string | null | undefined): boolean {
+  const n = normalizeRole(role);
+  return (
+    n === "admin" ||
+    n === "group_leader" ||
+    n === "team_leader" ||
+    n === "group_team_leader"
+  );
+}
+
 /**
  * KPI 항목 실적 방식(% / PPM / 수량(k) / 건수) 드롭다운 편집
  * — 관리자·그룹장·팀장 (소속 부서 화면은 호출부에서 제한, RLS는 Supabase).

@@ -3,8 +3,9 @@
 import { useEffect, useMemo } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Loader2, TrendingUp } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { CtstAppSidebar } from "@/src/components/ctst-app-sidebar";
+import { Campus2ScheduleSection } from "@/src/components/campus2-schedule-section";
 import { createBrowserSupabase } from "@/src/lib/supabase";
 import type { DepartmentKpiSummary } from "@/src/types/kpi";
 import {
@@ -12,6 +13,7 @@ import {
   approvalNotificationDeptFilter,
   canAccessApprovalsPage,
   canViewAllDepartmentCards,
+  canEditCampus2Schedule,
   DASHBOARD_MAIN_QUERY,
   DASHBOARD_MAIN_QUERY_VALUE,
   DASHBOARD_SHOW_MAIN_SESSION_KEY,
@@ -25,6 +27,7 @@ import {
   useDashboardSummaryStats,
   useDepartmentKpiSummary,
 } from "@/src/hooks/useKpiQueries";
+import { useCampus2ScheduleBundle } from "@/src/hooks/useCampus2Schedule";
 import { CURRENT_KPI_YEAR } from "@/src/lib/kpi-queries";
 import { CtstUserProfileMenu } from "@/src/components/ctst-user-profile-menu";
 
@@ -147,6 +150,9 @@ export function DashboardClient() {
     approvalNotificationDeptFilter(resolvedRole, userDeptIds)
   );
   const featureQuery = useAppFeatureAvailability(
+    profileQuery.isSuccess && profileQuery.data !== null
+  );
+  const campus2ScheduleQuery = useCampus2ScheduleBundle(
     profileQuery.isSuccess && profileQuery.data !== null
   );
   const pendingApprovalCount =
@@ -333,12 +339,15 @@ export function DashboardClient() {
         </header>
 
         <div className="px-4 py-6 sm:p-8">
-          <div className="mb-6 flex flex-wrap items-center gap-2 text-slate-700">
-            <TrendingUp className="h-5 w-5 text-sky-600" aria-hidden />
-            <h2 className="text-base font-semibold">
-              부서별 KPI 종합점수
-            </h2>
-          </div>
+          <Campus2ScheduleSection
+            year={campus2ScheduleQuery.data?.year ?? CURRENT_KPI_YEAR}
+            tasks={campus2ScheduleQuery.data?.tasks ?? []}
+            weekly={campus2ScheduleQuery.data?.weekly ?? []}
+            weekColumns={campus2ScheduleQuery.data?.weekColumns ?? []}
+            overallAchievement={campus2ScheduleQuery.data?.overallAchievement ?? 0}
+            canEdit={canEditCampus2Schedule(role)}
+            isLoading={campus2ScheduleQuery.isPending}
+          />
 
           <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {summaryStatsQuery.isPending
