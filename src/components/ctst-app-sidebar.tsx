@@ -14,12 +14,18 @@ import { CTST_PUBLIC_SITE_URL } from "@/src/lib/ctst-public-site";
 import {
   useAppFeatureAvailability,
   useDashboardProfile,
+  useKpiVocRequests,
   useMyPerformanceInbox,
 } from "@/src/hooks/useKpiQueries";
 import {
   KPI_INBOX_SEEN_EVENT,
   countUnreadInboxRows,
 } from "@/src/lib/kpi-inbox-seen";
+import {
+  USER_NOTIFICATION_SEEN_EVENT,
+  countAdminUnseenPendingVoc,
+  loadSeenNotificationIds,
+} from "@/src/lib/user-notification-inbox";
 import {
   canAccessApprovalsPage,
   canAccessSystemSettings,
@@ -277,6 +283,27 @@ export function CtstAppSidebar({
     );
   }, [inboxQuery.data?.withdrawn, uid, inboxSeenTick]);
 
+  const adminVocEnabled =
+    isAdminRole(profileQuery.data?.profile.role) &&
+    access.voc &&
+    typeof uid === "string" &&
+    uid.length > 0;
+  const vocQuery = useKpiVocRequests(adminVocEnabled);
+
+  const [notificationSeenTick, setNotificationSeenTick] = useState(0);
+  useEffect(() => {
+    const onSeen = () => setNotificationSeenTick((t) => t + 1);
+    window.addEventListener(USER_NOTIFICATION_SEEN_EVENT, onSeen);
+    return () => window.removeEventListener(USER_NOTIFICATION_SEEN_EVENT, onSeen);
+  }, []);
+
+  const adminVocUnread = useMemo(() => {
+    void notificationSeenTick;
+    if (!adminVocEnabled || !uid) return 0;
+    const seen = loadSeenNotificationIds();
+    return countAdminUnseenPendingVoc(vocQuery.data ?? [], uid, seen);
+  }, [adminVocEnabled, uid, vocQuery.data, notificationSeenTick]);
+
   const activeSlot = resolveActiveNavSlot(pathname, role, access);
 
   const linkRefs = useRef<Partial<Record<NavSlot, HTMLAnchorElement | null>>>(
@@ -415,6 +442,11 @@ export function CtstAppSidebar({
                 className={classForLink(vocActive)}
               >
                 VOC
+                {adminVocUnread > 0 ? (
+                  <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                    {adminVocUnread}
+                  </span>
+                ) : null}
               </Link>
             ) : null}
           </NavSection>

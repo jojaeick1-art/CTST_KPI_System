@@ -6,12 +6,15 @@ import {
   countUnseenNotifications,
   loadSeenNotificationIds,
   mergeSeenNotificationIds,
+  USER_NOTIFICATION_SEEN_EVENT,
   type UserNotificationItem,
 } from "@/src/lib/user-notification-inbox";
 import {
+  useDashboardProfile,
   useKpiVocRequests,
   useMySubmittedPerformanceProgress,
 } from "@/src/hooks/useKpiQueries";
+import { isAdminRole } from "@/src/lib/rbac";
 import { Bell, ChevronDown, KeyRound, Loader2, Shield, User } from "lucide-react";
 import Link from "next/link";
 import {
@@ -44,6 +47,9 @@ export function CtstUserProfileMenu({
   const [seenVersion, setSeenVersion] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
 
+  const profileQuery = useDashboardProfile();
+  const isAdmin = isAdminRole(profileQuery.data?.profile.role);
+
   const progressQuery = useMySubmittedPerformanceProgress(
     notificationsEnabled && !!userId
   );
@@ -57,10 +63,12 @@ export function CtstUserProfileMenu({
       performanceRows: rows,
       vocRequests: voc,
       userId,
+      isAdmin,
     });
   }, [
     notificationsEnabled,
     userId,
+    isAdmin,
     progressQuery.data,
     vocQuery.data,
   ]);
@@ -104,6 +112,12 @@ export function CtstUserProfileMenu({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [menuOpen]);
+
+  useEffect(() => {
+    const onSeen = () => setSeenVersion((v) => v + 1);
+    window.addEventListener(USER_NOTIFICATION_SEEN_EVENT, onSeen);
+    return () => window.removeEventListener(USER_NOTIFICATION_SEEN_EVENT, onSeen);
+  }, []);
 
   const loading =
     notificationsEnabled &&

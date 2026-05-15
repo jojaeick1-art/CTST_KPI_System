@@ -119,7 +119,7 @@ export function canBulkUploadKpiExcel(role: string | null | undefined): boolean 
   return n === "admin" || n === "group_leader" || n === "group_team_leader";
 }
 
-/** CTST 2Campus 공사 일정 주간 실적 등록/수정 — 그룹장·팀장·관리자 */
+/** CTST 2Campus 공사 일정 주간 실적 등록·수정·삭제 — 그룹장·팀장·관리자 */
 export function canEditCampus2Schedule(role: string | null | undefined): boolean {
   const n = normalizeRole(role);
   return (

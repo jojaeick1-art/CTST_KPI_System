@@ -150,7 +150,7 @@ async function ensureCampus2ScheduleEditor(): Promise<void> {
       ? (profile as { role: string }).role
       : null;
   if (!canEditCampus2Schedule(role)) {
-    throw new Error("공사 일정 실적 등록/수정은 그룹장·팀장·관리자만 할 수 있습니다.");
+    throw new Error("공사 일정 실적 등록·수정·삭제는 그룹장·팀장·관리자만 할 수 있습니다.");
   }
 }
 
@@ -506,6 +506,74 @@ export async function upsertCampus2OverallAchievement(input: {
   );
   if (error) {
     throw new Error(`2Campus 종합 달성률 저장 실패: ${error.message}`);
+  }
+}
+
+function evidenceStoragePathsFromDbRow(row: Record<string, unknown>): string[] {
+  const urls = normalizeStringArray(row.evidence_urls);
+  const single =
+    typeof row.evidence_url === "string" && row.evidence_url.trim()
+      ? row.evidence_url.trim()
+      : null;
+  const combined =
+    urls.length > 0
+      ? single && !urls.includes(single)
+        ? [single, ...urls]
+        : urls
+      : single
+        ? [single]
+        : [];
+  const paths = new Set<string>();
+  for (const raw of combined) {
+    const p = evidencePathFromStoredValue(raw);
+    if (p) paths.add(p);
+  }
+  return [...paths];
+}
+
+export async function deleteCampus2WeeklyPerformance(input: {
+  taskId: string;
+  year: number;
+  weekKey: Campus2WeekKey;
+}): Promise<void> {
+  await ensureCampus2ScheduleEditor();
+  const supabase = createBrowserSupabase();
+
+  const { data: row, error: selectError } = await supabase
+    .from("campus2_schedule_weekly")
+    .select("id, evidence_url, evidence_urls")
+    .eq("task_id", input.taskId)
+    .eq("year", input.year)
+    .eq("week_key", input.weekKey)
+    .maybeSingle();
+
+  if (selectError) {
+    throw new Error(`2Campus 주간 실적 조회 실패: ${selectError.message}`);
+  }
+  if (!row) {
+    return;
+  }
+
+  const storagePaths = evidenceStoragePathsFromDbRow(row as Record<string, unknown>);
+
+  const { error } = await supabase
+    .from("campus2_schedule_weekly")
+    .delete()
+    .eq("task_id", input.taskId)
+    .eq("year", input.year)
+    .eq("week_key", input.weekKey);
+
+  if (error) {
+    throw new Error(`2Campus 주간 실적 삭제 실패: ${error.message}`);
+  }
+
+  if (storagePaths.length > 0) {
+    const { error: storageError } = await supabase.storage
+      .from("kpi-evidence")
+      .remove(storagePaths);
+    if (storageError && process.env.NODE_ENV === "development") {
+      console.warn("[campus2-schedule] 증빙 Storage 삭제 실패(무시):", storageError.message);
+    }
   }
 }
 

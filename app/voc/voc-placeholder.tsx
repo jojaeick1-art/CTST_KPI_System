@@ -25,6 +25,7 @@ import type {
 } from "@/src/lib/kpi-queries";
 
 import { isAdminRole, roleLabelKo } from "@/src/lib/rbac";
+import { markAdminPendingVocNotificationsSeen } from "@/src/lib/user-notification-inbox";
 
 const VOC_VIEW_SCOPE_STORAGE_KEY = "ctst-kpi-voc-view-scope";
 
@@ -763,6 +764,11 @@ export function VocPlaceholderContent() {
   const profileId = profileQ.data?.profile?.id ?? null;
 
   const allVocs = vocQuery.data ?? [];
+
+  useEffect(() => {
+    if (!isAdmin || !profileId || vocQuery.isPending) return;
+    markAdminPendingVocNotificationsSeen(allVocs, profileId);
+  }, [isAdmin, profileId, allVocs, vocQuery.isPending]);
 
   const displayedVocs = useMemo(() => {
     if (!profileId || vocViewScope === "all") return allVocs;

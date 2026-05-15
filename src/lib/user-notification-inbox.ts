@@ -1,9 +1,13 @@
 import type {
   KpiVocRequest,
+  KpiVocStatus,
   MySubmittedPerformanceProgressRow,
 } from "@/src/lib/kpi-queries";
 
 const STORAGE_KEY = "ctst-kpi-seen-notifications-v1";
+
+/** 프로필·사이드바 배지 갱신용 */
+export const USER_NOTIFICATION_SEEN_EVENT = "ctst-user-notification-seen";
 
 export type UserNotificationItem = {
   id: string;
@@ -45,6 +49,53 @@ export function mergeSeenNotificationIds(...newIds: string[]) {
   const next = loadSeenNotificationIds();
   for (const id of newIds) next.add(id);
   saveSeenNotificationIds(next);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(USER_NOTIFICATION_SEEN_EVENT));
+  }
+}
+
+/** 접수 직후·관리 전 (`submitted` / 레거시 `received`) */
+export function isVocPendingReceiptStatus(status: KpiVocStatus): boolean {
+  return status === "submitted" || status === "received";
+}
+
+function adminVocPendingNotificationId(request: KpiVocRequest): string {
+  return `voc-admin-pending:${request.id}`;
+}
+
+/** 관리자 — 타인이 접수한 대기 VOC 알림 id */
+export function adminPendingVocNotificationIds(
+  vocRequests: readonly KpiVocRequest[],
+  adminUserId: string
+): string[] {
+  const uid = adminUserId.trim();
+  if (!uid) return [];
+  return vocRequests
+    .filter(
+      (v) =>
+        isVocPendingReceiptStatus(v.status) &&
+        v.createdBy.trim() !== uid
+    )
+    .map((v) => adminVocPendingNotificationId(v));
+}
+
+export function markAdminPendingVocNotificationsSeen(
+  vocRequests: readonly KpiVocRequest[],
+  adminUserId: string
+): void {
+  const ids = adminPendingVocNotificationIds(vocRequests, adminUserId);
+  if (ids.length === 0) return;
+  mergeSeenNotificationIds(...ids);
+}
+
+export function countAdminUnseenPendingVoc(
+  vocRequests: readonly KpiVocRequest[],
+  adminUserId: string,
+  seen: Set<string>
+): number {
+  return adminPendingVocNotificationIds(vocRequests, adminUserId).filter(
+    (id) => !seen.has(id)
+  ).length;
 }
 
 const PERF_NOTIFY_RANKS = new Set([0, 1, 2, 3, 6]);
@@ -120,6 +171,8 @@ export function buildUserNotifications(args: {
   performanceRows: MySubmittedPerformanceProgressRow[];
   vocRequests: KpiVocRequest[];
   userId: string;
+  /** 관리자에게 타인의 신규 VOC 접수 알림 */
+  isAdmin?: boolean;
 }): UserNotificationItem[] {
   const uid = args.userId.trim();
   const perfItems: UserNotificationItem[] = [];
@@ -142,11 +195,33 @@ export function buildUserNotifications(args: {
     });
   }
 
-  const vocItems: UserNotificationItem[] = [];
+  const adminVocItems: UserNotificationItem[] = [];
+  if (args.isAdmin) {
+    for (const v of args.vocRequests) {
+      if (!isVocPendingReceiptStatus(v.status)) continue;
+      if (v.createdBy.trim() === uid) continue;
+      const t = v.title.trim() || "제목 없음";
+      const dept = v.deptName?.trim() || "—";
+      const name =
+        v.createdByName?.trim() && v.createdByName.trim() !== "-"
+          ? v.createdByName.trim()
+          : "—";
+      adminVocItems.push({
+        id: adminVocPendingNotificationId(v),
+        kind: "voc",
+        title: "새 VOC 접수",
+        subtitle: `「${t}」 · ${dept} · ${name}`,
+        href: "/voc",
+        sortKey: vocSortKey(v) - 1e12,
+      });
+    }
+  }
+
+  const ownVocItems: UserNotificationItem[] = [];
   for (const v of args.vocRequests) {
     if (v.createdBy !== uid) continue;
     const { title, subtitle } = vocLabel(v);
-    vocItems.push({
+    ownVocItems.push({
       id: vocNotificationId(v),
       kind: "voc",
       title,
@@ -156,10 +231,11 @@ export function buildUserNotifications(args: {
     });
   }
 
-  /** 반려·회수·승인·대기 → VOC(최신순) 순으로 보기 좋게 */
+  /** 반려·회수·승인·대기 → 관리자 VOC(최신) → 본인 VOC(최신) */
   const perfSorted = [...perfItems].sort((a, b) => a.sortKey - b.sortKey);
-  const vocSorted = [...vocItems].sort((a, b) => a.sortKey - b.sortKey);
-  return [...perfSorted, ...vocSorted];
+  const adminVocSorted = [...adminVocItems].sort((a, b) => a.sortKey - b.sortKey);
+  const ownVocSorted = [...ownVocItems].sort((a, b) => a.sortKey - b.sortKey);
+  return [...perfSorted, ...adminVocSorted, ...ownVocSorted];
 }
 
 export function countUnseenNotifications(

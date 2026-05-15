@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  deleteCampus2WeeklyPerformance,
   fetchCampus2ScheduleBundle,
   upsertCampus2OverallAchievement,
   upsertCampus2WeeklyPerformance,
@@ -21,6 +22,16 @@ export function useUpsertCampus2WeeklyPerformance(year: number = CURRENT_KPI_YEA
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: upsertCampus2WeeklyPerformance,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["campus2-schedule", year] });
+    },
+  });
+}
+
+export function useDeleteCampus2WeeklyPerformance(year: number = CURRENT_KPI_YEAR) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: deleteCampus2WeeklyPerformance,
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["campus2-schedule", year] });
     },

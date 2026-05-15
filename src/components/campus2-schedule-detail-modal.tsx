@@ -16,7 +16,10 @@ import {
 } from "@/src/lib/campus2-schedule";
 import { requestEvidenceSignedUrl } from "@/src/lib/evidence-download-requests";
 import { Campus2SchedulePerformanceModal } from "@/src/components/campus2-schedule-performance-modal";
-import { useUpsertCampus2OverallAchievement } from "@/src/hooks/useCampus2Schedule";
+import {
+  useDeleteCampus2WeeklyPerformance,
+  useUpsertCampus2OverallAchievement,
+} from "@/src/hooks/useCampus2Schedule";
 
 type Props = {
   isOpen: boolean;
@@ -52,8 +55,13 @@ function groupWeekColumns(columns: Campus2WeekColumn[]): MonthGroup[] {
   return groups;
 }
 
-function hasWeeklyEntry(taskId: string, weekly: Campus2WeeklyPerformance[]): boolean {
-  return weekly.some((row) => row.taskId === taskId);
+function hasWeeklyEntryForWeek(
+  taskId: string,
+  weekKey: string,
+  weekly: Campus2WeeklyPerformance[]
+): boolean {
+  if (!weekKey) return false;
+  return weekly.some((row) => row.taskId === taskId && row.weekKey === weekKey);
 }
 
 export function Campus2ScheduleDetailModal({
@@ -71,7 +79,24 @@ export function Campus2ScheduleDetailModal({
   const [overallDraft, setOverallDraft] = useState("");
   const [downloadingEvidence, setDownloadingEvidence] = useState(false);
   const overallMutation = useUpsertCampus2OverallAchievement(year);
+  const deleteWeeklyMutation = useDeleteCampus2WeeklyPerformance(year);
   const monthGroups = useMemo(() => groupWeekColumns(weekColumns), [weekColumns]);
+
+  /** 대시보드 부서 카드와 동일한 진행률 표시용 (0~100) */
+  const overallBarPercent = useMemo(() => {
+    if (canEdit) {
+      const trimmed = overallDraft.trim();
+      if (trimmed === "") {
+        return Math.max(0, Math.min(100, Number(overallAchievement.toFixed(1))));
+      }
+      const n = Number(trimmed);
+      if (!Number.isFinite(n)) {
+        return Math.max(0, Math.min(100, Number(overallAchievement.toFixed(1))));
+      }
+      return Math.max(0, Math.min(100, n));
+    }
+    return Math.max(0, Math.min(100, Number(overallAchievement.toFixed(1))));
+  }, [canEdit, overallDraft, overallAchievement]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -106,6 +131,29 @@ export function Campus2ScheduleDetailModal({
     const rateNum = Number(overallDraft);
     if (!Number.isFinite(rateNum) || rateNum < 0 || rateNum > 100) return;
     await overallMutation.mutateAsync({ year, achievementRate: rateNum });
+  }
+
+  async function handleDeleteRowWeekly(taskId: string) {
+    if (!canEdit || !selectedWeekKey) return;
+    const weekLabel = campus2WeekLabelFromKey(selectedWeekKey, weekColumns);
+    if (
+      !window.confirm(
+        `「${weekLabel}」 주간 실적을 삭제할까요?\n선택한 공사 일정·주차의 증빙·특이사항이 제거됩니다.`
+      )
+    ) {
+      return;
+    }
+    try {
+      await deleteWeeklyMutation.mutateAsync({
+        taskId,
+        year,
+        weekKey: selectedWeekKey,
+      });
+    } catch (error) {
+      window.alert(
+        error instanceof Error ? error.message : "삭제 중 오류가 발생했습니다."
+      );
+    }
   }
 
   async function handleDownloadEvidence(
@@ -150,19 +198,41 @@ export function Campus2ScheduleDetailModal({
               </h2>
               <p className="mt-1 text-sm text-sky-50/90">
                 {canEdit
-                  ? "주요 공사 일정과 주간 실적을 등록·수정할 수 있습니다."
+                  ? "주요 공사 일정과 주간 실적을 등록·수정·삭제할 수 있습니다."
                   : "주요 공사 일정과 주간 실적을 조회할 수 있습니다."}
               </p>
+              <div className="mt-2.5 flex max-w-xl items-center gap-2 sm:max-w-2xl">
+                <div
+                  className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-white shadow-sm ring-1 ring-sky-900/15"
+                  role="progressbar"
+                  aria-valuenow={overallBarPercent}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label="종합 달성률"
+                >
+                  <div
+                    className={`h-full rounded-full bg-gradient-to-r from-sky-400 to-sky-600 transition-all duration-500 ${
+                      overallBarPercent > 0 ? "" : "opacity-40"
+                    }`}
+                    style={{
+                      width: `${Math.max(0, Math.min(100, overallBarPercent))}%`,
+                    }}
+                  />
+                </div>
+                <span className="shrink-0 text-xs font-bold tabular-nums text-white sm:text-sm">
+                  {Number(overallBarPercent.toFixed(1))}%
+                </span>
+              </div>
               {!canEdit ? (
                 <p className="mt-2 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-xs text-sky-50/95">
-                  실적 등록·수정과 종합 달성률 입력은 그룹장·팀장·관리자만 할 수 있습니다.
+                  실적 등록·수정·삭제와 종합 달성률 입력은 그룹장·팀장·관리자만 할 수 있습니다.
                 </p>
               ) : null}
             </div>
-            <div className="flex items-start gap-3">
-              <div className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-right">
-                <p className="text-[11px] font-medium text-sky-50/90">종합 달성률</p>
-                {canEdit ? (
+            <div className="flex shrink-0 items-start gap-2 sm:gap-3">
+              {canEdit ? (
+                <div className="rounded-xl border border-white/20 bg-white/10 px-3 py-2 text-right sm:px-4">
+                  <p className="text-[11px] font-medium text-sky-50/90">종합 달성률 입력</p>
                   <div className="mt-1 flex items-center justify-end gap-1">
                     <input
                       type="number"
@@ -172,20 +242,15 @@ export function Campus2ScheduleDetailModal({
                       value={overallDraft}
                       onChange={(event) => setOverallDraft(event.target.value)}
                       onBlur={() => void handleSaveOverall()}
-                      className="w-24 rounded-lg border border-white/20 bg-white/95 px-2 py-1 text-right text-xl font-bold tabular-nums text-slate-800 outline-none ring-sky-300 focus-visible:ring-2"
+                      className="w-20 rounded-lg border border-white/20 bg-white/95 px-2 py-1 text-right text-lg font-bold tabular-nums text-slate-800 outline-none ring-sky-300 focus-visible:ring-2 sm:w-24 sm:text-xl"
                     />
                     <span className="text-sm font-medium text-sky-100">%</span>
                     {overallMutation.isPending ? (
-                      <Loader2 className="h-4 w-4 animate-spin text-sky-50" aria-hidden />
+                      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-sky-50" aria-hidden />
                     ) : null}
                   </div>
-                ) : (
-                  <p className="text-2xl font-bold tabular-nums text-white">
-                    {overallAchievement.toFixed(1)}
-                    <span className="text-sm font-medium text-sky-100">%</span>
-                  </p>
-                )}
-              </div>
+                </div>
+              ) : null}
               <button
                 type="button"
                 onClick={onClose}
@@ -206,8 +271,10 @@ export function Campus2ScheduleDetailModal({
             monthGroups={monthGroups}
             selectedWeekKey={selectedWeekKey}
             canEdit={canEdit}
+            deleteWeeklyPending={deleteWeeklyMutation.isPending}
             onSelectWeek={setSelectedWeekKey}
             onSelectTask={setSelectedTask}
+            onDeleteRowWeekly={(taskId) => void handleDeleteRowWeekly(taskId)}
           />
         </div>
         <WeekEvidencePanel
@@ -267,8 +334,10 @@ function ScheduleTable({
   monthGroups,
   selectedWeekKey,
   canEdit,
+  deleteWeeklyPending,
   onSelectWeek,
   onSelectTask,
+  onDeleteRowWeekly,
 }: {
   tasks: Campus2ScheduleTask[];
   weekly: Campus2WeeklyPerformance[];
@@ -276,8 +345,10 @@ function ScheduleTable({
   monthGroups: MonthGroup[];
   selectedWeekKey: string;
   canEdit: boolean;
+  deleteWeeklyPending: boolean;
   onSelectWeek: (weekKey: string) => void;
   onSelectTask: (task: Campus2ScheduleTask) => void;
+  onDeleteRowWeekly: (taskId: string) => void;
 }) {
   const currentWeekKey = useMemo(
     () => campus2CurrentWeekKey(weekColumns),
@@ -310,7 +381,7 @@ function ScheduleTable({
             ))}
             <th
               rowSpan={2}
-              className="min-w-[88px] border-b border-slate-300 px-2 py-2 text-center font-semibold"
+              className="min-w-[132px] border-b border-slate-300 px-2 py-2 text-center font-semibold"
             >
               주간 실적
             </th>
@@ -345,8 +416,11 @@ function ScheduleTable({
               weekly={weekly}
               weekColumns={weekColumns}
               currentWeekIndex={currentWeekIndex}
+              selectedWeekKey={selectedWeekKey}
               canEdit={canEdit}
+              deleteWeeklyPending={deleteWeeklyPending}
               onSelectTask={onSelectTask}
+              onDeleteRowWeekly={onDeleteRowWeekly}
             />
           ))}
         </tbody>
@@ -360,18 +434,28 @@ function ScheduleRow({
   weekly,
   weekColumns,
   currentWeekIndex,
+  selectedWeekKey,
   canEdit,
+  deleteWeeklyPending,
   onSelectTask,
+  onDeleteRowWeekly,
 }: {
   task: Campus2ScheduleTask;
   weekly: Campus2WeeklyPerformance[];
   weekColumns: Campus2WeekColumn[];
   currentWeekIndex: number;
+  selectedWeekKey: string;
   canEdit: boolean;
+  deleteWeeklyPending: boolean;
   onSelectTask: (task: Campus2ScheduleTask) => void;
+  onDeleteRowWeekly: (taskId: string) => void;
 }) {
   const bar = campus2TaskBarSpan(task, weekColumns);
-  const hasEntry = hasWeeklyEntry(task.id, weekly);
+  const hasEntryForSelectedWeek = hasWeeklyEntryForWeek(
+    task.id,
+    selectedWeekKey,
+    weekly
+  );
   const timelineCells: ReactNode[] = [];
   let columnIndex = 0;
 
@@ -419,14 +503,33 @@ function ScheduleRow({
         </button>
       </th>
       {timelineCells}
-      <td className="px-2 py-3 text-center align-middle">
-        <button
-          type="button"
-          onClick={() => onSelectTask(task)}
-          className="rounded-lg border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-800 hover:bg-sky-100"
-        >
-          {hasEntry ? (canEdit ? "수정" : "조회") : canEdit ? "등록" : "조회"}
-        </button>
+      <td className="px-1 py-3 text-center align-middle">
+        <div className="flex flex-wrap items-center justify-center gap-1">
+          <button
+            type="button"
+            onClick={() => onSelectTask(task)}
+            disabled={deleteWeeklyPending}
+            className="rounded-lg border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-800 hover:bg-sky-100 disabled:opacity-60"
+          >
+            {hasEntryForSelectedWeek
+              ? canEdit
+                ? "수정"
+                : "조회"
+              : canEdit
+                ? "등록"
+                : "조회"}
+          </button>
+          {canEdit && hasEntryForSelectedWeek ? (
+            <button
+              type="button"
+              onClick={() => onDeleteRowWeekly(task.id)}
+              disabled={deleteWeeklyPending}
+              className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-semibold text-red-800 hover:bg-red-100 disabled:opacity-60"
+            >
+              삭제
+            </button>
+          ) : null}
+        </div>
       </td>
     </tr>
   );

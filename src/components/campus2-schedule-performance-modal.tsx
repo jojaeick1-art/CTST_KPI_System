@@ -348,7 +348,7 @@ function ModalPanel({
           </div>
           {!canEdit ? (
             <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              조회만 가능합니다. 실적 등록/수정은 그룹장·팀장·관리자만 할 수 있습니다.
+              조회만 가능합니다. 실적 등록·수정·삭제는 그룹장·팀장·관리자만 할 수 있습니다.
             </p>
           ) : (
             <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">

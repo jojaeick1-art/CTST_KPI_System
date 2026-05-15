@@ -119,6 +119,8 @@ type KpiModalItem = {
   achievementCap: KpiAchievementCap;
   needsStructureReview?: boolean;
   linkedSecondary?: KpiModalItem | null;
+  /** 부서 목록「전체」뷰와 동일 — 평가 구간 전체 기준 대표 달성률 */
+  averageAchievement: number | null;
 };
 
 function KpiSummaryMetricGrid({
@@ -2108,6 +2110,39 @@ function buildYAxisTicks(min: number, max: number, segmentCount = 6): number[] {
   return dedup;
 }
 
+/** Y축 tick 라벨 표시용 — 축 눈금에는 소수 자릿수를 최소화 */
+function chartTickLabel(indicatorType: KpiIndicatorType, value: number): string {
+  if (indicatorType === "ppm") return `${formatKoMax2Decimals(value)} ppm`;
+  if (indicatorType === "quantity") return `${formatKoMax2Decimals(value)} k`;
+  if (indicatorType === "count") return `${formatKoMax2Decimals(value)} 건`;
+  if (indicatorType === "headcount") return `${formatKoMax2Decimals(value)} 명`;
+  if (indicatorType === "money") return `${formatKoMax2Decimals(value)}억`;
+  if (indicatorType === "time") return `${formatKoMax2Decimals(value)} h`;
+  if (indicatorType === "minutes") return `${formatKoMax2Decimals(value)} min`;
+  if (indicatorType === "uph") return `${formatKoMax2Decimals(value)} UPH`;
+  if (indicatorType === "cpk") return `${formatKoMax2Decimals(value)} Cpk`;
+  return formatKoPercentMax2(value);
+}
+
+/**
+ * Y축 tick 라벨 목록 중 최대 문자 길이를 기반으로 적정 축 너비(px) 추정.
+ * fontSize 11 기준 문자당 ~6.5px + tickMargin(6) + axis/tick 여유(10).
+ */
+function estimateYAxisWidth(
+  ticks: number[],
+  indicatorType: KpiIndicatorType,
+  minWidth = 40,
+  maxWidth = 80
+): number {
+  let longest = 0;
+  for (const t of ticks) {
+    const label = chartTickLabel(indicatorType, t);
+    if (label.length > longest) longest = label.length;
+  }
+  const estimated = Math.ceil(longest * 6.5) + 16;
+  return Math.min(maxWidth, Math.max(minWidth, estimated));
+}
+
 /** 차트 세로축 단위 안내 — % 그래프 설명과 혼동 방지 */
 function chartVerticalAxisHint(
   t: KpiIndicatorType,
@@ -3235,6 +3270,26 @@ export function PerformanceModal({
     [chartYDomainSecondary.min, chartYDomainSecondary.max]
   );
 
+  const yAxisWidth = useMemo(
+    () =>
+      chartShowsDualGroupedBars
+        ? estimateYAxisWidth(yAxisTicks, chartAxisIndicatorType, 52, 80)
+        : estimateYAxisWidth(yAxisTicks, chartAxisIndicatorType, 44, 72),
+    [yAxisTicks, chartAxisIndicatorType, chartShowsDualGroupedBars]
+  );
+  const yAxisWidthSecondary = useMemo(
+    () =>
+      chartShowsDualGroupedBars
+        ? estimateYAxisWidth(
+            yAxisTicksSecondary,
+            effectiveIndicatorTypeSecondary,
+            58,
+            80
+          )
+        : 0,
+    [yAxisTicksSecondary, effectiveIndicatorTypeSecondary, chartShowsDualGroupedBars]
+  );
+
   const hasTargetNoteLabels = useMemo(
     () =>
       chartData.some(
@@ -3557,6 +3612,40 @@ export function PerformanceModal({
         : false,
     [isOpen, kpiItem, liveRows, editorMonth, effectiveIndicatorType]
   );
+
+  const headerOverallAchievementUi = useMemo(() => {
+    if (!kpiItem) {
+      return {
+        barWidth: 0,
+        lineMain: "—",
+        lineSub: "",
+        completedTone: false,
+      };
+    }
+    if (kpiItem.isFinalCompleted) {
+      return {
+        barWidth: 100,
+        lineMain: "완료",
+        lineSub: "",
+        completedTone: true,
+      };
+    }
+    const v = kpiItem.averageAchievement;
+    if (v !== null && Number.isFinite(v)) {
+      return {
+        barWidth: Math.max(0, Math.min(100, v)),
+        lineMain: formatKoPercentMax2(v),
+        lineSub: "",
+        completedTone: false,
+      };
+    }
+    return {
+      barWidth: 0,
+      lineMain: "0%",
+      lineSub: "데이터 없음",
+      completedTone: false,
+    };
+  }, [kpiItem]);
 
   if (!isOpen || !kpiItem) return null;
   const headerItem = kpiItem;
@@ -4106,8 +4195,16 @@ export function PerformanceModal({
         position="top-center"
       />
       <div className="relative flex max-h-[95vh] w-full max-w-[min(100%,88rem)] flex-col overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-2xl shadow-sky-200/50">
-        <div className="shrink-0 border-b border-sky-200 bg-gradient-to-br from-sky-600 to-sky-700 px-5 py-5 text-white">
-          <div className="flex items-start justify-between gap-3">
+        <div className="relative shrink-0 border-b border-sky-200 bg-gradient-to-br from-sky-600 to-sky-700 px-5 py-5 text-white">
+          <button
+            type="button"
+            onClick={onClose}
+            className="absolute right-4 top-4 z-10 rounded-lg p-1.5 text-white/90 hover:bg-white/10 sm:right-5 sm:top-5"
+            aria-label="닫기"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <div className="flex items-start gap-4 pr-9 sm:pr-11">
             <div className="min-w-0 flex-1">
               <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold leading-snug text-sky-50 sm:text-base">
                 <span
@@ -4142,24 +4239,50 @@ export function PerformanceModal({
                 </h3>
               )}
             </div>
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="flex w-[11.5rem] shrink-0 flex-col gap-2 sm:w-[13rem]">
+              <div className="rounded-xl border border-white/25 bg-white/10 px-3.5 py-2.5 shadow-sm sm:px-4">
+                <p className="text-center text-sm font-semibold leading-snug text-white sm:text-base">
+                  전체 기간 달성률
+                </p>
+                <div className="mt-2 flex items-center gap-2">
+                  <div
+                    className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-white shadow-sm ring-1 ring-sky-900/15"
+                    role="progressbar"
+                    aria-valuenow={headerOverallAchievementUi.barWidth}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-label={`전체 기간 달성률 ${headerOverallAchievementUi.lineMain}`}
+                  >
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        headerOverallAchievementUi.completedTone
+                          ? "bg-gradient-to-r from-emerald-400 to-emerald-600"
+                          : headerOverallAchievementUi.barWidth > 0
+                            ? "bg-gradient-to-r from-sky-400 to-sky-600"
+                            : "bg-gradient-to-r from-sky-400 to-sky-600 opacity-40"
+                      }`}
+                      style={{ width: `${headerOverallAchievementUi.barWidth}%` }}
+                    />
+                  </div>
+                  <span className="w-10 shrink-0 text-right text-xs font-bold tabular-nums text-white sm:text-sm">
+                    {headerOverallAchievementUi.lineMain}
+                  </span>
+                </div>
+                {headerOverallAchievementUi.lineSub ? (
+                  <p className="mt-1 text-center text-[10px] font-medium text-sky-100/90">
+                    {headerOverallAchievementUi.lineSub}
+                  </p>
+                ) : null}
+              </div>
               {canFinalComplete && headerItem.isFinalCompleted ? (
                 <button
                   type="button"
                   onClick={() => void handleWithdrawFinalCompletionInModal()}
-                  className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-amber-700 shadow-sm hover:bg-amber-50"
+                  className="inline-flex w-full items-center justify-center gap-1 rounded-lg border border-amber-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-amber-700 shadow-sm hover:bg-amber-50"
                 >
                   최종 철회
                 </button>
               ) : null}
-              <button
-                type="button"
-                onClick={onClose}
-                className="rounded-lg p-1.5 text-white/90 hover:bg-white/10"
-                aria-label="닫기"
-              >
-                <X className="h-5 w-5" />
-              </button>
             </div>
           </div>
         </div>
@@ -4281,14 +4404,14 @@ export function PerformanceModal({
                 />
                 <YAxis
                   yAxisId="primary"
-                  width={chartShowsDualGroupedBars ? 52 : 40}
+                  width={yAxisWidth}
                   domain={[chartYDomain.min, chartYDomain.max]}
                   allowDataOverflow
                   ticks={yAxisTicks}
                   tickFormatter={(v) => {
                     const numeric = typeof v === "number" ? v : Number(v);
                     if (!Number.isFinite(numeric)) return "";
-                    return chartValueLabel(chartAxisIndicatorType, numeric);
+                    return chartTickLabel(chartAxisIndicatorType, numeric);
                   }}
                   axisLine={{ stroke: "#94a3b8", strokeWidth: 1 }}
                   tickLine={{ stroke: "#94a3b8" }}
@@ -4299,14 +4422,14 @@ export function PerformanceModal({
                   <YAxis
                     yAxisId="secondary"
                     orientation="right"
-                    width={58}
+                    width={yAxisWidthSecondary}
                     domain={[chartYDomainSecondary.min, chartYDomainSecondary.max]}
                     allowDataOverflow
                     ticks={yAxisTicksSecondary}
                     tickFormatter={(v) => {
                       const numeric = typeof v === "number" ? v : Number(v);
                       if (!Number.isFinite(numeric)) return "";
-                      return chartValueLabel(effectiveIndicatorTypeSecondary, numeric);
+                      return chartTickLabel(effectiveIndicatorTypeSecondary, numeric);
                     }}
                     axisLine={{ stroke: CHART_COMPOSITE_GOAL2_TARGET_STROKE, strokeWidth: 1 }}
                     tickLine={{ stroke: CHART_COMPOSITE_GOAL2_TARGET_STROKE }}
