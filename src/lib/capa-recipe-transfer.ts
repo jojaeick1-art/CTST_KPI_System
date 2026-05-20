@@ -33,7 +33,10 @@ type CapaRecipeFileRow = {
   storage_path: string;
   process_count: number;
   updated_at: string;
-  created_by_profile?: { full_name: string | null; username: string | null } | null;
+  created_by_profile?:
+    | { full_name: string | null; username: string | null }
+    | { full_name: string | null; username: string | null }[]
+    | null;
 };
 
 function sleep(ms: number): Promise<void> {
@@ -101,6 +104,18 @@ function displayNameFromProfile(
   if (full) return full;
   const user = profile.username?.trim();
   return user || null;
+}
+
+function normalizeCreatedByProfile(
+  profile:
+    | { full_name: string | null; username: string | null }
+    | { full_name: string | null; username: string | null }[]
+    | null
+    | undefined
+): { full_name: string | null; username: string | null } | null {
+  if (!profile) return null;
+  if (Array.isArray(profile)) return profile[0] ?? null;
+  return profile;
 }
 
 async function getSessionUserId(): Promise<string> {
@@ -263,7 +278,9 @@ function rowToCatalogItem(row: CapaRecipeFileRow): CapaRecipeCatalogItem {
     name: row.name,
     updatedAt: row.updated_at,
     processCount: row.process_count,
-    createdByName: displayNameFromProfile(row.created_by_profile ?? null),
+    createdByName: displayNameFromProfile(
+      normalizeCreatedByProfile(row.created_by_profile)
+    ),
   };
 }
 
