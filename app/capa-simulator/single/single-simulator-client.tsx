@@ -20,7 +20,7 @@ import { useCapaSimulation } from "@/src/hooks/capa/use-capa-simulation";
 import { RecipeLoadPicker } from "@/src/components/capa/recipe-load-picker";
 import {
   listCapaRecipeCatalog,
-  loadCapaRecipeFromStorage,
+  loadCapaRecipeWithWidgetSync,
   type CapaRecipeCatalogItem,
 } from "@/src/lib/capa-recipe-transfer";
 import {
@@ -125,7 +125,7 @@ export function SingleSimulatorClient() {
     setSelectingPath(storagePath);
     setLoadError(null);
     try {
-      const recipe = await loadCapaRecipeFromStorage(storagePath);
+      const recipe = await loadCapaRecipeWithWidgetSync(storagePath);
       dispatch({ type: "LOAD_RECIPE", recipe });
       setLoadPickerOpen(false);
     } catch (e) {

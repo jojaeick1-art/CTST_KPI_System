@@ -13,7 +13,7 @@ import { createEmptyCapaRecipe } from "@/src/lib/capa";
 import { createDefaultProcess } from "@/src/lib/capa/recipe-normalize";
 import {
   listCapaRecipeCatalog,
-  loadCapaRecipeFromStorage,
+  loadCapaRecipeWithWidgetSync,
   saveCapaRecipeToLocal,
   type CapaRecipeCatalogItem,
 } from "@/src/lib/capa-recipe-transfer";
@@ -66,7 +66,7 @@ export function RecipeMasterClient() {
     setSelectingPath(storagePath);
     dispatch({ type: "TRANSFER_START", mode: "loading" });
     try {
-      const recipe = await loadCapaRecipeFromStorage(storagePath);
+      const recipe = await loadCapaRecipeWithWidgetSync(storagePath);
       dispatch({ type: "LOAD_RECIPE", recipe });
       setLoadPickerOpen(false);
     } catch (e) {

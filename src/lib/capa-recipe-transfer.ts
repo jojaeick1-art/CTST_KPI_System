@@ -1,6 +1,9 @@
 import { createBrowserSupabase } from "@/src/lib/supabase";
-import { notifyWidgetUploadToTest } from "@/src/lib/kpi-web-bridge";
-import { parseCapaRecipeJson, serializeCapaRecipe } from "@/src/lib/capa/recipe-normalize";
+import {
+  parseCapaRecipeJson,
+  serializeCapaRecipe,
+} from "@/src/lib/capa/recipe-normalize";
+import { CAPA_RECIPE_SCHEMA_VERSION } from "@/src/types/capa-recipe";
 import type { CapaRecipe } from "@/src/types/capa-recipe";
 import type {
   CapaRecipeTransferRow,
@@ -13,12 +16,24 @@ const TRANSFER_POLL_MS = 1_000;
 const BRIDGE_BUCKET =
   process.env.NEXT_PUBLIC_CAPA_BRIDGE_BUCKET?.trim() || "kpi-evidence";
 
+const SHARED_RECIPES_FOLDER = "capa-bridge/shared/recipes";
+
 export type CapaRecipeCatalogItem = {
   storagePath: string;
   recipeId: string;
   name: string;
   updatedAt: string;
   processCount: number | null;
+  createdByName?: string | null;
+};
+
+type CapaRecipeFileRow = {
+  id: string;
+  name: string;
+  storage_path: string;
+  process_count: number;
+  updated_at: string;
+  created_by_profile?: { full_name: string | null; username: string | null } | null;
 };
 
 function sleep(ms: number): Promise<void> {
@@ -28,15 +43,14 @@ function sleep(ms: number): Promise<void> {
 function toTransferError(message: string): Error {
   const lower = message.toLowerCase();
   if (
-    lower.includes("capa_recipe_transfers") &&
+    lower.includes("capa_recipe") &&
     (lower.includes("schema cache") ||
       lower.includes("does not exist") ||
       lower.includes("could not find"))
   ) {
     return new Error(
-      "Supabase에 capa_recipe_transfers 테이블이 없습니다. " +
-        "대시보드 SQL Editor에서 supabase/migrations/20260518120000_capa_recipe_transfers.sql 을 실행하거나, " +
-        "로컬에서 supabase db push 로 마이그레이션을 적용한 뒤 다시 시도하세요."
+      "Supabase에 CAPA 레시피 공유 테이블이 없습니다. " +
+        "supabase/migrations/20260519120000_capa_shared_recipe_files.sql 을 적용한 뒤 다시 시도하세요."
     );
   }
   return new Error(message);
@@ -57,22 +71,36 @@ function normalizeRow(row: unknown): CapaRecipeTransferRow {
   };
 }
 
-function assertReady(row: CapaRecipeTransferRow): string | null {
+function isTransferReady(row: CapaRecipeTransferRow): boolean {
   const status = row.status?.toLowerCase() ?? "";
-  const url = row.signed_url?.trim() ?? "";
-  if (status === "ready" && url) return url;
   if (status === "failed" || status === "error") {
     throw new Error(row.error_message?.trim() || "레시피 전송 요청이 실패했습니다.");
   }
-  return null;
+  return status === "ready";
 }
 
-function recipesFolder(uid: string): string {
+function assertReadySignedUrl(row: CapaRecipeTransferRow): string | null {
+  if (!isTransferReady(row)) return null;
+  const url = row.signed_url?.trim() ?? "";
+  return url || null;
+}
+
+function legacyRecipesFolder(uid: string): string {
   return `capa-bridge/${uid}/recipes`;
 }
 
-function recipeArchivePath(uid: string, recipeId: string): string {
-  return `${recipesFolder(uid)}/${recipeId}.json`;
+function sharedRecipeStoragePath(recipeId: string): string {
+  return `${SHARED_RECIPES_FOLDER}/${recipeId}.json`;
+}
+
+function displayNameFromProfile(
+  profile?: { full_name: string | null; username: string | null } | null
+): string | null {
+  if (!profile) return null;
+  const full = profile.full_name?.trim();
+  if (full) return full;
+  const user = profile.username?.trim();
+  return user || null;
 }
 
 async function getSessionUserId(): Promise<string> {
@@ -87,7 +115,8 @@ async function getSessionUserId(): Promise<string> {
 
 async function pollTransfer(
   supabase: ReturnType<typeof createBrowserSupabase>,
-  id: string
+  id: string,
+  kind: CapaTransferKind
 ): Promise<CapaRecipeTransferRow> {
   const started = Date.now();
   while (Date.now() - started < TRANSFER_TIMEOUT_MS) {
@@ -99,13 +128,27 @@ async function pollTransfer(
       .maybeSingle();
     if (error) throw toTransferError(error.message);
     const row = normalizeRow(data);
-    const url = assertReady(row);
+    if (!isTransferReady(row)) continue;
+    if (kind === "recipe_save") return row;
+    const url = assertReadySignedUrl(row);
     if (url) return { ...row, signed_url: url };
-    if (row.kind === "recipe_load" && row.storage_path?.trim()) {
-      return row;
-    }
+    if (row.storage_path?.trim()) return row;
   }
   throw new Error("레시피 전송 대기 시간이 초과되었습니다. 위젯 실행 여부를 확인하세요.");
+}
+
+async function insertCapaTransfer(
+  kind: CapaTransferKind,
+  storagePath: string
+): Promise<CapaRecipeTransferRow> {
+  const supabase = createBrowserSupabase();
+  const { data: inserted, error } = await supabase
+    .from("capa_recipe_transfers")
+    .insert({ kind, storage_path: storagePath, status: "pending" })
+    .select("id,kind,storage_path,status,signed_url,error_message,created_at")
+    .single();
+  if (error) throw toTransferError(error.message);
+  return normalizeRow(inserted);
 }
 
 async function uploadRecipeBlob(
@@ -127,78 +170,127 @@ async function uploadRecipeBlob(
   return path;
 }
 
-/** 저장된 레시피 목록 (Supabase Storage) */
+async function upsertRecipeCatalogRow(input: {
+  recipe: CapaRecipe;
+  storagePath: string;
+  uid: string;
+}): Promise<void> {
+  const supabase = createBrowserSupabase();
+  const { data: existing, error: readErr } = await supabase
+    .from("capa_recipe_files")
+    .select("id")
+    .eq("id", input.recipe.meta.id)
+    .maybeSingle();
+  if (readErr) throw toTransferError(readErr.message);
+
+  const now = new Date().toISOString();
+  const base = {
+    id: input.recipe.meta.id,
+    name: input.recipe.meta.name,
+    storage_path: input.storagePath,
+    process_count: input.recipe.processes.length,
+    schema_version: input.recipe.schemaVersion ?? CAPA_RECIPE_SCHEMA_VERSION,
+    updated_by: input.uid,
+    updated_at: now,
+  };
+
+  if (existing?.id) {
+    const { error } = await supabase
+      .from("capa_recipe_files")
+      .update(base)
+      .eq("id", input.recipe.meta.id);
+    if (error) throw toTransferError(error.message);
+    return;
+  }
+
+  const { error } = await supabase.from("capa_recipe_files").insert({
+    ...base,
+    created_by: input.uid,
+    created_at: now,
+  });
+  if (error) throw toTransferError(error.message);
+}
+
+/** 기존 사용자별 폴더 레시피를 공유 경로·카탈로그로 1회 이전 */
+async function migrateLegacyUserRecipes(uid: string): Promise<void> {
+  const supabase = createBrowserSupabase();
+  const folder = legacyRecipesFolder(uid);
+  const { data: files, error } = await supabase.storage
+    .from(BRIDGE_BUCKET)
+    .list(folder, { limit: 100 });
+  if (error) return;
+
+  for (const file of files ?? []) {
+    if (!file.name?.toLowerCase().endsWith(".json")) continue;
+    const legacyPath = `${folder}/${file.name}`;
+    try {
+      const { data } = await supabase.storage.from(BRIDGE_BUCKET).download(legacyPath);
+      if (!data) continue;
+      const recipe = parseCapaRecipeJson(await data.text());
+      const sharedPath = sharedRecipeStoragePath(recipe.meta.id);
+
+      const { data: exists } = await supabase
+        .from("capa_recipe_files")
+        .select("id")
+        .eq("id", recipe.meta.id)
+        .maybeSingle();
+
+      if (!exists?.id) {
+        const payload = serializeCapaRecipe(recipe);
+        await uploadRecipeBlob(sharedPath, payload, recipe);
+        await upsertRecipeCatalogRow({ recipe, storagePath: sharedPath, uid });
+      }
+    } catch {
+      /* 손상된 파일 등은 건너뜀 */
+    }
+  }
+}
+
+/** recipe_load: 서버 PC backup → Storage (위젯 Realtime) */
+async function waitForWidgetCapaTransfer(
+  kind: CapaTransferKind,
+  storagePath: string
+): Promise<void> {
+  const supabase = createBrowserSupabase();
+  const row = await insertCapaTransfer(kind, storagePath);
+  await pollTransfer(supabase, row.id, kind);
+}
+
+function rowToCatalogItem(row: CapaRecipeFileRow): CapaRecipeCatalogItem {
+  return {
+    storagePath: row.storage_path,
+    recipeId: row.id,
+    name: row.name,
+    updatedAt: row.updated_at,
+    processCount: row.process_count,
+    createdByName: displayNameFromProfile(row.created_by_profile ?? null),
+  };
+}
+
+/** 공유 레시피 목록 (조직 전체, 권한 있는 사용자) */
 export async function listCapaRecipeCatalog(): Promise<CapaRecipeCatalogItem[]> {
   const supabase = createBrowserSupabase();
   const uid = await getSessionUserId();
-  const folder = recipesFolder(uid);
 
-  const { data: files, error } = await supabase.storage
-    .from(BRIDGE_BUCKET)
-    .list(folder, {
-      limit: 100,
-      sortBy: { column: "updated_at", order: "desc" },
-    });
-
-  if (error) {
-    const msg = error.message.toLowerCase();
-    if (msg.includes("not found") || msg.includes("does not exist")) {
-      return [];
-    }
-    throw new Error(`레시피 목록 조회 실패: ${error.message}`);
+  try {
+    await migrateLegacyUserRecipes(uid);
+  } catch {
+    /* 마이그레이션 실패 시 DB 목록만 표시 */
   }
 
-  const jsonFiles = (files ?? []).filter((f) => f.name?.toLowerCase().endsWith(".json"));
-  const items: CapaRecipeCatalogItem[] = [];
+  const { data, error } = await supabase
+    .from("capa_recipe_files")
+    .select(
+      "id, name, storage_path, process_count, updated_at, created_by_profile:profiles!capa_recipe_files_created_by_fkey(full_name, username)"
+    )
+    .order("updated_at", { ascending: false });
 
-  for (const file of jsonFiles) {
-    const storagePath = `${folder}/${file.name}`;
-    const recipeId = file.name.replace(/\.json$/i, "");
-    const meta = file.metadata as Record<string, unknown> | undefined;
-    const metaName =
-      typeof meta?.recipe_name === "string" ? meta.recipe_name.trim() : "";
-    const metaCountRaw = meta?.process_count;
-    const metaCount =
-      typeof metaCountRaw === "string" && metaCountRaw !== ""
-        ? Number(metaCountRaw)
-        : typeof metaCountRaw === "number"
-          ? metaCountRaw
-          : null;
+  if (error) throw toTransferError(error.message);
 
-    let name = metaName || recipeId;
-    let processCount =
-      metaCount != null && Number.isFinite(metaCount) ? metaCount : null;
-    let updatedAt = file.updated_at ?? file.created_at ?? "";
-
-    if (!metaName) {
-      try {
-        const { data } = await supabase.storage
-          .from(BRIDGE_BUCKET)
-          .download(storagePath);
-        if (data) {
-          const recipe = parseCapaRecipeJson(await data.text());
-          name = recipe.meta.name;
-          processCount = recipe.processes.length;
-          updatedAt = recipe.meta.updatedAt || updatedAt;
-        }
-      } catch {
-        /* 메타 없는 구버전 파일 — 파일명으로 표시 */
-      }
-    }
-
-    items.push({
-      storagePath,
-      recipeId,
-      name,
-      updatedAt,
-      processCount,
-    });
-  }
-
-  return items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return ((data ?? []) as CapaRecipeFileRow[]).map(rowToCatalogItem);
 }
 
-/** 목록에서 선택한 레시피 불러오기 */
+/** Storage에서 레시피 JSON 로드 */
 export async function loadCapaRecipeFromStorage(
   storagePath: string
 ): Promise<CapaRecipe> {
@@ -212,40 +304,50 @@ export async function loadCapaRecipeFromStorage(
   return parseCapaRecipeJson(await data.text());
 }
 
-/** 로컬 저장: JSON → Storage 보관 + (선택) 위젯 PC 동기화 */
+/**
+ * PC 위젯에 불러오기 신호 — KPI 첨부와 동일하게 전달 큐 + 위젯 HTTP 호출
+ * (위젯이 Storage에 반영 완료 시 transfers.status=ready)
+ */
+export async function requestCapaRecipeLoadViaWidget(
+  storagePath: string
+): Promise<void> {
+  const path = storagePath.trim();
+  if (!path) throw new Error("레시피 경로가 비어 있습니다.");
+  await waitForWidgetCapaTransfer("recipe_load", path);
+}
+
+/** 위젯 동기화 후 Storage에서 레시피 로드 (위젯 미실행 시 Storage 직접 시도) */
+export async function loadCapaRecipeWithWidgetSync(
+  storagePath: string
+): Promise<CapaRecipe> {
+  try {
+    await requestCapaRecipeLoadViaWidget(storagePath);
+  } catch (widgetErr) {
+    console.warn("CAPA recipe widget load skipped:", widgetErr);
+  }
+  return loadCapaRecipeFromStorage(storagePath);
+}
+
+/** 저장: 공유 Storage + 카탈로그 + (선택) 위젯 PC 동기화 */
 export async function saveCapaRecipeToLocal(recipe: CapaRecipe): Promise<void> {
-  const supabase = createBrowserSupabase();
   const uid = await getSessionUserId();
-  const archivePath = recipeArchivePath(uid, recipe.meta.id);
+  const archivePath = sharedRecipeStoragePath(recipe.meta.id);
   const payload = serializeCapaRecipe({
     ...recipe,
     meta: { ...recipe.meta, updatedAt: new Date().toISOString() },
   });
 
   await uploadRecipeBlob(archivePath, payload, recipe);
+  await upsertRecipeCatalogRow({ recipe, storagePath: archivePath, uid });
 
   try {
-    const { data: inserted, error } = await supabase
-      .from("capa_recipe_transfers")
-      .insert({ kind: "recipe_save", storage_path: archivePath, status: "pending" })
-      .select("id,kind,storage_path,status,signed_url,error_message,created_at")
-      .single();
-
-    if (error) throw toTransferError(error.message);
-
-    const bridge = await notifyWidgetUploadToTest(archivePath);
-    if (bridge.ok) {
-      const row = normalizeRow(inserted);
-      await pollTransfer(supabase, row.id);
-    }
+    await waitForWidgetCapaTransfer("recipe_save", archivePath);
   } catch (widgetError) {
-    console.warn("CAPA recipe widget sync skipped:", widgetError);
+    console.warn("CAPA recipe server backup sync skipped:", widgetError);
   }
 }
 
-/**
- * @deprecated 위젯 폴링 방식 — listCapaRecipeCatalog + loadCapaRecipeFromStorage 사용
- */
+/** @deprecated listCapaRecipeCatalog + loadCapaRecipeFromStorage 사용 */
 export async function loadCapaRecipeFromLocal(): Promise<CapaRecipe> {
   const catalog = await listCapaRecipeCatalog();
   if (!catalog.length) {

@@ -72,7 +72,12 @@ export function RecipeLoadPicker({
             >
               불러올 레시피
             </h3>
-            <p className="mt-1 text-sm text-slate-500">{hint}</p>
+            <p className="mt-1 text-sm text-slate-500">
+              {hint}
+              <span className="mt-0.5 block text-xs text-slate-400">
+                조직에 공유된 레시피입니다. CAPA 권한이 있는 사용자가 불러올 수 있습니다.
+              </span>
+            </p>
           </div>
           <button
             type="button"
@@ -119,6 +124,9 @@ export function RecipeLoadPicker({
                           <>
                             {item.processCount != null
                               ? `공정 ${item.processCount} · `
+                              : null}
+                            {item.createdByName
+                              ? `${item.createdByName} · `
                               : null}
                             {formatRecipeDate(item.updatedAt)}
                           </>
