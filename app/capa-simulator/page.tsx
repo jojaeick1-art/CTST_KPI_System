@@ -1,11 +1,5 @@
-import type { Metadata } from "next";
-import { CapaSimulatorClient } from "./capa-simulator-client";
+import { redirect } from "next/navigation";
 
-export const metadata: Metadata = {
-  title: "CAPA Simulator",
-  description: "CTST 통합 시스템 — CAPA 시뮬레이터",
-};
-
-export default function CapaSimulatorPage() {
-  return <CapaSimulatorClient />;
+export default function CapaSimulatorIndexPage() {
+  redirect("/capa-simulator/single");
 }

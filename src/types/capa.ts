@@ -39,3 +39,7 @@ export type SimProcessWithEquipments = SimProcessRow & {
 };
 
 export type ShiftPreset = "8h" | "12h";
+
+export type { CapaRecipe, CapaRecipeFile, CapaProcess } from "@/src/types/capa-recipe";
+export type { ShiftSelection, SimulationCalendar } from "@/src/types/capa-shift";
+export type { LineSimResult, SingleSimInput } from "@/src/types/capa-simulation";

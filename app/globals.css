@@ -36,3 +36,13 @@ body {
 .kpi-modal-composed-chart svg *:focus-visible {
   outline: none !important;
 }
+
+/* CAPA·폼: OS 다크 모드여도 입력란은 밝은 배경 + 진한 글자 */
+.capa-form-surface :is(input, select, textarea) {
+  color: #0f172a;
+  background-color: #ffffff;
+}
+
+.capa-form-surface :is(input, select, textarea)::placeholder {
+  color: #64748b;
+}

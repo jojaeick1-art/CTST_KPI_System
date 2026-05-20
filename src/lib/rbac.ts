@@ -107,10 +107,28 @@ export function canAccessSystemSettings(role: string | null | undefined): boolea
   return normalizeRole(role) === "admin";
 }
 
-/** CAPA 레시피(모델·공정·설비) CUD — 관리자·대표·그룹장 */
+/** CAPA 레시피 마스터 CUD — 그룹장·팀장·관리자·대표 */
 export function canManageCapaRecipe(role: string | null | undefined): boolean {
   const n = normalizeRole(role);
-  return n === "admin" || n === "ceo" || n === "group_leader" || n === "group_team_leader";
+  return (
+    n === "admin" ||
+    n === "ceo" ||
+    n === "group_leader" ||
+    n === "team_leader" ||
+    n === "group_team_leader"
+  );
+}
+
+/** CAPA 시뮬레이터 실행 — 프로·선임·책임·수석 + 레시피 관리 권한 */
+export function canRunCapaSimulator(role: string | null | undefined): boolean {
+  const n = normalizeRole(role);
+  if (canManageCapaRecipe(role)) return true;
+  return (
+    n === "principal" ||
+    n === "manager" ||
+    n === "senior" ||
+    n === "pro"
+  );
 }
 
 /** KPI 엑셀 일괄 등록 — 관리자, 그룹장 */

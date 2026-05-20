@@ -753,7 +753,7 @@ export function ApprovalsClient() {
           </div>
         ) : (
         <>
-        <header className="border-b border-sky-200 bg-white/80 px-4 py-4 backdrop-blur-sm sm:px-8">
+        <header className="sticky top-0 z-20 shrink-0 border-b border-sky-200 bg-white/95 px-4 py-4 shadow-sm backdrop-blur-md sm:px-8">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h1 className="text-xl font-bold tracking-tight text-slate-800 sm:text-2xl">
