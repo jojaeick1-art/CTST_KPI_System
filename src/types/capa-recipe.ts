@@ -8,6 +8,8 @@ export type CapaLineTopology = "serial" | "parallel";
 export type CapaRecipeMeta = {
   id: string;
   name: string;
+  /** 연배(한 사이클당 생산 패널 수). UPH·CAPA = 기본식 × 배열, 기본 1 */
+  arrayMultiplier?: number;
   description?: string;
   lineTopology?: CapaLineTopology;
   createdAt: string;

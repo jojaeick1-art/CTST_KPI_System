@@ -13,6 +13,13 @@ export type ShiftSlotId =
   | "we-12-day"
   | "we-12-sw";
 
+/** 8시간 교대 식사·정지 (분) */
+export const SHIFT_BREAK_MINUTES_8H = 30;
+/** 12시간 교대 휴게 (분) */
+export const SHIFT_BREAK_MINUTES_12H = 45;
+/** 평일 8h×3 또는 주말 12h×2 풀 가동 시 일 CAPA 가용 시간 */
+export const CAPA_EFFECTIVE_HOURS_PER_FULL_DAY = 22.5;
+
 export type ShiftSlot = {
   id: ShiftSlotId;
   dayKind: DayKind;
@@ -20,19 +27,91 @@ export type ShiftSlot = {
   label: string;
   durationHours: 8 | 12;
   durationMinutes: number;
+  /** 식사·휴게 등 정지 분 — CAPA 가용시간에서 차감 */
+  breakMinutes: number;
 };
 
 export const SHIFT_SLOTS: readonly ShiftSlot[] = [
-  { id: "wd-8-day", dayKind: "weekday", label: "DAY", durationHours: 8, durationMinutes: 480 },
-  { id: "wd-8-sw", dayKind: "weekday", label: "S/W", durationHours: 8, durationMinutes: 480 },
-  { id: "wd-8-gy", dayKind: "weekday", label: "G/Y", durationHours: 8, durationMinutes: 480 },
-  { id: "wd-12-day", dayKind: "weekday", label: "DAY", durationHours: 12, durationMinutes: 720 },
-  { id: "wd-12-sw", dayKind: "weekday", label: "S/W", durationHours: 12, durationMinutes: 720 },
-  { id: "we-8-day", dayKind: "weekend", label: "DAY", durationHours: 8, durationMinutes: 480 },
-  { id: "we-8-sw", dayKind: "weekend", label: "S/W", durationHours: 8, durationMinutes: 480 },
-  { id: "we-8-gy", dayKind: "weekend", label: "G/Y", durationHours: 8, durationMinutes: 480 },
-  { id: "we-12-day", dayKind: "weekend", label: "DAY", durationHours: 12, durationMinutes: 720 },
-  { id: "we-12-sw", dayKind: "weekend", label: "S/W", durationHours: 12, durationMinutes: 720 },
+  {
+    id: "wd-8-day",
+    dayKind: "weekday",
+    label: "DAY",
+    durationHours: 8,
+    durationMinutes: 480,
+    breakMinutes: SHIFT_BREAK_MINUTES_8H,
+  },
+  {
+    id: "wd-8-sw",
+    dayKind: "weekday",
+    label: "S/W",
+    durationHours: 8,
+    durationMinutes: 480,
+    breakMinutes: SHIFT_BREAK_MINUTES_8H,
+  },
+  {
+    id: "wd-8-gy",
+    dayKind: "weekday",
+    label: "G/Y",
+    durationHours: 8,
+    durationMinutes: 480,
+    breakMinutes: SHIFT_BREAK_MINUTES_8H,
+  },
+  {
+    id: "wd-12-day",
+    dayKind: "weekday",
+    label: "DAY",
+    durationHours: 12,
+    durationMinutes: 720,
+    breakMinutes: SHIFT_BREAK_MINUTES_12H,
+  },
+  {
+    id: "wd-12-sw",
+    dayKind: "weekday",
+    label: "S/W",
+    durationHours: 12,
+    durationMinutes: 720,
+    breakMinutes: SHIFT_BREAK_MINUTES_12H,
+  },
+  {
+    id: "we-8-day",
+    dayKind: "weekend",
+    label: "DAY",
+    durationHours: 8,
+    durationMinutes: 480,
+    breakMinutes: SHIFT_BREAK_MINUTES_8H,
+  },
+  {
+    id: "we-8-sw",
+    dayKind: "weekend",
+    label: "S/W",
+    durationHours: 8,
+    durationMinutes: 480,
+    breakMinutes: SHIFT_BREAK_MINUTES_8H,
+  },
+  {
+    id: "we-8-gy",
+    dayKind: "weekend",
+    label: "G/Y",
+    durationHours: 8,
+    durationMinutes: 480,
+    breakMinutes: SHIFT_BREAK_MINUTES_8H,
+  },
+  {
+    id: "we-12-day",
+    dayKind: "weekend",
+    label: "DAY",
+    durationHours: 12,
+    durationMinutes: 720,
+    breakMinutes: SHIFT_BREAK_MINUTES_12H,
+  },
+  {
+    id: "we-12-sw",
+    dayKind: "weekend",
+    label: "S/W",
+    durationHours: 12,
+    durationMinutes: 720,
+    breakMinutes: SHIFT_BREAK_MINUTES_12H,
+  },
 ] as const;
 
 export type ShiftSelection = {
@@ -47,6 +126,11 @@ export const DEFAULT_SHIFT_SELECTION: ShiftSelection = {
 
 export function getShiftSlot(id: ShiftSlotId): ShiftSlot | undefined {
   return SHIFT_SLOTS.find((s) => s.id === id);
+}
+
+/** CAPA 산출용 가용 분 = 근무시간 − 휴게·식사 */
+export function effectiveMinutesForShift(slot: ShiftSlot): number {
+  return Math.max(0, slot.durationMinutes - slot.breakMinutes);
 }
 
 export function slotsForDayKind(

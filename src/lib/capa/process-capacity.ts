@@ -1,3 +1,4 @@
+import { normalizeArrayMultiplier } from "@/src/lib/capa/recipe-normalize";
 import type { CapaProcess } from "@/src/types/capa-recipe";
 import type { ProcessSimResult } from "@/src/types/capa-simulation";
 
@@ -17,6 +18,7 @@ export function calcProcessSimulation(input: {
   process: CapaProcess;
   effectiveMinutes: number;
   targetQty: number;
+  arrayMultiplier?: number;
 }): ProcessSimResult {
   const p = input.process;
   const ct = Math.max(0.001, p.ctSec);
@@ -25,9 +27,10 @@ export function calcProcessSimulation(input: {
     1,
     Math.floor(Number(p.equipmentCount)) || 1
   );
+  const arrayMultiplier = normalizeArrayMultiplier(input.arrayMultiplier);
   const minutes = input.effectiveMinutes * uptime;
   const capacityUnits =
-    Math.floor((minutes * 60) / ct) * equipmentCount;
+    Math.floor((minutes * 60) / ct) * equipmentCount * arrayMultiplier;
   const loadRate =
     input.targetQty > 0 && capacityUnits > 0
       ? input.targetQty / capacityUnits

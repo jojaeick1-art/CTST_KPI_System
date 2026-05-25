@@ -10,7 +10,10 @@ import {
   useRef,
   useState,
 } from "react";
-import { CTST_PUBLIC_SITE_URL } from "@/src/lib/ctst-public-site";
+import {
+  CTST_PUBLIC_SITE_URL,
+  ESD_LOG_SERVER_URL,
+} from "@/src/lib/ctst-public-site";
 import {
   useAppFeatureAvailability,
   useDashboardProfile,
@@ -26,8 +29,10 @@ import {
   countAdminUnseenPendingVoc,
   loadSeenNotificationIds,
 } from "@/src/lib/user-notification-inbox";
+import { AppToast, type ToastState } from "@/src/components/ui/toast";
 import {
   canAccessApprovalsPage,
+  canAccessEsdLogServer,
   canAccessSystemSettings,
   canManageCapaRecipe,
   hrefDashboardDepartmentList,
@@ -299,6 +304,20 @@ export function CtstAppSidebar({
     return () => window.removeEventListener(USER_NOTIFICATION_SEEN_EVENT, onSeen);
   }, []);
 
+  const [toast, setToast] = useState<ToastState>({
+    open: false,
+    message: "",
+    tone: "error",
+  });
+  useEffect(() => {
+    if (!toast.open) return;
+    const t = window.setTimeout(
+      () => setToast((prev) => ({ ...prev, open: false })),
+      2000,
+    );
+    return () => clearTimeout(t);
+  }, [toast.open, toast.message]);
+
   const adminVocUnread = useMemo(() => {
     void notificationSeenTick;
     if (!adminVocEnabled || !uid) return 0;
@@ -317,6 +336,7 @@ export function CtstAppSidebar({
   const capaRecipeMasterActive = activeSlot === "capaRecipeMaster";
   const capaSingleActive = activeSlot === "capaSingle";
   const showCapaRecipeMaster = canManageCapaRecipe(role);
+  const canOpenEsdLogServer = canAccessEsdLogServer(role);
   const kpiListActive = activeSlot === "kpi";
   const approvalsActive = activeSlot === "approvals";
   const kpiRejectedActive = activeSlot === "kpiRejected";
@@ -368,6 +388,23 @@ export function CtstAppSidebar({
           >
             <span className="min-w-0">RAMP (AI Services)</span>
           </a>
+          <button
+            type="button"
+            className={itemBase}
+            onClick={() => {
+              if (!canOpenEsdLogServer) {
+                setToast({
+                  open: true,
+                  tone: "error",
+                  message: "권한이 없습니다.",
+                });
+                return;
+              }
+              window.open(ESD_LOG_SERVER_URL, "_blank", "noopener,noreferrer");
+            }}
+          >
+            <span className="min-w-0">ESD Log Server</span>
+          </button>
         </NavSection>
 
         {access.capa ? (
@@ -493,6 +530,11 @@ export function CtstAppSidebar({
           로그아웃
         </button>
       </div>
+      <AppToast
+        state={toast}
+        onClose={() => setToast((prev) => ({ ...prev, open: false }))}
+        position="top-center"
+      />
     </aside>
   );
 }

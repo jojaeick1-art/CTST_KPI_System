@@ -107,6 +107,18 @@ export function canAccessSystemSettings(role: string | null | undefined): boolea
   return normalizeRole(role) === "admin";
 }
 
+/** ESD Log Server 바로가기 — 그룹장·팀장·대표·관리자 */
+export function canAccessEsdLogServer(role: string | null | undefined): boolean {
+  const n = normalizeRole(role);
+  return (
+    n === "admin" ||
+    n === "ceo" ||
+    n === "group_leader" ||
+    n === "team_leader" ||
+    n === "group_team_leader"
+  );
+}
+
 /** CAPA 레시피 마스터 CUD — 그룹장·팀장·관리자·대표 */
 export function canManageCapaRecipe(role: string | null | undefined): boolean {
   const n = normalizeRole(role);

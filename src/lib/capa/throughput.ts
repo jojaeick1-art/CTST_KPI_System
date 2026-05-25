@@ -1,12 +1,22 @@
-/** C/T(초) ↔ UPH(시간당 생산수) 변환 — 저장값은 항상 ctSec */
-export function uphFromCtSec(ctSec: number): number {
+import { normalizeArrayMultiplier } from "@/src/lib/capa/recipe-normalize";
+
+/** C/T(초) ↔ UPH(시간당 생산수) 변환 — 저장값은 항상 ctSec. UPH = (3600 / C/T) × 연배 */
+export function uphFromCtSec(
+  ctSec: number,
+  arrayMultiplier: number = 1
+): number {
   if (!Number.isFinite(ctSec) || ctSec <= 0) return 0;
-  return 3600 / ctSec;
+  const arr = normalizeArrayMultiplier(arrayMultiplier);
+  return (3600 / ctSec) * arr;
 }
 
-export function ctSecFromUph(uph: number): number {
+export function ctSecFromUph(
+  uph: number,
+  arrayMultiplier: number = 1
+): number {
   if (!Number.isFinite(uph) || uph <= 0) return 1;
-  return 3600 / uph;
+  const arr = normalizeArrayMultiplier(arrayMultiplier);
+  return (3600 * arr) / uph;
 }
 
 export function formatUphForInput(uph: number): string {

@@ -10,4 +10,4 @@ export const ORIGINAL_RECIPE_YEAR_DAYS = ORIGINAL_RECIPE_MONTH_DAYS * 12;
 export const ORIGINAL_RECIPE_SHIFT = DEFAULT_SHIFT_SELECTION;
 
 export const ORIGINAL_RECIPE_CONDITION_SUMMARY =
-  "월 26일 근무 · 평일 8h×3 · 주말 12h×2";
+  "월 26일 근무 · 평일 8h×3 · 주말 12h×2 (일 22.5h 가동)";

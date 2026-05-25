@@ -28,6 +28,10 @@ import {
   capaToolbarRecipeNameClass,
 } from "@/src/components/capa/capa-input-classes";
 import {
+  normalizeArrayMultiplier,
+  resolveArrayMultiplier,
+} from "@/src/lib/capa/recipe-normalize";
+import {
   effectiveShiftSelection,
   hasEffectiveShiftSelection,
 } from "@/src/lib/capa/shift-effective";
@@ -198,6 +202,18 @@ export function SingleSimulatorClient() {
               align="end"
             />
             <CapaSimulationParamsFields
+              arrayMultiplier={
+                state.recipe
+                  ? resolveArrayMultiplier(state.recipe.meta)
+                  : 1
+              }
+              onArrayMultiplierChange={(value) =>
+                dispatch({
+                  type: "SET_ARRAY_MULTIPLIER",
+                  value: normalizeArrayMultiplier(value),
+                })
+              }
+              arrayDisabled={!state.recipe}
               workDays={workDays}
               onWorkDaysChange={setWorkDays}
               targetQty={state.targetQty}
@@ -267,6 +283,7 @@ export function SingleSimulatorClient() {
         <ProcessDetailPanel
           processes={processResult?.processes ?? []}
           selectedProcessId={state.selectedProcessId}
+          arrayMultiplier={resolveArrayMultiplier(state.recipe?.meta)}
           sandboxMode
           onSelectProcess={(id) =>
             dispatch({ type: "SELECT_PROCESS", processId: id })

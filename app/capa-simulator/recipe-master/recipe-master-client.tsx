@@ -10,7 +10,11 @@ import {
   recipeMasterReducer,
 } from "@/src/hooks/capa/recipe-master-reducer";
 import { createEmptyCapaRecipe } from "@/src/lib/capa";
-import { createDefaultProcess } from "@/src/lib/capa/recipe-normalize";
+import {
+  createDefaultProcess,
+  normalizeArrayMultiplier,
+  resolveArrayMultiplier,
+} from "@/src/lib/capa/recipe-normalize";
 import {
   listCapaRecipeCatalog,
   loadCapaRecipeWithWidgetSync,
@@ -225,6 +229,23 @@ export function RecipeMasterClient() {
               dispatch({ type: "UPDATE_META", patch: { name: e.target.value } })
             }
           />
+          <label className="mt-3 block">
+            <span className="text-xs font-semibold uppercase text-slate-500">배열</span>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              className={`mt-1 ${capaMetricInputClass}`}
+              value={resolveArrayMultiplier(draft.meta)}
+              onChange={(e) => {
+                const n = normalizeArrayMultiplier(e.target.value);
+                dispatch({ type: "UPDATE_META", patch: { arrayMultiplier: n } });
+              }}
+            />
+            <p className="mt-1 text-[11px] text-slate-500">
+              연배(1=1연배). UPH·CAPA 산출 시 반영됩니다.
+            </p>
+          </label>
           {draft.meta.lineTopology ? (
             <p className="mt-2 rounded-lg bg-sky-50 px-2.5 py-1.5 text-xs text-sky-800 ring-1 ring-sky-200">
               라인 구성:{" "}
@@ -298,6 +319,7 @@ export function RecipeMasterClient() {
                 <div className="shrink-0">
                   <ProcessThroughputInput
                     ctSec={selectedProcess.ctSec}
+                    arrayMultiplier={resolveArrayMultiplier(draft.meta)}
                     mode={throughputMode}
                     onModeChange={setThroughputMode}
                     onCtSecChange={(ctSec) =>

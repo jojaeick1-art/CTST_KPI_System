@@ -30,12 +30,14 @@ function MetricBlock({
 
 function ProcessDetailRow({
   process,
+  arrayMultiplier = 1,
   sandboxMode,
   onOverride,
   onSelect,
   highlighted,
 }: {
   process: ProcessSimResult;
+  arrayMultiplier?: number;
   sandboxMode?: boolean;
   onOverride?: (
     processId: string,
@@ -106,6 +108,7 @@ function ProcessDetailRow({
               <ProcessThroughputInput
                 layout="inline"
                 ctSec={process.ctSec}
+                arrayMultiplier={arrayMultiplier}
                 mode={throughputMode}
                 onModeChange={setThroughputMode}
                 onCtSecChange={(ctSec) =>
@@ -116,7 +119,7 @@ function ProcessDetailRow({
               <span className="font-semibold tabular-nums text-slate-900">
                 {throughputMode === "ct"
                   ? process.ctSec.toFixed(1)
-                  : uphFromCtSec(process.ctSec).toFixed(2)}
+                  : uphFromCtSec(process.ctSec, arrayMultiplier).toFixed(2)}
               </span>
             )}
           </MetricBlock>
@@ -173,12 +176,14 @@ function ProcessDetailRow({
 export function ProcessDetailPanel({
   processes,
   selectedProcessId,
+  arrayMultiplier = 1,
   sandboxMode,
   onOverride,
   onSelectProcess,
 }: {
   processes: ProcessSimResult[];
   selectedProcessId?: string | null;
+  arrayMultiplier?: number;
   sandboxMode?: boolean;
   onOverride?: (
     processId: string,
@@ -202,6 +207,7 @@ export function ProcessDetailPanel({
         <ProcessDetailRow
           key={process.processId}
           process={process}
+          arrayMultiplier={arrayMultiplier}
           sandboxMode={sandboxMode}
           onOverride={onOverride}
           onSelect={onSelectProcess}

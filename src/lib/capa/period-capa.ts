@@ -1,5 +1,6 @@
 import { applyRecipeOverrides } from "@/src/lib/capa/recipe-overrides";
 import { calcProcessSimulation } from "@/src/lib/capa/process-capacity";
+import { resolveArrayMultiplier } from "@/src/lib/capa/recipe-normalize";
 import { lineBottleneckCapacity } from "@/src/lib/capa/line-simulation";
 import {
   simulationCalendar,
@@ -29,6 +30,7 @@ function lineCapacityForCalendar(
   );
   if (totalNominalMinutes <= 0) return 0;
 
+  const arrayMultiplier = resolveArrayMultiplier(recipe.meta);
   const processes = recipe.processes
     .filter((p) => p.isActive !== false)
     .map((p) =>
@@ -36,6 +38,7 @@ function lineCapacityForCalendar(
         process: p,
         effectiveMinutes: totalNominalMinutes,
         targetQty: 0,
+        arrayMultiplier,
       })
     );
 

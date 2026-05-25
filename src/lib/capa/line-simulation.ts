@@ -1,5 +1,6 @@
 import { applyRecipeOverrides } from "@/src/lib/capa/recipe-overrides";
 import { calcProcessSimulation } from "@/src/lib/capa/process-capacity";
+import { resolveArrayMultiplier } from "@/src/lib/capa/recipe-normalize";
 import {
   buildCalendarDays,
   countCalendarDays,
@@ -38,6 +39,7 @@ export function requiredDaysForTarget(input: {
 /** 단일 레시피 라인 시뮬레이션 */
 export function runSingleSimulation(input: SingleSimInput): LineSimResult {
   const recipe = applyRecipeOverrides(input.recipe, input.overrides);
+  const arrayMultiplier = resolveArrayMultiplier(recipe.meta);
   const targetQty = Math.max(0, input.targetQty);
   const calendarDays = buildCalendarDays(input.calendar, input.shiftSelection);
   const periodDays = Math.max(1, calendarDays.length || countCalendarDays(input.calendar));
@@ -55,6 +57,7 @@ export function runSingleSimulation(input: SingleSimInput): LineSimResult {
         process: p,
         effectiveMinutes: totalNominalMinutes,
         targetQty,
+        arrayMultiplier,
       })
     );
 

@@ -1,5 +1,6 @@
 import {
   DEFAULT_SHIFT_SELECTION,
+  effectiveMinutesForShift,
   getShiftSlot,
   type CalendarDayBreakdown,
   type DayKind,
@@ -45,11 +46,12 @@ export function activeShiftsForDay(
   return ids.filter((id) => getShiftSlot(id)?.dayKind === dayKind);
 }
 
+/** 일별 CAPA 가용 분 (휴게·식사 차감 후) */
 export function nominalMinutesForShifts(slotIds: ShiftSlotId[]): number {
   let total = 0;
   for (const id of slotIds) {
     const slot = getShiftSlot(id);
-    if (slot) total += slot.durationMinutes;
+    if (slot) total += effectiveMinutesForShift(slot);
   }
   return total;
 }

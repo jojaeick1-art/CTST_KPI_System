@@ -26,6 +26,19 @@ function newId(): string {
   return `id-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+/** 연배 — 1 이상 정수, 기본 1 */
+export function normalizeArrayMultiplier(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return Math.floor(n);
+}
+
+export function resolveArrayMultiplier(
+  meta: { arrayMultiplier?: number } | null | undefined
+): number {
+  return normalizeArrayMultiplier(meta?.arrayMultiplier);
+}
+
 function clampUptime(rate: number): number {
   if (!Number.isFinite(rate)) return 0.9;
   if (rate > 1) return Math.min(1, rate / 100);
@@ -92,6 +105,7 @@ export function normalizeCapaRecipeFile(raw: unknown): CapaRecipe {
     meta: {
       id: meta.id?.trim() || newId(),
       name: meta.name?.trim() || "새 레시피",
+      arrayMultiplier: normalizeArrayMultiplier(meta.arrayMultiplier),
       description: meta.description?.trim() || undefined,
       lineTopology: meta.lineTopology,
       createdAt: meta.createdAt?.trim() || now,

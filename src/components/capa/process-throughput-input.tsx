@@ -21,18 +21,28 @@ const modeBtnBase =
 const modeBtnActive = "bg-sky-600 text-white shadow-sm";
 const modeBtnIdle = "text-slate-600 hover:bg-slate-100";
 
-function formatForMode(ctSec: number, mode: ThroughputInputMode): string {
+function formatForMode(
+  ctSec: number,
+  mode: ThroughputInputMode,
+  arrayMultiplier: number
+): string {
   return mode === "ct"
     ? formatCtSecForInput(ctSec)
-    : formatUphForInput(uphFromCtSec(ctSec));
+    : formatUphForInput(uphFromCtSec(ctSec, arrayMultiplier));
 }
 
-function ctSecFromDraft(raw: string, mode: ThroughputInputMode): number | null {
+function ctSecFromDraft(
+  raw: string,
+  mode: ThroughputInputMode,
+  arrayMultiplier: number
+): number | null {
   const trimmed = raw.trim();
   if (trimmed === "" || trimmed === "." || trimmed === "-") return null;
   const n = Number(trimmed);
   if (!Number.isFinite(n) || n <= 0) return null;
-  return mode === "ct" ? roundCtSec(n) : roundCtSec(ctSecFromUph(n));
+  return mode === "ct"
+    ? roundCtSec(n)
+    : roundCtSec(ctSecFromUph(n, arrayMultiplier));
 }
 
 export function ProcessThroughputInput({
@@ -40,12 +50,15 @@ export function ProcessThroughputInput({
   mode,
   onModeChange,
   onCtSecChange,
+  arrayMultiplier = 1,
   layout = "default",
 }: {
   ctSec: number;
   mode: ThroughputInputMode;
   onModeChange: (mode: ThroughputInputMode) => void;
   onCtSecChange: (ctSec: number) => void;
+  /** 연배 — UPH 표시·역산에 반영 */
+  arrayMultiplier?: number;
   layout?: "default" | "inline";
 }) {
   const [editing, setEditing] = useState(false);
@@ -53,18 +66,20 @@ export function ProcessThroughputInput({
 
   useEffect(() => {
     if (!editing) return;
-    setDraft(formatForMode(ctSec, mode));
-  }, [mode, editing, ctSec]);
+    setDraft(formatForMode(ctSec, mode, arrayMultiplier));
+  }, [mode, editing, ctSec, arrayMultiplier]);
 
-  const displayValue = editing ? draft : formatForMode(ctSec, mode);
+  const displayValue = editing
+    ? draft
+    : formatForMode(ctSec, mode, arrayMultiplier);
 
   function commitDraft(raw: string) {
-    const next = ctSecFromDraft(raw, mode);
+    const next = ctSecFromDraft(raw, mode, arrayMultiplier);
     if (next != null) {
       onCtSecChange(next);
       return;
     }
-    setDraft(formatForMode(ctSec, mode));
+    setDraft(formatForMode(ctSec, mode, arrayMultiplier));
   }
 
   const inputClass =
@@ -100,7 +115,7 @@ export function ProcessThroughputInput({
         value={displayValue}
         onFocus={() => {
           setEditing(true);
-          setDraft(formatForMode(ctSec, mode));
+          setDraft(formatForMode(ctSec, mode, arrayMultiplier));
         }}
         onChange={(ev) => setDraft(ev.target.value)}
         onBlur={(ev) => {

@@ -4,8 +4,12 @@ import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { formatShiftSelectionSummary } from "@/src/lib/capa/shift-selection-summary";
+import { nominalMinutesForShifts } from "@/src/lib/capa/shift-calendar";
 import {
+  CAPA_EFFECTIVE_HOURS_PER_FULL_DAY,
   DEFAULT_SHIFT_SELECTION,
+  SHIFT_BREAK_MINUTES_12H,
+  SHIFT_BREAK_MINUTES_8H,
   slotsForDayKind,
   type DayKind,
   type ShiftSelection,
@@ -172,7 +176,9 @@ export function ShiftSelectionModal({
               근무조 선택
             </h3>
             <p className="mt-1 text-sm text-slate-500">
-              8시간·12시간 교대를 평일·주말 각각 조합할 수 있습니다.
+              8시간 교대는 조당 식사 30분, 12시간 교대는 조당 휴게 45분을
+              빼고 CAPA에 반영합니다. (8h×3·12h×2 풀 가동 시 일{" "}
+              {CAPA_EFFECTIVE_HOURS_PER_FULL_DAY}시간)
             </p>
           </div>
           <button
@@ -210,6 +216,25 @@ export function ShiftSelectionModal({
               {formatShiftSelectionSummary(value, weekdayRun, weekendRun)}
             </span>
           </p>
+          {weekdayRun || weekendRun ? (
+            <ul className="text-xs text-slate-500">
+              {weekdayRun ? (
+                <li>
+                  평일 CAPA 가용:{" "}
+                  {(nominalMinutesForShifts(value.weekday) / 60).toFixed(1)}
+                  시간/일 (8h 조 −{SHIFT_BREAK_MINUTES_8H}분, 12h 조 −
+                  {SHIFT_BREAK_MINUTES_12H}분)
+                </li>
+              ) : null}
+              {weekendRun ? (
+                <li>
+                  주말 CAPA 가용:{" "}
+                  {(nominalMinutesForShifts(value.weekend) / 60).toFixed(1)}
+                  시간/일
+                </li>
+              ) : null}
+            </ul>
+          ) : null}
 
           <button
             type="button"

@@ -1,12 +1,19 @@
+import { normalizeArrayMultiplier } from "@/src/lib/capa/recipe-normalize";
 import { simulationCalendar, todayYmd } from "@/src/lib/capa/shift-calendar";
 import type { CapaRecipe } from "@/src/types/capa-recipe";
 import type { RecipeOverrideMap } from "@/src/types/capa-simulation";
-import type { ShiftSelection, SimulationCalendar } from "@/src/types/capa-shift";
+import {
+  DEFAULT_SHIFT_SELECTION,
+  type ShiftSelection,
+  type SimulationCalendar,
+} from "@/src/types/capa-shift";
 
-const EMPTY_SHIFT_SELECTION: ShiftSelection = {
-  weekday: [],
-  weekend: [],
-};
+function cloneDefaultShiftSelection(): ShiftSelection {
+  return {
+    weekday: [...DEFAULT_SHIFT_SELECTION.weekday],
+    weekend: [...DEFAULT_SHIFT_SELECTION.weekend],
+  };
+}
 
 export type SingleSimulatorState = {
   recipe: CapaRecipe | null;
@@ -22,8 +29,8 @@ export const initialSingleSimulatorState: SingleSimulatorState = {
   recipe: null,
   overrides: {},
   targetQty: 0,
-  shiftSelection: { ...EMPTY_SHIFT_SELECTION },
-  shiftConfigured: false,
+  shiftSelection: cloneDefaultShiftSelection(),
+  shiftConfigured: true,
   calendar: simulationCalendar(5, todayYmd()),
   selectedProcessId: null,
 };
@@ -40,7 +47,8 @@ export type SingleSimulatorAction =
       patch: RecipeOverrideMap[string];
     }
   | { type: "CLEAR_OVERRIDES" }
-  | { type: "SELECT_PROCESS"; processId: string | null };
+  | { type: "SELECT_PROCESS"; processId: string | null }
+  | { type: "SET_ARRAY_MULTIPLIER"; value: number };
 
 export function singleSimulatorReducer(
   state: SingleSimulatorState,
@@ -52,8 +60,8 @@ export function singleSimulatorReducer(
         ...state,
         recipe: action.recipe,
         overrides: {},
-        shiftSelection: { ...EMPTY_SHIFT_SELECTION },
-        shiftConfigured: false,
+        shiftSelection: cloneDefaultShiftSelection(),
+        shiftConfigured: true,
         selectedProcessId: action.recipe.processes[0]?.id ?? null,
       };
     case "SET_TARGET_QTY":
@@ -78,6 +86,17 @@ export function singleSimulatorReducer(
       return { ...state, overrides: {} };
     case "SELECT_PROCESS":
       return { ...state, selectedProcessId: action.processId };
+    case "SET_ARRAY_MULTIPLIER": {
+      if (!state.recipe) return state;
+      const arrayMultiplier = normalizeArrayMultiplier(action.value);
+      return {
+        ...state,
+        recipe: {
+          ...state.recipe,
+          meta: { ...state.recipe.meta, arrayMultiplier },
+        },
+      };
+    }
     default:
       return state;
   }

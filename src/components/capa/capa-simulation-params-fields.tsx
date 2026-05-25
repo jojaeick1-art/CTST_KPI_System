@@ -7,6 +7,9 @@ import {
 } from "@/src/components/capa/capa-input-classes";
 
 export function CapaSimulationParamsFields({
+  arrayMultiplier,
+  onArrayMultiplierChange,
+  arrayDisabled = false,
   workDays,
   onWorkDaysChange,
   targetQty,
@@ -15,6 +18,9 @@ export function CapaSimulationParamsFields({
   shiftPlaceholder,
   onOpenShiftModal,
 }: {
+  arrayMultiplier: number;
+  onArrayMultiplierChange: (value: number) => void;
+  arrayDisabled?: boolean;
   workDays: number;
   onWorkDaysChange: (days: number) => void;
   targetQty: number;
@@ -25,6 +31,20 @@ export function CapaSimulationParamsFields({
 }) {
   return (
     <>
+      <label className="flex w-24 flex-col gap-1">
+        <span className="text-xs font-medium text-slate-600">배열</span>
+        <input
+          type="number"
+          min={1}
+          step={1}
+          disabled={arrayDisabled}
+          className={capaToolbarInputClass}
+          value={arrayMultiplier}
+          onChange={(e) => onArrayMultiplierChange(Number(e.target.value))}
+          title="연배(1=1연배)"
+        />
+      </label>
+
       <label className="flex w-24 flex-col gap-1">
         <span className="text-xs font-medium text-slate-600">월 근무일수</span>
         <input
