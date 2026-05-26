@@ -40,6 +40,30 @@ export function markInboxRowSeen(
   window.dispatchEvent(new Event(KPI_INBOX_SEEN_EVENT));
 }
 
+/** 반려함·회수함 메뉴 진입 시 목록 전체를 읽음 처리 */
+export function markAllInboxRowsSeen(
+  uid: string,
+  bucket: InboxSeenBucket,
+  rowIds: readonly string[]
+): void {
+  if (typeof window === "undefined" || !uid.trim() || rowIds.length === 0) {
+    return;
+  }
+  const s = readSeenInboxRowIds(uid.trim(), bucket);
+  let changed = false;
+  for (const id of rowIds) {
+    if (!id || s.has(id)) continue;
+    s.add(id);
+    changed = true;
+  }
+  if (!changed) return;
+  localStorage.setItem(
+    storageKey(uid.trim(), bucket),
+    JSON.stringify([...s])
+  );
+  window.dispatchEvent(new Event(KPI_INBOX_SEEN_EVENT));
+}
+
 export function countUnreadInboxRows(
   rows: readonly { id: string }[],
   uid: string | undefined,

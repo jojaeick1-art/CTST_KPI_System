@@ -248,3 +248,38 @@ export function countUnseenNotifications(
   }
   return n;
 }
+
+/** 실적함 승인 대기 — 건수가 바뀌면 새 알림으로 다시 표시 */
+export function approvalPendingNotificationId(
+  pendingPrimaryCount: number,
+  pendingFinalCount: number
+): string {
+  return `approval-pending:${pendingPrimaryCount}:${pendingFinalCount}`;
+}
+
+export function buildApprovalPendingNotification(
+  pendingCount: number,
+  pendingPrimaryCount: number,
+  pendingFinalCount: number
+): UserNotificationItem | null {
+  if (pendingCount <= 0) return null;
+  return {
+    id: approvalPendingNotificationId(pendingPrimaryCount, pendingFinalCount),
+    kind: "performance",
+    title: "실적 승인 대기",
+    subtitle:
+      pendingCount === 1
+        ? "승인이 필요한 실적이 1건 있습니다."
+        : `승인이 필요한 실적이 ${pendingCount}건 있습니다.`,
+    href: "/dashboard/approvals",
+    sortKey: -2e15,
+  };
+}
+
+/** 읽음 처리된 알림은 목록·배지에서 제외 */
+export function filterUnseenNotifications(
+  items: UserNotificationItem[],
+  seen: Set<string>
+): UserNotificationItem[] {
+  return items.filter((it) => !seen.has(it.id));
+}

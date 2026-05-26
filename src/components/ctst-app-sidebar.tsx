@@ -23,11 +23,13 @@ import {
 import {
   KPI_INBOX_SEEN_EVENT,
   countUnreadInboxRows,
+  markAllInboxRowsSeen,
 } from "@/src/lib/kpi-inbox-seen";
 import {
   USER_NOTIFICATION_SEEN_EVENT,
   countAdminUnseenPendingVoc,
   loadSeenNotificationIds,
+  markAdminPendingVocNotificationsSeen,
 } from "@/src/lib/user-notification-inbox";
 import { AppToast, type ToastState } from "@/src/components/ui/toast";
 import {
@@ -324,6 +326,28 @@ export function CtstAppSidebar({
     const seen = loadSeenNotificationIds();
     return countAdminUnseenPendingVoc(vocQuery.data ?? [], uid, seen);
   }, [adminVocEnabled, uid, vocQuery.data, notificationSeenTick]);
+
+  useEffect(() => {
+    if (!uid || !inboxQuery.data) return;
+    if (pathname === "/dashboard/performance-rejected") {
+      markAllInboxRowsSeen(
+        uid,
+        "rejected",
+        (inboxQuery.data.rejected ?? []).map((r) => r.id)
+      );
+    } else if (pathname === "/dashboard/performance-withdrawn") {
+      markAllInboxRowsSeen(
+        uid,
+        "withdrawn",
+        (inboxQuery.data.withdrawn ?? []).map((r) => r.id)
+      );
+    }
+  }, [pathname, uid, inboxQuery.data]);
+
+  useEffect(() => {
+    if (!adminVocEnabled || !uid || pathname !== "/voc") return;
+    markAdminPendingVocNotificationsSeen(vocQuery.data ?? [], uid);
+  }, [pathname, adminVocEnabled, uid, vocQuery.data]);
 
   const activeSlot = resolveActiveNavSlot(pathname, role, access);
 

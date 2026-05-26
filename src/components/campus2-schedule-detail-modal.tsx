@@ -12,6 +12,7 @@ import {
   formatCampus2PlanRange,
   type Campus2ScheduleTask,
   type Campus2WeekColumn,
+  type Campus2WeekKey,
   type Campus2WeeklyPerformance,
 } from "@/src/lib/campus2-schedule";
 import { requestEvidenceSignedUrl } from "@/src/lib/evidence-download-requests";
@@ -20,8 +21,42 @@ import {
   useDeleteCampus2WeeklyPerformance,
   useUpsertCampus2OverallAchievement,
 } from "@/src/hooks/useCampus2Schedule";
+import type { UseMutationResult } from "@tanstack/react-query";
 
-type Props = {
+export type ConstructionScheduleLabels = {
+  title: string;
+  subtitleCanEdit: string;
+  subtitleReadOnly: string;
+  permissionHint: string;
+  scheduleColumnHeader: string;
+  deleteConfirm: (weekLabel: string) => string;
+  progressAriaLabel: string;
+};
+
+export type ConstructionSchedulePerformanceModalProps = {
+  isOpen: boolean;
+  onClose: () => void;
+  task: Campus2ScheduleTask | null;
+  year: number;
+  weekColumns: Campus2WeekColumn[];
+  weekly: Campus2WeeklyPerformance[];
+  canEdit: boolean;
+  defaultWeekKey?: string;
+};
+
+export type ConstructionScheduleDetailModalProps = {
+  labels: ConstructionScheduleLabels;
+  PerformanceModal: React.ComponentType<ConstructionSchedulePerformanceModalProps>;
+  overallMutation: UseMutationResult<
+    void,
+    Error,
+    { year: number; achievementRate: number }
+  >;
+  deleteWeeklyMutation: UseMutationResult<
+    void,
+    Error,
+    { taskId: string; year: number; weekKey: Campus2WeekKey }
+  >;
   isOpen: boolean;
   onClose: () => void;
   year: number;
@@ -30,7 +65,25 @@ type Props = {
   weekColumns: Campus2WeekColumn[];
   overallAchievement: number;
   canEdit: boolean;
+  /** SMT: 왼쪽 라인(2행) + 오른쪽 세부 일정(8행) */
+  scheduleTableLayout?: "default" | "smt-line-phase";
+  /** 모달 본문 최대 너비 (주차 열이 많을 때) */
+  panelMaxWidthClass?: string;
 };
+
+const CAMPUS2_LABELS: ConstructionScheduleLabels = {
+  title: "CTST 2Campus 공사 일정",
+  subtitleCanEdit: "주요 공사 일정과 주간 실적을 등록·수정·삭제할 수 있습니다.",
+  subtitleReadOnly: "주요 공사 일정과 주간 실적을 조회할 수 있습니다.",
+  permissionHint:
+    "실적 등록·수정·삭제와 종합 달성률 입력은 그룹장·팀장·관리자만 할 수 있습니다.",
+  scheduleColumnHeader: "주요 공사 일정",
+  deleteConfirm: (weekLabel) =>
+    `「${weekLabel}」 주간 실적을 삭제할까요?\n선택한 공사 일정·주차의 증빙·특이사항이 제거됩니다.`,
+  progressAriaLabel: "종합 달성률",
+};
+
+type Props = ConstructionScheduleDetailModalProps;
 
 type MonthGroup = {
   month: number;
@@ -64,7 +117,11 @@ function hasWeeklyEntryForWeek(
   return weekly.some((row) => row.taskId === taskId && row.weekKey === weekKey);
 }
 
-export function Campus2ScheduleDetailModal({
+export function ConstructionScheduleDetailModal({
+  labels,
+  PerformanceModal,
+  overallMutation,
+  deleteWeeklyMutation,
   isOpen,
   onClose,
   year,
@@ -73,13 +130,13 @@ export function Campus2ScheduleDetailModal({
   weekColumns,
   overallAchievement,
   canEdit,
+  scheduleTableLayout = "default",
+  panelMaxWidthClass = "max-w-[min(100%,88rem)]",
 }: Props) {
   const [selectedTask, setSelectedTask] = useState<Campus2ScheduleTask | null>(null);
   const [selectedWeekKey, setSelectedWeekKey] = useState("");
   const [overallDraft, setOverallDraft] = useState("");
   const [downloadingEvidence, setDownloadingEvidence] = useState(false);
-  const overallMutation = useUpsertCampus2OverallAchievement(year);
-  const deleteWeeklyMutation = useDeleteCampus2WeeklyPerformance(year);
   const monthGroups = useMemo(() => groupWeekColumns(weekColumns), [weekColumns]);
 
   /** 대시보드 부서 카드와 동일한 진행률 표시용 (0~100) */
@@ -137,9 +194,7 @@ export function Campus2ScheduleDetailModal({
     if (!canEdit || !selectedWeekKey) return;
     const weekLabel = campus2WeekLabelFromKey(selectedWeekKey, weekColumns);
     if (
-      !window.confirm(
-        `「${weekLabel}」 주간 실적을 삭제할까요?\n선택한 공사 일정·주차의 증빙·특이사항이 제거됩니다.`
-      )
+      !window.confirm(labels.deleteConfirm(weekLabel))
     ) {
       return;
     }
@@ -183,23 +238,21 @@ export function Campus2ScheduleDetailModal({
 
   const modal = (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-2 sm:p-4"
       role="presentation"
       onClick={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <DetailPanel>
+      <DetailPanel maxWidthClass={panelMaxWidthClass}>
         <div className="shrink-0 border-b border-sky-200 bg-gradient-to-br from-sky-600 to-sky-700 px-5 py-5 text-white">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <h2 className="text-xl font-semibold leading-snug text-white sm:text-2xl">
-                CTST 2Campus 공사 일정
+                {labels.title}
               </h2>
               <p className="mt-1 text-sm text-sky-50/90">
-                {canEdit
-                  ? "주요 공사 일정과 주간 실적을 등록·수정·삭제할 수 있습니다."
-                  : "주요 공사 일정과 주간 실적을 조회할 수 있습니다."}
+                {canEdit ? labels.subtitleCanEdit : labels.subtitleReadOnly}
               </p>
               <div className="mt-2.5 flex max-w-xl items-center gap-2 sm:max-w-2xl">
                 <div
@@ -208,7 +261,7 @@ export function Campus2ScheduleDetailModal({
                   aria-valuenow={overallBarPercent}
                   aria-valuemin={0}
                   aria-valuemax={100}
-                  aria-label="종합 달성률"
+                  aria-label={labels.progressAriaLabel}
                 >
                   <div
                     className={`h-full rounded-full bg-gradient-to-r from-sky-400 to-sky-600 transition-all duration-500 ${
@@ -225,7 +278,7 @@ export function Campus2ScheduleDetailModal({
               </div>
               {!canEdit ? (
                 <p className="mt-2 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-xs text-sky-50/95">
-                  실적 등록·수정·삭제와 종합 달성률 입력은 그룹장·팀장·관리자만 할 수 있습니다.
+                  {labels.permissionHint}
                 </p>
               ) : null}
             </div>
@@ -269,6 +322,8 @@ export function Campus2ScheduleDetailModal({
             weekly={weekly}
             weekColumns={weekColumns}
             monthGroups={monthGroups}
+            scheduleColumnHeader={labels.scheduleColumnHeader}
+            scheduleTableLayout={scheduleTableLayout}
             selectedWeekKey={selectedWeekKey}
             canEdit={canEdit}
             deleteWeeklyPending={deleteWeeklyMutation.isPending}
@@ -289,7 +344,7 @@ export function Campus2ScheduleDetailModal({
         />
       </DetailPanel>
 
-      <Campus2SchedulePerformanceModal
+      <PerformanceModal
         isOpen={selectedTask !== null}
         onClose={() => setSelectedTask(null)}
         task={selectedTask}
@@ -305,9 +360,36 @@ export function Campus2ScheduleDetailModal({
   return createPortal(modal, document.body);
 }
 
-function DetailPanel({ children }: { children: ReactNode }) {
+export function Campus2ScheduleDetailModal(
+  props: Omit<
+    ConstructionScheduleDetailModalProps,
+    "labels" | "PerformanceModal" | "overallMutation" | "deleteWeeklyMutation"
+  >
+) {
+  const overallMutation = useUpsertCampus2OverallAchievement(props.year);
+  const deleteWeeklyMutation = useDeleteCampus2WeeklyPerformance(props.year);
   return (
-    <div className="relative flex max-h-[95vh] w-full max-w-[min(100%,88rem)] flex-col overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-2xl shadow-sky-200/50">
+    <ConstructionScheduleDetailModal
+      labels={CAMPUS2_LABELS}
+      PerformanceModal={Campus2SchedulePerformanceModal}
+      overallMutation={overallMutation}
+      deleteWeeklyMutation={deleteWeeklyMutation}
+      {...props}
+    />
+  );
+}
+
+function DetailPanel({
+  children,
+  maxWidthClass = "max-w-[min(100%,88rem)]",
+}: {
+  children: ReactNode;
+  maxWidthClass?: string;
+}) {
+  return (
+    <div
+      className={`relative flex max-h-[95vh] w-full ${maxWidthClass} flex-col overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-2xl shadow-sky-200/50`}
+    >
       {children}
     </div>
   );
@@ -316,6 +398,17 @@ function DetailPanel({ children }: { children: ReactNode }) {
 function weekColumnHighlightClass(isCurrentWeek: boolean): string {
   return isCurrentWeek ? "bg-amber-50/70" : "";
 }
+
+/** 주차 열 너비 — 모든 주 동일 */
+const SCHEDULE_WEEK_COLUMN_CLASS =
+  "w-[84px] min-w-[84px] max-w-[84px] box-border";
+
+/** SMT 일정표 좌측 2열 (합계 248px — 헤더 colSpan=2와 동일) */
+const SMT_LINE_GROUP_COLUMN_CLASS =
+  "w-[76px] min-w-[76px] max-w-[76px] box-border";
+const SMT_PHASE_LABEL_COLUMN_CLASS =
+  "w-[172px] min-w-[172px] max-w-[172px] box-border";
+const SMT_STICKY_LABEL_COLUMNS_CLASS = "min-w-[248px] w-[248px]";
 
 function weekHeaderButtonClass(isCurrentWeek: boolean, isSelectedWeek: boolean): string {
   if (isSelectedWeek) {
@@ -332,6 +425,8 @@ function ScheduleTable({
   weekly,
   weekColumns,
   monthGroups,
+  scheduleColumnHeader,
+  scheduleTableLayout,
   selectedWeekKey,
   canEdit,
   deleteWeeklyPending,
@@ -343,6 +438,8 @@ function ScheduleTable({
   weekly: Campus2WeeklyPerformance[];
   weekColumns: Campus2WeekColumn[];
   monthGroups: MonthGroup[];
+  scheduleColumnHeader: string;
+  scheduleTableLayout: "default" | "smt-line-phase";
   selectedWeekKey: string;
   canEdit: boolean;
   deleteWeeklyPending: boolean;
@@ -350,6 +447,7 @@ function ScheduleTable({
   onSelectTask: (task: Campus2ScheduleTask) => void;
   onDeleteRowWeekly: (taskId: string) => void;
 }) {
+  const smtGrouped = scheduleTableLayout === "smt-line-phase";
   const currentWeekKey = useMemo(
     () => campus2CurrentWeekKey(weekColumns),
     [weekColumns]
@@ -361,14 +459,19 @@ function ScheduleTable({
 
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-300">
-      <table className="min-w-[960px] w-full border-collapse text-sm">
+      <table className="min-w-full w-full table-fixed border-collapse text-sm">
         <thead>
           <tr className="bg-slate-50 text-slate-700">
             <th
               rowSpan={2}
-              className="sticky left-0 z-20 min-w-[240px] border-b border-r border-slate-300 bg-slate-50 px-3 py-2 text-left font-semibold"
+              colSpan={smtGrouped ? 2 : 1}
+              className={`sticky left-0 z-20 border-b border-r border-slate-300 bg-slate-50 px-3 py-2 font-semibold ${
+                smtGrouped
+                  ? `${SMT_STICKY_LABEL_COLUMNS_CLASS} text-center`
+                  : "min-w-[240px] text-left"
+              }`}
             >
-              주요 공사 일정
+              {scheduleColumnHeader}
             </th>
             {monthGroups.map((group) => (
               <th
@@ -393,7 +496,7 @@ function ScheduleTable({
               return (
               <th
                 key={column.key}
-                className={`min-w-[72px] border-b border-r border-slate-300 px-1 py-2 text-center text-xs font-medium ${weekColumnHighlightClass(isCurrentWeek)}`}
+                className={`${SCHEDULE_WEEK_COLUMN_CLASS} border-b border-r border-slate-300 px-1 py-2 text-center text-xs font-medium ${weekColumnHighlightClass(isCurrentWeek)}`}
               >
                 <button
                   type="button"
@@ -409,7 +512,12 @@ function ScheduleTable({
           </tr>
         </thead>
         <tbody>
-          {tasks.map((task) => (
+          {tasks.map((task) => {
+            const phaseSep = task.title.indexOf("·");
+            const phaseOnly =
+              phaseSep >= 0 ? task.title.slice(phaseSep + 1).trim() : task.title;
+            const lineGroupStart = task.sortOrder === 1 || task.sortOrder === 5;
+            return (
             <ScheduleRow
               key={task.id}
               task={task}
@@ -421,8 +529,20 @@ function ScheduleTable({
               deleteWeeklyPending={deleteWeeklyPending}
               onSelectTask={onSelectTask}
               onDeleteRowWeekly={onDeleteRowWeekly}
+              smtLinePhaseLayout={smtGrouped}
+              smtLineGroupCell={
+                smtGrouped && lineGroupStart
+                  ? {
+                      line1: "SMT",
+                      line2: task.sortOrder <= 4 ? "신규라인" : "이설라인",
+                      rowSpan: 4,
+                    }
+                  : undefined
+              }
+              smtPhaseLabel={smtGrouped ? phaseOnly : undefined}
             />
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -439,6 +559,9 @@ function ScheduleRow({
   deleteWeeklyPending,
   onSelectTask,
   onDeleteRowWeekly,
+  smtLinePhaseLayout = false,
+  smtLineGroupCell,
+  smtPhaseLabel,
 }: {
   task: Campus2ScheduleTask;
   weekly: Campus2WeeklyPerformance[];
@@ -449,6 +572,9 @@ function ScheduleRow({
   deleteWeeklyPending: boolean;
   onSelectTask: (task: Campus2ScheduleTask) => void;
   onDeleteRowWeekly: (taskId: string) => void;
+  smtLinePhaseLayout?: boolean;
+  smtLineGroupCell?: { line1: string; line2: string; rowSpan: number };
+  smtPhaseLabel?: string;
 }) {
   const bar = campus2TaskBarSpan(task, weekColumns);
   const hasEntryForSelectedWeek = hasWeeklyEntryForWeek(
@@ -482,7 +608,7 @@ function ScheduleRow({
     timelineCells.push(
       <td
         key={`${task.id}-empty-${column.key}`}
-        className={`h-14 border-r border-slate-200 px-1 py-1 align-middle ${weekColumnHighlightClass(isCurrentWeekCell)}`}
+        className={`h-14 ${SCHEDULE_WEEK_COLUMN_CLASS} border-r border-slate-200 px-1 py-1 align-middle ${weekColumnHighlightClass(isCurrentWeekCell)}`}
       />
     );
     columnIndex += 1;
@@ -490,18 +616,47 @@ function ScheduleRow({
 
   return (
     <tr className="border-b border-slate-200">
-      <th
-        scope="row"
-        className="sticky left-0 z-10 border-r border-slate-300 bg-white px-3 py-3 text-left align-middle font-medium text-slate-800"
-      >
-        <button
-          type="button"
-          onClick={() => onSelectTask(task)}
-          className="w-full text-left hover:text-sky-700"
+      {smtLinePhaseLayout ? (
+        <>
+          {smtLineGroupCell ? (
+            <th
+              scope="row"
+              rowSpan={smtLineGroupCell.rowSpan}
+              className={`sticky left-0 z-10 ${SMT_LINE_GROUP_COLUMN_CLASS} border-r border-slate-300 bg-white px-1.5 py-3 text-center align-middle text-sm font-semibold leading-snug text-slate-800`}
+            >
+              <span className="flex flex-col items-center justify-center gap-0.5">
+                <span>{smtLineGroupCell.line1}</span>
+                <span>{smtLineGroupCell.line2}</span>
+              </span>
+            </th>
+          ) : null}
+          <th
+            scope="row"
+            className={`sticky left-[76px] z-10 ${SMT_PHASE_LABEL_COLUMN_CLASS} border-r border-slate-300 bg-white px-3 py-3 text-left align-middle font-medium text-slate-800`}
+          >
+            <button
+              type="button"
+              onClick={() => onSelectTask(task)}
+              className="w-full whitespace-nowrap text-left hover:text-sky-700"
+            >
+              {smtPhaseLabel ?? task.title}
+            </button>
+          </th>
+        </>
+      ) : (
+        <th
+          scope="row"
+          className="sticky left-0 z-10 border-r border-slate-300 bg-white px-3 py-3 text-left align-middle font-medium text-slate-800"
         >
-          {task.title}
-        </button>
-      </th>
+          <button
+            type="button"
+            onClick={() => onSelectTask(task)}
+            className="w-full text-left hover:text-sky-700"
+          >
+            {task.title}
+          </button>
+        </th>
+      )}
       {timelineCells}
       <td className="px-1 py-3 text-center align-middle">
         <div className="flex flex-wrap items-center justify-center gap-1">
@@ -537,8 +692,8 @@ function ScheduleRow({
 
 function ScheduleBar({ label }: { label: string }) {
   return (
-    <div className="flex h-10 items-center justify-center rounded-full bg-emerald-500 px-4 shadow-sm">
-      <span className="truncate text-center text-sm font-semibold text-slate-900">
+    <div className="flex h-10 min-w-0 items-center justify-center rounded-full bg-emerald-500 px-2 shadow-sm">
+      <span className="whitespace-nowrap text-center text-xs font-semibold leading-none text-slate-900 sm:text-sm">
         {label}
       </span>
     </div>

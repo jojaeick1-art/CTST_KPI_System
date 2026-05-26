@@ -1,10 +1,15 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { createBrowserSupabase } from "@/src/lib/supabase";
-import { canViewAllDepartmentCards, isAdminRole } from "@/src/lib/rbac";
+import {
+  approvalNotificationCount,
+  approvalNotificationDeptFilter,
+  canAccessApprovalsPage,
+  isAdminRole,
+} from "@/src/lib/rbac";
 import {
   useAppFeatureAvailability,
   useDashboardProfile,
@@ -28,18 +33,29 @@ export function CtstPortalShell({ children }: { children: React.ReactNode }) {
     typeof profileData.profile.dept_id === "string"
       ? profileData.profile.dept_id
       : null;
+  const userDeptIds = useMemo(
+    () =>
+      profileQuery.isSuccess && profileData != null
+        ? profileData.profile.dept_ids ?? (userDeptId ? [userDeptId] : [])
+        : [],
+    [profileQuery.isSuccess, profileData, userDeptId]
+  );
 
-  const summaryStatsQuery = useDashboardSummaryStats(
-    profileQuery.isSuccess && profileQuery.data !== null,
-    canViewAllDepartmentCards(resolvedRole ?? "") ? null : userDeptId,
+  const canSeeApprovals =
+    resolvedRole !== undefined && canAccessApprovalsPage(resolvedRole);
+  const approvalStatsQuery = useDashboardSummaryStats(
+    profileQuery.isSuccess && profileQuery.data !== null && canSeeApprovals,
+    approvalNotificationDeptFilter(resolvedRole, userDeptIds)
   );
   const appFeatureQuery = useAppFeatureAvailability(
     profileQuery.isSuccess && profileQuery.data !== null,
   );
 
-  const pendingApprovalCount =
-    (summaryStatsQuery.data?.pendingPrimaryCount ?? 0) +
-    (summaryStatsQuery.data?.pendingFinalCount ?? 0);
+  const pendingApprovalCount = approvalNotificationCount(
+    resolvedRole,
+    approvalStatsQuery.data?.pendingPrimaryCount ?? 0,
+    approvalStatsQuery.data?.pendingFinalCount ?? 0
+  );
 
   useEffect(() => {
     if (!profileQuery.isSuccess) return;

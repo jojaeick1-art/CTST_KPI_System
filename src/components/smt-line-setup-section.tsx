@@ -2,23 +2,23 @@
 
 import { useState } from "react";
 import type {
-  Campus2ScheduleTask,
-  Campus2WeekColumn,
-  Campus2WeeklyPerformance,
-} from "@/src/lib/campus2-schedule";
-import { Campus2ScheduleDetailModal } from "@/src/components/campus2-schedule-detail-modal";
+  SmtSetupScheduleTask,
+  SmtSetupWeekColumn,
+  SmtSetupWeeklyPerformance,
+} from "@/src/lib/smt-setup-schedule";
+import { SmtSetupScheduleDetailModal } from "@/src/components/smt-setup-schedule-detail-modal";
 
 type Props = {
   year: number;
-  tasks: Campus2ScheduleTask[];
-  weekly: Campus2WeeklyPerformance[];
-  weekColumns: Campus2WeekColumn[];
+  tasks: SmtSetupScheduleTask[];
+  weekly: SmtSetupWeeklyPerformance[];
+  weekColumns: SmtSetupWeekColumn[];
   overallAchievement: number;
   canEdit: boolean;
   isLoading?: boolean;
 };
 
-export function Campus2ScheduleSection({
+export function SmtLineSetupSection({
   year,
   tasks,
   weekly,
@@ -41,7 +41,7 @@ export function Campus2ScheduleSection({
   }
 
   return (
-  <>
+    <>
       <button
         type="button"
         onClick={() => setDetailOpen(true)}
@@ -50,7 +50,7 @@ export function Campus2ScheduleSection({
         <article>
           <div className="flex h-8 items-center justify-between gap-3">
             <h3 className="min-w-0 truncate text-lg font-semibold leading-none text-slate-800">
-              CTST 2Campus 공사 일정
+              SMT Line Set-up 현황
             </h3>
             <span className="text-2xl font-bold tabular-nums text-slate-800">
               {displayPercent}
@@ -63,7 +63,7 @@ export function Campus2ScheduleSection({
             aria-valuenow={displayPercent}
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-label="CTST 2Campus 공사 일정 종합 달성률"
+            aria-label="SMT Line Set-up 종합 달성률"
           >
             <div
               className={`h-full rounded-full bg-gradient-to-r from-sky-400 to-sky-600 transition-all duration-500 ${
@@ -75,7 +75,7 @@ export function Campus2ScheduleSection({
         </article>
       </button>
 
-      <Campus2ScheduleDetailModal
+      <SmtSetupScheduleDetailModal
         isOpen={detailOpen}
         onClose={() => setDetailOpen(false)}
         year={year}
