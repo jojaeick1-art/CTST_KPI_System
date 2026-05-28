@@ -35,6 +35,16 @@ function ensureReadySignedUrl(row: DownloadRequestRow): string | null {
   return null;
 }
 
+async function tryDirectSignedUrl(storagePath: string): Promise<string | null> {
+  const supabase = createBrowserSupabase();
+  const { data, error } = await supabase.storage
+    .from("kpi-evidence")
+    .createSignedUrl(storagePath, 60);
+  if (error) return null;
+  const url = data?.signedUrl?.trim();
+  return url ? url : null;
+}
+
 export async function requestEvidenceSignedUrl(
   storagePath: string
 ): Promise<string> {
@@ -42,6 +52,13 @@ export async function requestEvidenceSignedUrl(
   if (!cleanPath) {
     throw new Error("다운로드할 파일 경로가 없습니다.");
   }
+
+  // 위젯 큐 실패 시 Supabase 직접 서명 URL도 시도한다.
+  const tryFallbackDirect = async () => {
+    const direct = await tryDirectSignedUrl(cleanPath);
+    if (direct) return direct;
+    return null;
+  };
 
   const supabase = createBrowserSupabase();
   const { data: inserted, error: insertError } = await supabase
@@ -51,6 +68,8 @@ export async function requestEvidenceSignedUrl(
     .single();
 
   if (insertError) {
+    const direct = await tryFallbackDirect();
+    if (direct) return direct;
     throw new Error(`파일 다운로드 요청 생성 실패: ${insertError.message}`);
   }
 
@@ -72,6 +91,8 @@ export async function requestEvidenceSignedUrl(
       .maybeSingle();
 
     if (error) {
+      const direct = await tryFallbackDirect();
+      if (direct) return direct;
       throw new Error(`파일 다운로드 요청 확인 실패: ${error.message}`);
     }
 
@@ -79,5 +100,7 @@ export async function requestEvidenceSignedUrl(
     if (signedUrl) return signedUrl;
   }
 
+  const direct = await tryFallbackDirect();
+  if (direct) return direct;
   throw new Error("파일 준비 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.");
 }

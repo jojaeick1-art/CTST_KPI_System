@@ -218,19 +218,29 @@ export function ConstructionScheduleDetailModal({
   ) {
     const relPath = campus2EvidenceStoragePath(storedValue);
     if (!relPath) return;
-    let downloadWindow: Window | null = null;
     try {
       setDownloadingEvidence(true);
-      downloadWindow = window.open("about:blank", "_blank");
-      if (downloadWindow) downloadWindow.opener = null;
       const signedUrl = await requestEvidenceSignedUrl(relPath);
-      if (downloadWindow) {
-        downloadWindow.location.href = signedUrl;
-      } else {
-        window.open(signedUrl, "_blank", "noopener,noreferrer");
+      const response = await fetch(signedUrl);
+      if (!response.ok) {
+        throw new Error(`다운로드 요청 실패 (HTTP ${response.status})`);
       }
-    } catch {
-      downloadWindow?.close();
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = campus2EvidenceDisplayName(storedValue, originalFilenames, index);
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+    } catch (error) {
+      window.alert(
+        error instanceof Error
+          ? `첨부파일 다운로드에 실패했습니다.\n${error.message}`
+          : "첨부파일 다운로드에 실패했습니다."
+      );
     } finally {
       setDownloadingEvidence(false);
     }

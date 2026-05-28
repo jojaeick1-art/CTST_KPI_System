@@ -17,6 +17,10 @@ export function CapaSimulationParamsFields({
   shiftSummary,
   shiftPlaceholder,
   onOpenShiftModal,
+  layoutClassName,
+  arrayWidthClassName,
+  workDaysWidthClassName,
+  targetWidthClassName,
 }: {
   arrayMultiplier: number;
   onArrayMultiplierChange: (value: number) => void;
@@ -28,10 +32,14 @@ export function CapaSimulationParamsFields({
   shiftSummary: string;
   shiftPlaceholder?: string;
   onOpenShiftModal: () => void;
+  layoutClassName?: string;
+  arrayWidthClassName?: string;
+  workDaysWidthClassName?: string;
+  targetWidthClassName?: string;
 }) {
   return (
-    <>
-      <label className="flex w-24 flex-col gap-1">
+    <div className={layoutClassName ?? "contents"}>
+      <label className={`flex ${arrayWidthClassName ?? "w-24"} flex-col gap-1`}>
         <span className="text-xs font-medium text-slate-600">배열</span>
         <input
           type="number"
@@ -45,7 +53,7 @@ export function CapaSimulationParamsFields({
         />
       </label>
 
-      <label className="flex w-24 flex-col gap-1">
+      <label className={`flex ${workDaysWidthClassName ?? "w-24"} flex-col gap-1`}>
         <span className="text-xs font-medium text-slate-600">월 근무일수</span>
         <input
           type="number"
@@ -58,7 +66,7 @@ export function CapaSimulationParamsFields({
         />
       </label>
 
-      <label className="flex min-w-[140px] flex-col gap-1">
+      <label className={`flex ${targetWidthClassName ?? "min-w-[140px]"} flex-col gap-1`}>
         <span className="text-xs font-medium text-slate-600">목표 수량</span>
         <input
           type="number"
@@ -82,6 +90,6 @@ export function CapaSimulationParamsFields({
           {shiftPlaceholder ?? shiftSummary}
         </button>
       </div>
-    </>
+    </div>
   );
 }

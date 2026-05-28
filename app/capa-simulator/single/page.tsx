@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
-import { SingleSimulatorClient } from "./single-simulator-client";
+import { RecipeMasterClient } from "../recipe-master/recipe-master-client";
 
 export const metadata: Metadata = {
-  title: "CAPA 시뮬레이터",
+  title: "등록 | CAPA Simulator",
 };
 
 export default function SingleSimulatorPage() {
-  return <SingleSimulatorClient />;
+  return <RecipeMasterClient pageTitle="등록" />;
 }

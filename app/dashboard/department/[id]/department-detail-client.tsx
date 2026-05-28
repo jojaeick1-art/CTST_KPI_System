@@ -125,12 +125,6 @@ function monthLabel(month: number): string {
 
 type AchievementMonthSelection = MonthKey | "all";
 
-function defaultKpiMonth(): MonthKey {
-  const m = new Date().getMonth() + 1;
-  if (m >= 1 && m <= 12) return m as MonthKey;
-  return 1;
-}
-
 function periodSelectionLabel(year: number, month: AchievementMonthSelection): string {
   if (month === "all") return `${year}년 · 전체`;
   return `${year}년 · ${monthLabel(month)}`;
@@ -280,7 +274,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   const [selectedYear, setSelectedYear] = useState<number>(CURRENT_KPI_YEAR);
   const [draftYear, setDraftYear] = useState<number>(CURRENT_KPI_YEAR);
   const [draftAchievementMonth, setDraftAchievementMonth] =
-    useState<AchievementMonthSelection>(() => defaultKpiMonth());
+    useState<AchievementMonthSelection>("all");
   const detailQuery = useDepartmentKpiDetail(departmentId, selectedYear);
   const profile = profileQuery.data?.profile ?? null;
   const userDeptId =
@@ -314,7 +308,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingKpiItem, setEditingKpiItem] = useState<DepartmentKpiDetailItem | null>(null);
   const [selectedAchievementMonth, setSelectedAchievementMonth] =
-    useState<AchievementMonthSelection>(() => defaultKpiMonth());
+    useState<AchievementMonthSelection>("all");
   const [tableSort, setTableSort] = useState<{
     key: DepartmentTableSortKey | null;
     dir: SortDirection;

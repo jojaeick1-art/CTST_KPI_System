@@ -14,7 +14,11 @@ import type {
 const TRANSFER_TIMEOUT_MS = 60_000;
 const TRANSFER_POLL_MS = 1_000;
 const BRIDGE_BUCKET =
-  process.env.NEXT_PUBLIC_CAPA_BRIDGE_BUCKET?.trim() || "kpi-evidence";
+  process.env.NEXT_PUBLIC_CAPA_RECIPE_BUCKET?.trim() ||
+  process.env.NEXT_PUBLIC_CAPA_BRIDGE_BUCKET?.trim() ||
+  "capa-recipes";
+const LEGACY_BRIDGE_BUCKET =
+  process.env.NEXT_PUBLIC_CAPA_RECIPE_LEGACY_BUCKET?.trim() || "kpi-evidence";
 
 const SHARED_RECIPES_FOLDER = "capa-bridge/shared/recipes";
 
@@ -22,6 +26,8 @@ export type CapaRecipeCatalogItem = {
   storagePath: string;
   recipeId: string;
   name: string;
+  processGroup: string;
+  createdAt: string;
   updatedAt: string;
   processCount: number | null;
   createdByName?: string | null;
@@ -30,9 +36,30 @@ export type CapaRecipeCatalogItem = {
 type CapaRecipeFileRow = {
   id: string;
   name: string;
+  process_group: string | null;
   storage_path: string;
   process_count: number;
+  created_at: string;
   updated_at: string;
+  created_by_profile?:
+    | { full_name: string | null; username: string | null }
+    | { full_name: string | null; username: string | null }[]
+    | null;
+};
+
+export type CapaProcessGroup = {
+  id: string;
+  name: string;
+  sortOrder: number;
+  createdAt: string;
+  createdByName: string | null;
+};
+
+type CapaProcessGroupRow = {
+  id: string;
+  name: string;
+  sort_order: number;
+  created_at: string;
   created_by_profile?:
     | { full_name: string | null; username: string | null }
     | { full_name: string | null; username: string | null }[]
@@ -185,6 +212,41 @@ async function uploadRecipeBlob(
   return path;
 }
 
+async function downloadRecipeBlobFromBucket(
+  bucket: string,
+  storagePath: string
+): Promise<Blob | null> {
+  const supabase = createBrowserSupabase();
+  const { data, error } = await supabase.storage.from(bucket).download(storagePath);
+  if (error || !data) return null;
+  return data;
+}
+
+async function ensureRecipeInDedicatedBucket(storagePath: string): Promise<void> {
+  if (BRIDGE_BUCKET === LEGACY_BRIDGE_BUCKET) return;
+  const existsInDedicated = await downloadRecipeBlobFromBucket(BRIDGE_BUCKET, storagePath);
+  if (existsInDedicated) return;
+  const legacyBlob = await downloadRecipeBlobFromBucket(
+    LEGACY_BRIDGE_BUCKET,
+    storagePath
+  );
+  if (!legacyBlob) return;
+  const supabase = createBrowserSupabase();
+  const { error } = await supabase.storage.from(BRIDGE_BUCKET).upload(
+    storagePath,
+    legacyBlob,
+    {
+      upsert: true,
+      contentType: "application/json",
+    }
+  );
+  if (error) {
+    console.warn(
+      `CAPA recipe migration skipped (${storagePath}): ${error.message}`
+    );
+  }
+}
+
 async function upsertRecipeCatalogRow(input: {
   recipe: CapaRecipe;
   storagePath: string;
@@ -202,6 +264,7 @@ async function upsertRecipeCatalogRow(input: {
   const base = {
     id: input.recipe.meta.id,
     name: input.recipe.meta.name,
+    process_group: input.recipe.meta.processGroup?.trim() || "SMT",
     storage_path: input.storagePath,
     process_count: input.recipe.processes.length,
     schema_version: input.recipe.schemaVersion ?? CAPA_RECIPE_SCHEMA_VERSION,
@@ -276,6 +339,8 @@ function rowToCatalogItem(row: CapaRecipeFileRow): CapaRecipeCatalogItem {
     storagePath: row.storage_path,
     recipeId: row.id,
     name: row.name,
+    processGroup: row.process_group?.trim() || "SMT",
+    createdAt: row.created_at,
     updatedAt: row.updated_at,
     processCount: row.process_count,
     createdByName: displayNameFromProfile(
@@ -298,27 +363,207 @@ export async function listCapaRecipeCatalog(): Promise<CapaRecipeCatalogItem[]> 
   const { data, error } = await supabase
     .from("capa_recipe_files")
     .select(
-      "id, name, storage_path, process_count, updated_at, created_by_profile:profiles!capa_recipe_files_created_by_fkey(full_name, username)"
+      "id, name, process_group, storage_path, process_count, created_at, updated_at, created_by_profile:profiles!capa_recipe_files_created_by_fkey(full_name, username)"
     )
     .order("updated_at", { ascending: false });
 
   if (error) throw toTransferError(error.message);
 
-  return ((data ?? []) as CapaRecipeFileRow[]).map(rowToCatalogItem);
+  const items = ((data ?? []) as CapaRecipeFileRow[]).map(rowToCatalogItem);
+  if (BRIDGE_BUCKET !== LEGACY_BRIDGE_BUCKET) {
+    for (const item of items) {
+      await ensureRecipeInDedicatedBucket(item.storagePath);
+    }
+  }
+  return items;
+}
+
+function toProcessGroup(row: CapaProcessGroupRow): CapaProcessGroup {
+  return {
+    id: row.id,
+    name: row.name,
+    sortOrder: row.sort_order,
+    createdAt: row.created_at,
+    createdByName: displayNameFromProfile(
+      normalizeCreatedByProfile(row.created_by_profile)
+    ),
+  };
+}
+
+export async function listCapaProcessGroups(): Promise<CapaProcessGroup[]> {
+  const supabase = createBrowserSupabase();
+  const withProfile = await supabase
+    .from("capa_process_groups")
+    .select(
+      "id,name,sort_order,created_at,created_by_profile:profiles!capa_process_groups_created_by_fkey(full_name, username)"
+    )
+    .order("sort_order", { ascending: true });
+
+  if (!withProfile.error) {
+    return ((withProfile.data ?? []) as CapaProcessGroupRow[]).map(toProcessGroup);
+  }
+
+  // FK/스키마 캐시 반영 전에는 관계 조인이 실패할 수 있어, 기본 목록으로 폴백한다.
+  const fallback = await supabase
+    .from("capa_process_groups")
+    .select("id,name,sort_order,created_at")
+    .order("sort_order", { ascending: true });
+  if (fallback.error) throw toTransferError(fallback.error.message);
+  return ((fallback.data ?? []) as CapaProcessGroupRow[]).map(toProcessGroup);
+}
+
+export async function createCapaProcessGroup(name: string): Promise<void> {
+  const n = name.trim();
+  if (!n) throw new Error("공정명은 비워둘 수 없습니다.");
+  const supabase = createBrowserSupabase();
+  const { data: maxData } = await supabase
+    .from("capa_process_groups")
+    .select("sort_order")
+    .order("sort_order", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const nextSort = Number((maxData as { sort_order?: number } | null)?.sort_order ?? 0) + 10;
+  const uid = await getSessionUserId();
+  const withAudit = await supabase.from("capa_process_groups").insert({
+    name: n,
+    sort_order: nextSort,
+    created_by: uid,
+    updated_by: uid,
+  });
+  if (!withAudit.error) return;
+
+  // 마이그레이션 전(created_by/updated_by 없음) 환경 폴백
+  const fallback = await supabase.from("capa_process_groups").insert({
+    name: n,
+    sort_order: nextSort,
+  });
+  if (fallback.error) throw toTransferError(fallback.error.message);
+}
+
+export async function renameCapaProcessGroup(id: string, name: string): Promise<void> {
+  const n = name.trim();
+  if (!n) throw new Error("공정명은 비워둘 수 없습니다.");
+  const supabase = createBrowserSupabase();
+  const uid = await getSessionUserId();
+  const withAudit = await supabase
+    .from("capa_process_groups")
+    .update({ name: n, updated_by: uid, updated_at: new Date().toISOString() })
+    .eq("id", id);
+  if (!withAudit.error) return;
+
+  // 마이그레이션 전(updated_by 없음) 환경 폴백
+  const fallback = await supabase
+    .from("capa_process_groups")
+    .update({ name: n, updated_at: new Date().toISOString() })
+    .eq("id", id);
+  if (fallback.error) throw toTransferError(fallback.error.message);
+}
+
+export async function updateCapaProcessGroup(input: {
+  id: string;
+  name: string;
+  sortOrder: number;
+}): Promise<void> {
+  const name = input.name.trim();
+  if (!name) throw new Error("공정명은 비워둘 수 없습니다.");
+  const sortOrder = Number.isFinite(input.sortOrder) ? Math.floor(input.sortOrder) : 100;
+  const supabase = createBrowserSupabase();
+  const uid = await getSessionUserId();
+  const withAudit = await supabase
+    .from("capa_process_groups")
+    .update({
+      name,
+      sort_order: sortOrder,
+      updated_by: uid,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", input.id);
+  if (!withAudit.error) return;
+
+  // 마이그레이션 전(updated_by 없음) 환경 폴백
+  const fallback = await supabase
+    .from("capa_process_groups")
+    .update({
+      name,
+      sort_order: sortOrder,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", input.id);
+  if (fallback.error) throw toTransferError(fallback.error.message);
+}
+
+export async function deleteCapaProcessGroup(id: string): Promise<void> {
+  const supabase = createBrowserSupabase();
+  const { data: row, error: readErr } = await supabase
+    .from("capa_process_groups")
+    .select("name")
+    .eq("id", id)
+    .maybeSingle();
+  if (readErr) throw toTransferError(readErr.message);
+  const name = (row as { name?: string } | null)?.name?.trim();
+  if (!name) throw new Error("삭제할 공정을 찾지 못했습니다.");
+  const { data: recipes, error: readRecipesErr } = await supabase
+    .from("capa_recipe_files")
+    .select("id,storage_path")
+    .eq("process_group", name);
+  if (readRecipesErr) throw toTransferError(readRecipesErr.message);
+
+  const recipeRows = (recipes ?? []) as Array<{ id: string; storage_path: string }>;
+  const storagePaths = recipeRows
+    .map((r) => (typeof r.storage_path === "string" ? r.storage_path.trim() : ""))
+    .filter(Boolean);
+
+  if (storagePaths.length > 0) {
+    const { error: storageError } = await supabase.storage
+      .from(BRIDGE_BUCKET)
+      .remove(storagePaths);
+    if (storageError) {
+      throw new Error(`공정 하위 모델 파일 삭제 실패: ${storageError.message}`);
+    }
+  }
+
+  if (recipeRows.length > 0) {
+    const { error: deleteRecipesErr } = await supabase
+      .from("capa_recipe_files")
+      .delete()
+      .eq("process_group", name);
+    if (deleteRecipesErr) throw toTransferError(deleteRecipesErr.message);
+  }
+
+  const { error } = await supabase.from("capa_process_groups").delete().eq("id", id);
+  if (error) throw toTransferError(error.message);
 }
 
 /** Storage에서 레시피 JSON 로드 */
 export async function loadCapaRecipeFromStorage(
   storagePath: string
 ): Promise<CapaRecipe> {
-  const supabase = createBrowserSupabase();
-  const { data, error } = await supabase.storage
-    .from(BRIDGE_BUCKET)
-    .download(storagePath);
-  if (error || !data) {
-    throw new Error(error?.message ?? "레시피 파일 다운로드 실패");
+  const data =
+    (await downloadRecipeBlobFromBucket(BRIDGE_BUCKET, storagePath)) ??
+    (await downloadRecipeBlobFromBucket(LEGACY_BRIDGE_BUCKET, storagePath));
+  if (!data) {
+    throw new Error("레시피 파일 다운로드 실패");
   }
+  await ensureRecipeInDedicatedBucket(storagePath);
   return parseCapaRecipeJson(await data.text());
+}
+
+export async function deleteCapaRecipeCatalogItem(input: {
+  recipeId: string;
+  storagePath: string;
+}): Promise<void> {
+  const supabase = createBrowserSupabase();
+  const { error: storageError } = await supabase.storage
+    .from(BRIDGE_BUCKET)
+    .remove([input.storagePath]);
+  if (storageError) {
+    throw new Error(`레시피 파일 삭제 실패: ${storageError.message}`);
+  }
+  const { error } = await supabase
+    .from("capa_recipe_files")
+    .delete()
+    .eq("id", input.recipeId);
+  if (error) throw toTransferError(error.message);
 }
 
 /**

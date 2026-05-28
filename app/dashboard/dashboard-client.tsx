@@ -5,8 +5,6 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { CtstAppSidebar } from "@/src/components/ctst-app-sidebar";
-import { Campus2ScheduleSection } from "@/src/components/campus2-schedule-section";
-import { SmtLineSetupSection } from "@/src/components/smt-line-setup-section";
 import { createBrowserSupabase } from "@/src/lib/supabase";
 import type { DepartmentKpiSummary } from "@/src/types/kpi";
 import {
@@ -14,7 +12,6 @@ import {
   approvalNotificationDeptFilter,
   canAccessApprovalsPage,
   canViewAllDepartmentCards,
-  canEditCampus2Schedule,
   DASHBOARD_MAIN_QUERY,
   DASHBOARD_MAIN_QUERY_VALUE,
   DASHBOARD_SHOW_MAIN_SESSION_KEY,
@@ -28,8 +25,6 @@ import {
   useDashboardSummaryStats,
   useDepartmentKpiSummary,
 } from "@/src/hooks/useKpiQueries";
-import { useCampus2ScheduleBundle } from "@/src/hooks/useCampus2Schedule";
-import { useSmtSetupScheduleBundle } from "@/src/hooks/useSmtSetupSchedule";
 import { CURRENT_KPI_YEAR } from "@/src/lib/kpi-queries";
 import { CtstUserProfileMenu } from "@/src/components/ctst-user-profile-menu";
 
@@ -152,12 +147,6 @@ export function DashboardClient() {
     approvalNotificationDeptFilter(resolvedRole, userDeptIds)
   );
   const featureQuery = useAppFeatureAvailability(
-    profileQuery.isSuccess && profileQuery.data !== null
-  );
-  const campus2ScheduleQuery = useCampus2ScheduleBundle(
-    profileQuery.isSuccess && profileQuery.data !== null
-  );
-  const smtSetupScheduleQuery = useSmtSetupScheduleBundle(
     profileQuery.isSuccess && profileQuery.data !== null
   );
   const pendingApprovalCount =
@@ -344,31 +333,6 @@ export function DashboardClient() {
         </header>
 
         <div className="px-4 py-6 sm:p-8">
-          <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <Campus2ScheduleSection
-              year={campus2ScheduleQuery.data?.year ?? CURRENT_KPI_YEAR}
-              tasks={campus2ScheduleQuery.data?.tasks ?? []}
-              weekly={campus2ScheduleQuery.data?.weekly ?? []}
-              weekColumns={campus2ScheduleQuery.data?.weekColumns ?? []}
-              overallAchievement={
-                campus2ScheduleQuery.data?.overallAchievement ?? 0
-              }
-              canEdit={canEditCampus2Schedule(role)}
-              isLoading={campus2ScheduleQuery.isPending}
-            />
-            <SmtLineSetupSection
-              year={smtSetupScheduleQuery.data?.year ?? CURRENT_KPI_YEAR}
-              tasks={smtSetupScheduleQuery.data?.tasks ?? []}
-              weekly={smtSetupScheduleQuery.data?.weekly ?? []}
-              weekColumns={smtSetupScheduleQuery.data?.weekColumns ?? []}
-              overallAchievement={
-                smtSetupScheduleQuery.data?.overallAchievement ?? 0
-              }
-              canEdit={canEditCampus2Schedule(role)}
-              isLoading={smtSetupScheduleQuery.isPending}
-            />
-          </div>
-
           <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {summaryStatsQuery.isPending
               ? [0, 1, 2].map((idx) => (

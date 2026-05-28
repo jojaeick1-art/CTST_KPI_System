@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   capaInputClass,
-  capaInputClassCompact,
+  capaToolbarInputClass,
   capaMetricInputWidthClass,
 } from "@/src/components/capa/capa-input-classes";
 import {
@@ -52,6 +52,7 @@ export function ProcessThroughputInput({
   onCtSecChange,
   arrayMultiplier = 1,
   layout = "default",
+  inlineInputWidthClass,
 }: {
   ctSec: number;
   mode: ThroughputInputMode;
@@ -60,6 +61,7 @@ export function ProcessThroughputInput({
   /** 연배 — UPH 표시·역산에 반영 */
   arrayMultiplier?: number;
   layout?: "default" | "inline";
+  inlineInputWidthClass?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -84,9 +86,9 @@ export function ProcessThroughputInput({
 
   const inputClass =
     layout === "inline"
-      ? `w-24 ${capaInputClassCompact}`
+      ? `${inlineInputWidthClass ?? "w-24"} ${capaToolbarInputClass}`
       : `shrink-0 ${capaMetricInputWidthClass} ${capaInputClass}`;
-  const toggleHeight = layout === "inline" ? "h-9" : "h-10";
+  const toggleHeight = "h-10";
 
   const controls = (
     <>

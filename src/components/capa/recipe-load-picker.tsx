@@ -122,6 +122,9 @@ export function RecipeLoadPicker({
                           <Loader2 className="h-4 w-4 animate-spin text-sky-600" />
                         ) : (
                           <>
+                            {item.processGroup
+                              ? `${item.processGroup} · `
+                              : null}
                             {item.processCount != null
                               ? `공정 ${item.processCount} · `
                               : null}

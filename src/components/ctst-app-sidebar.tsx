@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { LogOut } from "lucide-react";
+import { ChevronDown, LogOut } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -49,7 +49,7 @@ const itemActiveOverlay =
   "relative z-10 border-transparent bg-transparent shadow-none font-semibold text-sky-900 hover:border-transparent hover:bg-transparent hover:shadow-none hover:text-sky-900";
 
 const slidingIndicatorClass =
-  "pointer-events-none absolute left-0 right-0 top-0 z-0 rounded-xl border border-sky-200/90 border-l-[3px] border-l-sky-500 bg-white shadow-sm shadow-sky-200/40 ring-1 ring-sky-100/90 will-change-[transform,height] transition-[transform,height,opacity] duration-[250ms] motion-reduce:transition-none [transition-timing-function:cubic-bezier(0.4,0,0.2,1)]";
+  "pointer-events-none absolute left-0 right-0 top-0 z-0 rounded-xl border border-sky-200/90 border-l-[3px] border-l-sky-500 bg-white shadow-sm shadow-sky-200/40 ring-1 ring-sky-100/90 will-change-[transform,height] transition-[transform,height,opacity] duration-300 ease-out motion-reduce:transition-none";
 
 type NavSlot =
   | "capaRecipeMaster"
@@ -59,9 +59,13 @@ type NavSlot =
   | "kpiRejected"
   | "kpiWithdrawn"
   | "voc"
+  | "investment"
+  | "construction"
+  | "setup"
   | "settings";
 
 type IndicatorBox = { top: number; height: number; opacity: number };
+type SectionKey = "shortcut" | "capa" | "kpi" | "etc" | "admin";
 
 /** 페이지 전환 시 사이드바가 리마운트되어도 직전 위치를 유지해 메뉴→메뉴 슬라이드 가능 */
 let sidebarIndicatorCache: IndicatorBox = { top: 0, height: 0, opacity: 0 };
@@ -112,6 +116,18 @@ function resolveActiveNavSlot(
     (pathname === "/voc" || pathname.startsWith("/voc"))
   ) {
     return "voc";
+  }
+
+  if (access.kpi && pathname === "/dashboard/construction") {
+    return "construction";
+  }
+
+  if (access.kpi && pathname === "/dashboard/investment") {
+    return "investment";
+  }
+
+  if (access.kpi && pathname === "/dashboard/setup") {
+    return "setup";
   }
 
   if (canAccessSystemSettings(role) && pathname === "/dashboard/settings") {
@@ -185,7 +201,12 @@ function useSlidingNavIndicator(
 
     const syncResize = () => {
       const next = measure();
-      if (!next) return;
+      if (!next) {
+        setBox((prev) =>
+          prev.opacity === 0 ? prev : { top: 0, height: 0, opacity: 0 },
+        );
+        return;
+      }
       applyBox(next, activeSlot);
     };
 
@@ -203,22 +224,43 @@ function useSlidingNavIndicator(
 }
 
 function NavSection({
+  sectionKey,
   title,
+  expanded,
+  onToggle,
   children,
 }: {
+  sectionKey: SectionKey;
   title: string;
+  expanded: boolean;
+  onToggle: (section: SectionKey) => void;
   children: React.ReactNode;
 }) {
   return (
     <div className="mt-5 first:mt-1">
-      <p className="mb-2 flex items-center gap-2.5 px-3 text-base font-bold tracking-tight text-slate-700">
+      <button
+        type="button"
+        onClick={() => onToggle(sectionKey)}
+        className="mb-2 flex w-full items-center gap-2.5 rounded-lg px-3 py-1 text-left text-base font-bold tracking-tight text-slate-700 transition-colors hover:bg-slate-100/70"
+        aria-expanded={expanded}
+      >
         <span
           className="h-4 w-0.5 shrink-0 rounded-full bg-gradient-to-b from-sky-400 to-sky-600"
           aria-hidden
         />
-        {title}
-      </p>
-      <div className="flex flex-col gap-1">{children}</div>
+        <span className="flex-1">{title}</span>
+        <ChevronDown
+          className={`h-4 w-4 shrink-0 text-slate-500 transition-transform duration-200 ${expanded ? "rotate-180" : ""}`}
+          aria-hidden
+        />
+      </button>
+      <div
+        className={`grid overflow-hidden transition-[grid-template-rows,opacity] duration-300 ease-out ${expanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}
+      >
+        <div className="min-h-0">
+          <div className="flex flex-col gap-1">{children}</div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -238,6 +280,15 @@ type Props = {
 
 function classForLink(active: boolean): string {
   return active ? `${itemBase} ${itemActiveOverlay}` : itemBase;
+}
+
+function sectionForSlot(slot: NavSlot | null): SectionKey | null {
+  if (!slot) return null;
+  if (slot === "settings") return "admin";
+  if (slot === "construction" || slot === "setup" || slot === "investment")
+    return "etc";
+  if (slot === "capaRecipeMaster" || slot === "capaSingle") return "capa";
+  return "kpi";
 }
 
 export function CtstAppSidebar({
@@ -355,7 +406,6 @@ export function CtstAppSidebar({
     {},
   );
   const innerRef = useRef<HTMLDivElement>(null);
-  const indicatorBox = useSlidingNavIndicator(activeSlot, linkRefs, innerRef);
 
   const capaRecipeMasterActive = activeSlot === "capaRecipeMaster";
   const capaSingleActive = activeSlot === "capaSingle";
@@ -367,6 +417,38 @@ export function CtstAppSidebar({
   const kpiWithdrawnActive = activeSlot === "kpiWithdrawn";
   const settingsActive = activeSlot === "settings";
   const vocActive = activeSlot === "voc";
+  const investmentActive = activeSlot === "investment";
+  const constructionActive = activeSlot === "construction";
+  const setupActive = activeSlot === "setup";
+  const activeSection = sectionForSlot(activeSlot);
+
+  const [expandedSections, setExpandedSections] = useState<
+    Record<SectionKey, boolean>
+  >({
+    shortcut: false,
+    capa: activeSection === "capa",
+    kpi: activeSection === "kpi",
+    etc: false,
+    admin: activeSection === "admin",
+  });
+
+  useEffect(() => {
+    if (!activeSection) return;
+    setExpandedSections((prev) =>
+      prev[activeSection] ? prev : { ...prev, [activeSection]: true },
+    );
+  }, [activeSection]);
+
+  const toggleSection = useCallback((section: SectionKey) => {
+    setExpandedSections((prev) => ({ ...prev, [section]: !prev[section] }));
+  }, []);
+  const indicatorActiveSlot =
+    activeSection && !expandedSections[activeSection] ? null : activeSlot;
+  const indicatorBox = useSlidingNavIndicator(
+    indicatorActiveSlot,
+    linkRefs,
+    innerRef,
+  );
 
   return (
     <aside className="flex w-full shrink-0 flex-col border-b border-sky-200/90 bg-gradient-to-b from-slate-50 via-white to-sky-50/35 md:sticky md:top-0 md:z-30 md:h-dvh md:max-h-dvh md:w-64 md:overflow-hidden md:border-b-0 md:border-r md:border-sky-200/90 md:shadow-[4px_0_28px_-12px_rgba(15,23,42,0.12)]">
@@ -395,7 +477,12 @@ export function CtstAppSidebar({
               transform: `translate3d(0,${indicatorBox.top}px,0)`,
             }}
           />
-        <NavSection title="바로가기">
+        <NavSection
+          sectionKey="shortcut"
+          title="바로가기"
+          expanded={expandedSections.shortcut}
+          onToggle={toggleSection}
+        >
           <a
             href={CTST_PUBLIC_SITE_URL}
             target="_blank"
@@ -432,7 +519,12 @@ export function CtstAppSidebar({
         </NavSection>
 
         {access.capa ? (
-          <NavSection title="CAPA">
+          <NavSection
+            sectionKey="capa"
+            title="CAPA Simulator"
+            expanded={expandedSections.capa}
+            onToggle={toggleSection}
+          >
             {showCapaRecipeMaster ? (
               <Link
                 ref={(el) => {
@@ -441,7 +533,7 @@ export function CtstAppSidebar({
                 href="/capa-simulator/recipe-master"
                 className={classForLink(capaRecipeMasterActive)}
               >
-                레시피 마스터
+                공정
               </Link>
             ) : null}
             <Link
@@ -451,13 +543,18 @@ export function CtstAppSidebar({
               href="/capa-simulator/single"
               className={classForLink(capaSingleActive)}
             >
-              Simulator
+              등록
             </Link>
           </NavSection>
         ) : null}
 
         {access.kpi ? (
-          <NavSection title="KPI">
+          <NavSection
+            sectionKey="kpi"
+            title="KPI"
+            expanded={expandedSections.kpi}
+            onToggle={toggleSection}
+          >
             <Link
               ref={(el) => {
                 linkRefs.current.kpi = el;
@@ -528,8 +625,50 @@ export function CtstAppSidebar({
           </NavSection>
         ) : null}
 
+        {access.kpi ? (
+          <NavSection
+            sectionKey="etc"
+            title="기타"
+            expanded={expandedSections.etc}
+            onToggle={toggleSection}
+          >
+            <Link
+              ref={(el) => {
+                linkRefs.current.investment = el;
+              }}
+              href="/dashboard/investment"
+              className={classForLink(investmentActive)}
+            >
+              투자
+            </Link>
+            <Link
+              ref={(el) => {
+                linkRefs.current.construction = el;
+              }}
+              href="/dashboard/construction"
+              className={classForLink(constructionActive)}
+            >
+              공사
+            </Link>
+            <Link
+              ref={(el) => {
+                linkRefs.current.setup = el;
+              }}
+              href="/dashboard/setup"
+              className={classForLink(setupActive)}
+            >
+              Set-up
+            </Link>
+          </NavSection>
+        ) : null}
+
         {canAccessSystemSettings(role) ? (
-          <NavSection title="관리자">
+          <NavSection
+            sectionKey="admin"
+            title="관리자"
+            expanded={expandedSections.admin}
+            onToggle={toggleSection}
+          >
             <Link
               ref={(el) => {
                 linkRefs.current.settings = el;

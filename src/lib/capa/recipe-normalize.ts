@@ -105,6 +105,7 @@ export function normalizeCapaRecipeFile(raw: unknown): CapaRecipe {
     meta: {
       id: meta.id?.trim() || newId(),
       name: meta.name?.trim() || "새 레시피",
+      processGroup: meta.processGroup?.trim() || "SMT",
       arrayMultiplier: normalizeArrayMultiplier(meta.arrayMultiplier),
       description: meta.description?.trim() || undefined,
       lineTopology: meta.lineTopology,
@@ -138,6 +139,7 @@ export function createEmptyCapaRecipe(name = "새 레시피"): CapaRecipe {
     meta: {
       id: newId(),
       name,
+      processGroup: "SMT",
       createdAt: now,
       updatedAt: now,
     },

@@ -92,12 +92,14 @@ function PeriodCapaRow({
 
 export function CapaPeriodCapaPanel({
   recipe,
+  simulationRecipe,
   shiftConfigured,
   shiftSelection,
   workDays,
   overrides,
 }: {
   recipe: CapaRecipe | null;
+  simulationRecipe?: CapaRecipe | null;
   shiftConfigured: boolean;
   shiftSelection: ShiftSelection;
   workDays: number;
@@ -114,16 +116,17 @@ export function CapaPeriodCapaPanel({
   }, [recipe]);
 
   const changed = useMemo(() => {
-    if (!recipe || !shiftConfigured) return null;
+    const activeRecipe = simulationRecipe ?? recipe;
+    if (!activeRecipe || !shiftConfigured) return null;
     const monthDays = Math.max(1, workDays);
     return computeLinePeriodCapa({
-      recipe,
+      recipe: activeRecipe,
       shiftSelection,
       overrides,
       monthDays,
       yearDays: monthDays * 12,
     });
-  }, [recipe, shiftConfigured, shiftSelection, workDays, overrides]);
+  }, [recipe, simulationRecipe, shiftConfigured, shiftSelection, workDays, overrides]);
 
   if (!recipe) return null;
 

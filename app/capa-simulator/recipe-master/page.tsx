@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
-import { RecipeMasterClient } from "./recipe-master-client";
+import { ProcessHubClient } from "./process-hub-client";
 
 export const metadata: Metadata = {
-  title: "레시피 마스터 | CAPA Simulator",
+  title: "공정 | CAPA Simulator",
 };
 
 export default function RecipeMasterPage() {
-  return <RecipeMasterClient />;
+  return <ProcessHubClient />;
 }

@@ -160,6 +160,29 @@ export function canEditCampus2Schedule(role: string | null | undefined): boolean
   );
 }
 
+/** 투자 심의 대시보드 접근 — 대표·그룹장·팀장·관리자 */
+export function canAccessInvestmentDashboard(role: string | null | undefined): boolean {
+  const n = normalizeRole(role);
+  return (
+    n === "admin" ||
+    n === "ceo" ||
+    n === "group_leader" ||
+    n === "team_leader" ||
+    n === "group_team_leader"
+  );
+}
+
+/** 투자 심의 대시보드 편집 — 그룹장·팀장·관리자 (대표 조회 전용) */
+export function canEditInvestmentDashboard(role: string | null | undefined): boolean {
+  const n = normalizeRole(role);
+  return (
+    n === "admin" ||
+    n === "group_leader" ||
+    n === "team_leader" ||
+    n === "group_team_leader"
+  );
+}
+
 /**
  * KPI 항목 실적 방식(% / PPM / 수량(k) / 건수) 드롭다운 편집
  * — 관리자·그룹장·팀장 (소속 부서 화면은 호출부에서 제한, RLS는 Supabase).
