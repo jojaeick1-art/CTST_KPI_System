@@ -37,5 +37,15 @@ begin
   end if;
 end $$;
 
-alter table public.investment_stage_columns
-  add constraint investment_stage_columns_project_name_key unique (project_id, name);
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'investment_stage_columns_project_name_key'
+      and conrelid = 'public.investment_stage_columns'::regclass
+  ) then
+    alter table public.investment_stage_columns
+      add constraint investment_stage_columns_project_name_key unique (project_id, name);
+  end if;
+end $$;
