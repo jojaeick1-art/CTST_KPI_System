@@ -98,26 +98,38 @@ export async function listInvestmentDashboardBundle(): Promise<InvestmentDashboa
       )
       .order("sort_order", { ascending: true });
 
-    let projectsResult = await projectQueryWithProgress;
-    if (projectsResult.error?.message?.includes("progress_rate")) {
-      projectsResult = await supabase
+    const projectsResultWithProgress = await projectQueryWithProgress;
+    let projectsRaw: Array<Record<string, unknown>> | null = null;
+    let projectError = projectsResultWithProgress.error;
+    if (projectError?.message?.includes("progress_rate")) {
+      const projectsResultFallback = await supabase
         .from("investment_projects")
         .select(
           "id, sort_order, item_name, amount_k_krw, dept_name, owner_name, detail, created_at, updated_at"
         )
         .order("sort_order", { ascending: true });
+      projectsRaw = (projectsResultFallback.data ?? []) as Array<Record<string, unknown>>;
+      projectError = projectsResultFallback.error;
+    } else {
+      projectsRaw = (projectsResultWithProgress.data ?? []) as Array<Record<string, unknown>>;
     }
 
     const stageQueryWithProject = supabase
       .from("investment_stage_columns")
       .select("id, project_id, sort_order, name")
       .order("sort_order", { ascending: true });
-    let stageResult = await stageQueryWithProject;
-    if (stageResult.error?.message?.includes("project_id")) {
-      stageResult = await supabase
+    const stageResultWithProject = await stageQueryWithProject;
+    let stageColumnsRaw: Array<Record<string, unknown>> | null = null;
+    let stageError = stageResultWithProject.error;
+    if (stageError?.message?.includes("project_id")) {
+      const stageResultFallback = await supabase
         .from("investment_stage_columns")
         .select("id, sort_order, name")
         .order("sort_order", { ascending: true });
+      stageColumnsRaw = (stageResultFallback.data ?? []) as Array<Record<string, unknown>>;
+      stageError = stageResultFallback.error;
+    } else {
+      stageColumnsRaw = (stageResultWithProject.data ?? []) as Array<Record<string, unknown>>;
     }
 
     const entryResult = await supabase
@@ -126,10 +138,6 @@ export async function listInvestmentDashboardBundle(): Promise<InvestmentDashboa
         "id, project_id, stage_column_id, plan_date, actual_date, evidence_storage_path, evidence_file_name, updated_at"
       );
 
-    const projects = projectsResult.data;
-    const projectError = projectsResult.error;
-    const stageColumns = stageResult.data;
-    const stageError = stageResult.error;
     const entries = entryResult.data;
     const entryError = entryResult.error;
 
@@ -137,14 +145,14 @@ export async function listInvestmentDashboardBundle(): Promise<InvestmentDashboa
     if (stageError) throw stageError;
     if (entryError) throw entryError;
 
+    const projects = projectsRaw ?? [];
+    const stageColumns = stageColumnsRaw ?? [];
+
     const firstProjectId =
-      (projects?.[0] as { id?: unknown } | undefined)?.id &&
-      typeof (projects?.[0] as { id?: unknown }).id === "string"
-        ? ((projects?.[0] as { id: string }).id as string)
-        : null;
+      typeof projects[0]?.id === "string" ? (projects[0].id as string) : null;
 
     return {
-      projects: (projects || []).map((r) => ({
+      projects: projects.map((r) => ({
         id: r.id as string,
         sortOrder: Number(r.sort_order ?? 0),
         itemName: (r.item_name as string) || "",
@@ -152,15 +160,16 @@ export async function listInvestmentDashboardBundle(): Promise<InvestmentDashboa
         deptName: (r.dept_name as string | null) ?? null,
         ownerName: (r.owner_name as string | null) ?? null,
         detail: (r.detail as string | null) ?? null,
-        progressRate: r.progress_rate == null ? null : Number(r.progress_rate),
+        progressRate:
+          r.progress_rate == null ? null : Number(r.progress_rate as number | string),
         createdAt: (r.created_at as string) || "",
         updatedAt: (r.updated_at as string) || "",
       })),
-      stageColumns: (stageColumns || []).map((r) => ({
+      stageColumns: stageColumns.map((r) => ({
         id: r.id as string,
         projectId:
-          typeof (r as { project_id?: unknown }).project_id === "string"
-            ? ((r as { project_id: string }).project_id as string)
+          typeof r.project_id === "string"
+            ? (r.project_id as string)
             : firstProjectId ?? "",
         sortOrder: Number(r.sort_order ?? 0),
         name: (r.name as string) || "",
