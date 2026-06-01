@@ -2,4 +2,4 @@
 export const CTST_PUBLIC_SITE_URL = "https://ctst.co.kr/";
 
 /** ESD Log Server (바로가기 — 그룹장·팀장·대표·관리자만 접속) */
-export const ESD_LOG_SERVER_URL = "http://62.12.0.113:8080/";
+export const ESD_LOG_SERVER_URL = "http://62.12.0.140:8080/";
