@@ -20,8 +20,11 @@ export function normalizeDeptNameKey(name: string): string {
 export function orderDepartmentsForDisplay(
   departments: { id: string; name: string }[]
 ): { id: string; name: string }[] {
-  const priorityIndex = new Map(
-    DISPLAY_DEPT_PRIORITY_KEYS.map((key, index) => [key, index])
+  const priorityIndex = new Map<string, number>(
+    DISPLAY_DEPT_PRIORITY_KEYS.map((key, index) => [
+      normalizeDeptNameKey(key),
+      index,
+    ])
   );
   return [...departments].sort((a, b) => {
     const pa = priorityIndex.get(normalizeDeptNameKey(a.name));
