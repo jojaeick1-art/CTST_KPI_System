@@ -1,5 +1,8 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
+
 type ToastTone = "success" | "error" | "info";
 
 export type ToastState = {
@@ -17,7 +20,13 @@ export function AppToast({
   onClose: () => void;
   position?: "top-right" | "center" | "top-center";
 }) {
-  if (!state.open) return null;
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!state.open || !mounted) return null;
   const toneClass =
     state.tone === "success"
       ? "border-emerald-200 bg-emerald-50 text-emerald-900"
@@ -25,18 +34,18 @@ export function AppToast({
         ? "border-red-200 bg-red-50 text-red-900"
         : "border-sky-200 bg-sky-50 text-sky-900";
 
-  return (
+  const toastTree = (
     <div
       className={
         position === "center"
-          ? "fixed inset-0 z-[100] flex items-center justify-center"
+          ? "pointer-events-none fixed inset-0 z-[100] flex items-center justify-center"
           : position === "top-center"
-            ? "fixed left-1/2 top-4 z-[100] w-full max-w-md -translate-x-1/2 px-4"
-            : "fixed right-4 top-4 z-[100] max-w-sm"
+            ? "pointer-events-none fixed left-1/2 top-4 z-[100] w-[min(100vw-2rem,28rem)] -translate-x-1/2"
+            : "pointer-events-none fixed right-4 top-4 z-[100] max-w-sm"
       }
     >
       <div
-        className={`rounded-xl border px-4 py-3 text-sm shadow-lg ${toneClass} ${
+        className={`pointer-events-auto rounded-xl border px-4 py-3 text-sm shadow-lg ${toneClass} ${
           position === "center" ? "mx-4 w-full max-w-md" : "w-full"
         }`}
         role="status"
@@ -58,5 +67,7 @@ export function AppToast({
       </div>
     </div>
   );
+
+  return createPortal(toastTree, document.body);
 }
 

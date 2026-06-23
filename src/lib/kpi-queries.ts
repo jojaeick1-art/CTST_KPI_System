@@ -1,3 +1,4 @@
+import { orderDepartmentsForDisplay } from "@/src/lib/display-config";
 import { createBrowserSupabase } from "@/src/lib/supabase";
 import { normalizeRole } from "@/src/lib/rbac";
 import { roundToMax2DecimalPlaces } from "@/src/lib/format-display-number";
@@ -663,22 +664,10 @@ function actualSumFromPeriodStartThroughMonth(
   return Math.max(0, throughTo - before);
 }
 
-/**
- * 부서 KPI 목록·전체보기 대표 달성률.
- * - **누적 계산**: 평가 시작~최신 실적월까지 실적 합(또는 저장 방식에 맞는 구간 합) vs **평가 말월 누적 목표 합**.
- * - **당월 단독**: 월별 목표가 **각 월의 절대 지표값**(ppm·Cpk 등)인 경우 — 합산 금지. **평가 말월 그 달의 목표** vs **가장 늦은 실적 월의 실적 1건**.
- *   (수량·금액·시간 등 **월별 증가분 합산**이 맞는 지표만 구간 실적 합을 사용.)
- */
-function periodEndOverallAchievementPercentFromMonthlyTarget(
-  targetRow: Record<string, unknown>,
-  ctx: MonthlyAchievementRateContext,
+function normalizeEvaluationPeriodMonths(
   periodStartRaw: number | null,
   periodEndRaw: number | null
-): number | null {
-  const raw = targetRow.performance_monthly;
-  if (!performanceMonthlyIsNonEmpty(raw)) return null;
-  const o = raw as Record<string, unknown>;
-
+): { periodStart: MonthKey; periodEnd: MonthKey } | null {
   const periodStart = (
     periodStartRaw !== null &&
     Number.isInteger(periodStartRaw) &&
@@ -696,6 +685,129 @@ function periodEndOverallAchievementPercentFromMonthlyTarget(
       : 12
   ) as MonthKey;
   if (periodStart > periodEnd) return null;
+  return { periodStart, periodEnd };
+}
+
+/** 당월 단독 전체 기간 평균 분모에 포함되는 평가월(목표 공백 처리 반영). */
+function monthCountsInStandalonePeriodAverage(
+  month: MonthKey,
+  periodStart: MonthKey,
+  periodEnd: MonthKey,
+  ctx: MonthlyAchievementRateContext
+): boolean {
+  if (month < periodStart || month > periodEnd) return false;
+
+  const exactTarget = ctx.monthlyTargets[month];
+  if (typeof exactTarget === "number" && Number.isFinite(exactTarget)) return true;
+
+  if (ctx.targetFillPolicy === "carry_forward") {
+    for (let m = month - 1; m >= periodStart; m -= 1) {
+      const prior = ctx.monthlyTargets[m];
+      if (typeof prior === "number" && Number.isFinite(prior)) return true;
+    }
+  }
+
+  const resolved = resolveCurrentMonthlyTargetMetric(month, "monthly", ctx);
+  if (resolved !== null && Number.isFinite(resolved)) return true;
+
+  return Object.keys(ctx.monthlyTargets).length === 0 && ctx.normalMonthlyContext !== null;
+}
+
+/**
+ * 당월 단독 KPI 전체 기간 달성률.
+ * 평가 기간 내 각 월 달성률의 산술 평균 — 실적 없는 평가월은 0%.
+ */
+function monthlyStandaloneOverallAchievementPercent(
+  cells: Record<string, unknown>,
+  ctx: MonthlyAchievementRateContext,
+  periodStart: MonthKey,
+  periodEnd: MonthKey
+): number | null {
+  let sum = 0;
+  let count = 0;
+
+  for (let m = periodStart; m <= periodEnd; m += 1) {
+    const month = m as MonthKey;
+    if (!monthCountsInStandalonePeriodAverage(month, periodStart, periodEnd, ctx)) {
+      continue;
+    }
+    count += 1;
+
+    const cell = cells[String(month)];
+    const actual =
+      cell && typeof cell === "object" && !Array.isArray(cell)
+        ? toNum(
+            (cell as PerformanceMonthlyCell).actual_value as
+              | number
+              | string
+              | null
+              | undefined
+          )
+        : null;
+
+    if (actual === null || !Number.isFinite(actual)) {
+      continue;
+    }
+
+    const rate = monthlyAchievementRateFromCurrentTarget(cells, month, ctx);
+    sum +=
+      rate !== null && Number.isFinite(rate)
+        ? applyAchievementCap(rate, ctx.achievementCap ?? 100)
+        : 0;
+  }
+
+  if (count <= 0) return null;
+  return sum / count;
+}
+
+function resolveOverallAggregationType(
+  cells: Record<string, unknown>,
+  ctx: MonthlyAchievementRateContext
+): KpiAggregationType {
+  if (ctx.aggregationType === "cumulative" || ctx.aggregationType === "monthly") {
+    return ctx.aggregationType;
+  }
+  let latestMonth = -1;
+  let latestAgg: KpiAggregationType | null = null;
+  for (const mi of KPI_MONTHS) {
+    const cell = cells[String(mi)];
+    if (!cell || typeof cell !== "object" || Array.isArray(cell)) continue;
+    const parsed = parseAggregationType(
+      (cell as PerformanceMonthlyCell).aggregation_type
+    );
+    if (!parsed) continue;
+    const mn = Number(mi);
+    if (mn > latestMonth) {
+      latestMonth = mn;
+      latestAgg = parsed;
+    }
+  }
+  return latestAgg ?? "monthly";
+}
+
+/**
+ * 부서 KPI 목록·전체보기 대표 달성률.
+ * - **당월 단독**: 평가 기간 각 월 달성률 평균(실적 없는 평가월 = 0%).
+ * - **누적 계산**: 평가 시작~최신 실적월까지 실적 합 vs **평가 말월 누적 목표 합**.
+ */
+function periodEndOverallAchievementPercentFromMonthlyTarget(
+  targetRow: Record<string, unknown>,
+  ctx: MonthlyAchievementRateContext,
+  periodStartRaw: number | null,
+  periodEndRaw: number | null
+): number | null {
+  const raw = targetRow.performance_monthly;
+  if (!performanceMonthlyIsNonEmpty(raw)) return null;
+  const o = raw as Record<string, unknown>;
+
+  const period = normalizeEvaluationPeriodMonths(periodStartRaw, periodEndRaw);
+  if (!period) return null;
+  const { periodStart, periodEnd } = period;
+
+  const agg = resolveOverallAggregationType(o, ctx);
+  if (agg === "monthly") {
+    return monthlyStandaloneOverallAchievementPercent(o, ctx, periodStart, periodEnd);
+  }
 
   let latestM = -1;
   for (const mi of KPI_MONTHS) {
@@ -709,50 +821,16 @@ function periodEndOverallAchievementPercentFromMonthlyTarget(
   }
   if (latestM < 0) return null;
 
-  const latestCell = o[String(latestM)] as PerformanceMonthlyCell;
-  const agg =
-    parseAggregationType(latestCell.aggregation_type) ??
-    ctx.aggregationType ??
-    "monthly";
-
   const sumThroughLatest = actualSumFromPeriodStartThroughMonth(
     o,
     periodStart,
     latestM as MonthKey
   );
-  const actualFromLatestCell = toNum(
-    latestCell.actual_value as number | string | null | undefined
-  );
-  /** 당월 단독이어도 월별 값을 더해야 하는 지표(월 증가분 합이 의미 있음) */
-  const useSumOfMonthsForActual =
-    agg === "cumulative" ||
-    ctx.indicatorType === "quantity" ||
-    ctx.indicatorType === "count" ||
-    ctx.indicatorType === "money" ||
-    ctx.indicatorType === "time" ||
-    ctx.indicatorType === "minutes";
+  const actualOverall = sumThroughLatest;
 
-  const actualOverall =
-    useSumOfMonthsForActual ||
-    actualFromLatestCell === null ||
-    !Number.isFinite(actualFromLatestCell)
-      ? sumThroughLatest
-      : actualFromLatestCell;
-
-  let periodTarget: number | null = null;
-  if (agg === "cumulative") {
-    periodTarget = cumulativeTargetThroughMonthFromPlan(ctx.monthlyTargets, periodEnd);
-    if (periodTarget === null) {
-      periodTarget = resolveCurrentMonthlyTargetMetric(periodEnd, "cumulative", ctx);
-    }
-  } else {
-    periodTarget = resolveCurrentMonthlyTargetMetric(periodEnd, "monthly", ctx);
-    if (periodTarget === null && ctx.normalMonthlyContext?.targetFinalValue != null) {
-      periodTarget = ctx.normalMonthlyContext.targetFinalValue;
-    }
-    if (periodTarget === null) {
-      periodTarget = cumulativeTargetThroughMonthFromPlan(ctx.monthlyTargets, periodEnd);
-    }
+  let periodTarget = cumulativeTargetThroughMonthFromPlan(ctx.monthlyTargets, periodEnd);
+  if (periodTarget === null) {
+    periodTarget = resolveCurrentMonthlyTargetMetric(periodEnd, "cumulative", ctx);
   }
 
   if (periodTarget === null || !Number.isFinite(periodTarget) || periodTarget < 0) {
@@ -1044,7 +1122,8 @@ function collectApprovedAchievementRatesForItemTargets(
 
 /**
  * 목록·집계에서 KPI 항목 1건의 대표 달성률(평균용 보조).
- * - 월별 JSON이 있으면 `periodEndOverallAchievementPercentFromMonthlyTarget`가 우선.
+ * - 월별 JSON이 있으면 `periodEndOverallAchievementPercentFromMonthlyTarget`가 우선
+ *   (당월 단독: 평가월 달성률 평균, 누적: 말월 누적 목표 대비).
  * - 레거시 분기·반기: 수집된 값 평균.
  */
 function representativeAchievementPercentForRates(
@@ -2103,6 +2182,76 @@ function mergeLinkedKpiDetailItems(
     );
   }
   return out;
+}
+
+export type DisplayKpiSlide =
+  | {
+      slideType: "kpi";
+      deptId: string;
+      deptName: string;
+      item: DepartmentKpiDetailItem;
+    }
+  | {
+      slideType: "dept-empty";
+      deptId: string;
+      deptName: string;
+    };
+
+function compareDisplayKpiItems(
+  a: DepartmentKpiDetailItem,
+  b: DepartmentKpiDetailItem
+): number {
+  const main = a.mainTopic.localeCompare(b.mainTopic, "ko");
+  if (main !== 0) return main;
+  const sub = a.subTopic.localeCompare(b.subTopic, "ko");
+  if (sub !== 0) return sub;
+  return a.detailActivity.localeCompare(b.detailActivity, "ko");
+}
+
+/**
+ * TV 전시용 슬라이드 목록 (대시보드 슬라이드 제외).
+ * - departments 테이블 기준: 신규 부서·KPI 자동 반영
+ * - KPI 없는 부서는 안내 슬라이드 1장
+ */
+export async function fetchDisplayKpiSlides(
+  dataYear: number = CURRENT_KPI_YEAR
+): Promise<DisplayKpiSlide[]> {
+  const supabase = createBrowserSupabase();
+  const { data: departments, error: deptErr } = await supabase
+    .from("departments")
+    .select("id, name");
+
+  if (deptErr || !departments?.length) {
+    return [];
+  }
+
+  const orderedDepts = orderDepartmentsForDisplay(
+    departments.map((d) => ({ id: d.id, name: d.name }))
+  );
+
+  const slides: DisplayKpiSlide[] = [];
+  for (const dept of orderedDepts) {
+    const detail = await fetchDepartmentKpiDetail(dept.id, dataYear);
+    const deptName = detail.department?.name ?? dept.name;
+    const sorted = [...detail.items].sort(compareDisplayKpiItems);
+    if (sorted.length === 0) {
+      slides.push({
+        slideType: "dept-empty",
+        deptId: dept.id,
+        deptName,
+      });
+      continue;
+    }
+    for (const item of sorted) {
+      slides.push({
+        slideType: "kpi",
+        deptId: dept.id,
+        deptName,
+        item,
+      });
+    }
+  }
+  return slides;
 }
 
 type DepartmentFilterScope = string | string[] | null | undefined;

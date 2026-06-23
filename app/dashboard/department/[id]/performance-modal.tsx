@@ -413,6 +413,10 @@ type Props = {
   onExtendPeriodEndMonth?: (kpiId: string) => Promise<boolean> | boolean;
   /** 부서 상세 딥링크 등에서 모달 열 때 선택할 월 */
   initialEditorMonth?: MonthKey | null;
+  /** TV 전시(/display): 닫기·우측 입력·승인 UI 숨김, 전체화면 레이아웃 */
+  kioskMode?: boolean;
+  /** TV 전시 시 헤더 상단 중앙에 표시할 부서명 */
+  kioskDeptName?: string;
 };
 
 function toNumber(v: string): number | null {
@@ -2182,6 +2186,8 @@ export function PerformanceModal({
   onFinalizeKpiItem,
   onExtendPeriodEndMonth,
   initialEditorMonth = null,
+  kioskMode = false,
+  kioskDeptName,
 }: Props) {
   const linkedSecondaryItem = kpiItem?.linkedSecondary ?? null;
   const perfQueryPrimary = useKpiPerformances(
@@ -4181,30 +4187,41 @@ export function PerformanceModal({
     if (!ok) return;
   }
 
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3"
-      role="presentation"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
+  if (!isOpen || !kpiItem) return null;
+
+  const shell = (
+    <>
       <AppToast
         state={toast}
         onClose={() => setToast((prev) => ({ ...prev, open: false }))}
         position="top-center"
       />
-      <div className="relative flex max-h-[95vh] w-full max-w-[min(100%,88rem)] flex-col overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-2xl shadow-sky-200/50">
+      <div
+        className={
+          kioskMode
+            ? "relative flex h-full w-full flex-col overflow-hidden bg-white"
+            : "relative flex max-h-[95vh] w-full max-w-[min(100%,88rem)] flex-col overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-2xl shadow-sky-200/50"
+        }
+      >
         <div className="relative shrink-0 border-b border-sky-200 bg-gradient-to-br from-sky-600 to-sky-700 px-5 py-5 text-white">
-          <button
-            type="button"
-            onClick={onClose}
-            className="absolute right-4 top-4 z-10 rounded-lg p-1.5 text-white/90 hover:bg-white/10 sm:right-5 sm:top-5"
-            aria-label="닫기"
+          {!kioskMode ? (
+            <button
+              type="button"
+              onClick={onClose}
+              className="absolute right-4 top-4 z-10 rounded-lg p-1.5 text-white/90 hover:bg-white/10 sm:right-5 sm:top-5"
+              aria-label="닫기"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          ) : null}
+          {kioskMode && kioskDeptName ? (
+            <p className="pointer-events-none absolute left-1/2 top-1/2 z-[1] -translate-x-1/2 -translate-y-1/2 whitespace-nowrap text-3xl font-bold tracking-wide text-white sm:text-4xl lg:text-5xl">
+              {kioskDeptName}
+            </p>
+          ) : null}
+          <div
+            className={`relative z-[2] flex gap-4 ${kioskMode ? "items-center" : "items-start pr-9 sm:pr-11"}`}
           >
-            <X className="h-5 w-5" />
-          </button>
-          <div className="flex items-start gap-4 pr-9 sm:pr-11">
             <div className="min-w-0 flex-1">
               <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold leading-snug text-sky-50 sm:text-base">
                 <span
@@ -4274,7 +4291,7 @@ export function PerformanceModal({
                   </p>
                 ) : null}
               </div>
-              {canFinalComplete && headerItem.isFinalCompleted ? (
+              {canFinalComplete && headerItem.isFinalCompleted && !kioskMode ? (
                 <button
                   type="button"
                   onClick={() => void handleWithdrawFinalCompletionInModal()}
@@ -5011,6 +5028,7 @@ export function PerformanceModal({
             </div>
 
             {workflowPrimaryVisible || workflowFinalVisible ? (
+              !kioskMode ? (
               <div className="mt-4 border-t border-sky-200/80 pt-4">
                 <p className="mb-2 text-xs font-semibold text-slate-700">
                   승인 처리 (그룹장·팀장·관리자)
@@ -5046,10 +5064,12 @@ export function PerformanceModal({
                   </button>
                 </div>
               </div>
+              ) : null
             ) : null}
           </div>
           </div>
 
+          {!kioskMode ? (
           <aside
             className="flex min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-sky-200 bg-white lg:w-[22rem] lg:max-w-[22rem] lg:flex-shrink-0 lg:border-l lg:border-t-0"
             aria-label="실적 입력"
@@ -5468,12 +5488,13 @@ export function PerformanceModal({
               </div>
             )}
           </aside>
+          ) : null}
 
         </div>
 
         {actionConfirm.open ? (
           <div
-            className="pointer-events-auto absolute inset-0 z-[70] flex items-center justify-center bg-transparent p-4"
+            className="pointer-events-auto absolute inset-0 z-[70] flex items-center justify-center bg-slate-900/35 p-4"
             role="presentation"
             onClick={(e) => {
               if (e.target === e.currentTarget) resolveActionConfirm(false);
@@ -5569,6 +5590,20 @@ export function PerformanceModal({
           </div>
         ) : null}
       </div>
+    </>
+  );
+
+  if (kioskMode) return shell;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3"
+      role="presentation"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      {shell}
     </div>
   );
 }

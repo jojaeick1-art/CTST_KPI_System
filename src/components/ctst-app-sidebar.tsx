@@ -451,7 +451,7 @@ export function CtstAppSidebar({
   );
 
   return (
-    <aside className="flex w-full shrink-0 flex-col border-b border-sky-200/90 bg-gradient-to-b from-slate-50 via-white to-sky-50/35 md:sticky md:top-0 md:z-30 md:h-dvh md:max-h-dvh md:w-64 md:overflow-hidden md:border-b-0 md:border-r md:border-sky-200/90 md:shadow-[4px_0_28px_-12px_rgba(15,23,42,0.12)]">
+    <aside className="flex w-full shrink-0 flex-col border-b border-sky-200/90 bg-gradient-to-b from-slate-50 via-white to-sky-50/35 md:sticky md:top-0 md:h-dvh md:max-h-dvh md:w-64 md:overflow-hidden md:border-b-0 md:border-r md:border-sky-200/90 md:shadow-[4px_0_28px_-12px_rgba(15,23,42,0.12)]">
       <div className="flex h-[95px] w-full shrink-0 flex-col items-center justify-center gap-1 border-b border-sky-200/80 bg-white/75 px-3 shadow-[0_1px_0_0_rgba(255,255,255,0.8)_inset] backdrop-blur-[2px]">
         <img
           src="/c-one%20logo.png?v=4"

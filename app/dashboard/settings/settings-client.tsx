@@ -269,7 +269,7 @@ export function SettingsClient() {
         onSignOut={handleSignOut}
       />
 
-      <main className="min-w-0 flex-1">
+      <main className="relative z-0 min-w-0 flex-1">
         <header className="sticky top-0 z-20 shrink-0 border-b border-sky-200 bg-white/95 px-4 py-4 shadow-sm backdrop-blur-md sm:px-8">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>

@@ -200,15 +200,11 @@ export function CtstUserProfileMenu({
         />
       </button>
 
-      <div
-        className={`absolute right-0 top-[calc(100%+6px)] z-50 w-[min(100vw-24px,320px)] origin-top overflow-hidden rounded-xl border border-sky-200 bg-white shadow-lg shadow-slate-200/60 transition duration-200 ease-out ${
-          menuOpen
-            ? "pointer-events-auto translate-y-0 scale-100 opacity-100"
-            : "pointer-events-none -translate-y-1 scale-95 opacity-0"
-        }`}
-        role="menu"
-        aria-hidden={!menuOpen}
-      >
+      {menuOpen ? (
+        <div
+          className="absolute right-0 top-[calc(100%+6px)] z-50 w-[min(100vw-24px,320px)] origin-top overflow-hidden rounded-xl border border-sky-200 bg-white shadow-lg shadow-slate-200/60"
+          role="menu"
+        >
         <div className="border-b border-slate-100 p-1">
           <button
             type="button"
@@ -293,7 +289,8 @@ export function CtstUserProfileMenu({
             </ul>
           )}
         </div>
-      </div>
+        </div>
+      ) : null}
 
       <ChangePasswordModal
         open={pwOpen}

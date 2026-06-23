@@ -126,7 +126,7 @@ export function CtstPortalShell({ children }: { children: React.ReactNode }) {
         featureAccess={featureAccess}
         onSignOut={handleSignOut}
       />
-      <main className="min-w-0 flex-1">{children}</main>
+      <main className="relative z-0 min-w-0 flex-1">{children}</main>
     </div>
   );
 }

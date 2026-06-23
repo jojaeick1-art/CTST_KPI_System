@@ -14,6 +14,7 @@ import {
   fetchKpiPerformancesByItem,
   fetchMonthDeadlines,
   fetchDepartmentKpiDetail,
+  fetchDisplayKpiSlides,
   CURRENT_KPI_YEAR,
   fetchDepartmentKpiSummary,
   fetchDashboardSummaryStats,
@@ -210,6 +211,17 @@ export function useDepartmentKpiSummary(enabled: boolean) {
     queryKey: ["supabase", "department-kpi-summary"],
     queryFn: fetchDepartmentKpiSummary,
     enabled,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useDisplayKpiSlides(enabled: boolean, dataYear?: number) {
+  const year = dataYear ?? CURRENT_KPI_YEAR;
+  return useQuery({
+    queryKey: ["supabase", "display-kpi-slides", year],
+    queryFn: () => fetchDisplayKpiSlides(year),
+    enabled,
+    staleTime: 30_000,
     refetchInterval: 30_000,
   });
 }

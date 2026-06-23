@@ -732,7 +732,7 @@ export function ApprovalsClient() {
         onSignOut={handleSignOut}
       />
 
-      <main className="min-w-0 flex-1">
+      <main className="relative z-0 min-w-0 flex-1">
         {!featureAccess.kpi ? (
           <div className="flex min-h-full flex-col items-center justify-center px-4 py-16">
             <div className="w-full max-w-md rounded-2xl border border-sky-200 bg-white p-8 text-center shadow-lg shadow-sky-100/50">

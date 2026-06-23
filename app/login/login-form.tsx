@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   User,
   Lock,
@@ -41,6 +41,7 @@ function showError(
 
 export function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [rememberId, setRememberId] = useState(false);
@@ -155,7 +156,10 @@ export function LoginForm() {
           /* ID 저장 실패는 로그인 성공 흐름을 막지 않음 */
         }
 
-        router.push("/dashboard");
+        const nextPath = searchParams.get("next")?.trim();
+        const safeNext =
+          nextPath?.startsWith("/") && !nextPath.startsWith("//") ? nextPath : null;
+        router.push(safeNext ?? "/dashboard");
         router.refresh();
       } catch (err) {
         const message =
