@@ -1,5 +1,16 @@
-/** TV 전시 슬라이드 전환 간격 (ms) */
+/** TV 전시 슬라이드 전환 기본 간격 (ms) */
 export const DISPLAY_SLIDE_INTERVAL_MS = 5000;
+
+/** 슬라이드 간격 조절 범위 (초) */
+export const DISPLAY_SLIDE_INTERVAL_MIN_SEC = 1;
+export const DISPLAY_SLIDE_INTERVAL_MAX_SEC = 300;
+
+export function clampDisplaySlideIntervalSec(seconds: number): number {
+  return Math.min(
+    DISPLAY_SLIDE_INTERVAL_MAX_SEC,
+    Math.max(DISPLAY_SLIDE_INTERVAL_MIN_SEC, Math.round(seconds))
+  );
+}
 
 /**
  * 전시 슬라이드쇼 부서 우선 순서 (이름 정규화 키).

@@ -5,7 +5,12 @@ import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight, Loader2, Pause, Play } from "lucide-react";
 import { DashboardOverviewPanel } from "@/src/components/dashboard-overview-panel";
 import { PerformanceModal } from "@/app/dashboard/department/[id]/performance-modal";
-import { DISPLAY_SLIDE_INTERVAL_MS } from "@/src/lib/display-config";
+import {
+  clampDisplaySlideIntervalSec,
+  DISPLAY_SLIDE_INTERVAL_MAX_SEC,
+  DISPLAY_SLIDE_INTERVAL_MIN_SEC,
+  DISPLAY_SLIDE_INTERVAL_MS,
+} from "@/src/lib/display-config";
 import type { DisplayKpiSlide } from "@/src/lib/kpi-queries";
 import {
   useDashboardProfile,
@@ -75,6 +80,10 @@ export function DisplayClient() {
   const [fadeIn, setFadeIn] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
   const [progressTick, setProgressTick] = useState(0);
+  const defaultIntervalSec = DISPLAY_SLIDE_INTERVAL_MS / 1000;
+  const [slideIntervalSec, setSlideIntervalSec] = useState(defaultIntervalSec);
+  const [intervalInput, setIntervalInput] = useState(String(defaultIntervalSec));
+  const slideIntervalMs = slideIntervalSec * 1000;
   const prevSlideIndexRef = useRef(0);
   const fadeTimerRef = useRef<number | null>(null);
 
@@ -134,6 +143,15 @@ export function DisplayClient() {
     });
   }, []);
 
+  const applySlideInterval = useCallback(() => {
+    const parsed = Number.parseInt(intervalInput.trim(), 10);
+    if (!Number.isFinite(parsed)) return;
+    const next = clampDisplaySlideIntervalSec(parsed);
+    setSlideIntervalSec(next);
+    setIntervalInput(String(next));
+    setProgressTick((t) => t + 1);
+  }, [intervalInput]);
+
   useEffect(() => {
     return () => {
       if (fadeTimerRef.current !== null) {
@@ -153,9 +171,9 @@ export function DisplayClient() {
     if (totalSlides <= 1 || isPaused) return;
     const timer = window.setInterval(() => {
       goToSlide(slideIndex + 1);
-    }, DISPLAY_SLIDE_INTERVAL_MS);
+    }, slideIntervalMs);
     return () => window.clearInterval(timer);
-  }, [totalSlides, isPaused, slideIndex, progressTick, goToSlide]);
+  }, [totalSlides, isPaused, slideIndex, progressTick, goToSlide, slideIntervalMs]);
 
   useEffect(() => {
     if (slideIndex >= totalSlides && totalSlides > 0) {
@@ -296,7 +314,7 @@ export function DisplayClient() {
         </div>
 
         <div
-          className="mx-auto inline-grid max-w-[calc(100%-17rem)] gap-x-2 gap-y-1 sm:max-w-[calc(100%-20rem)]"
+          className="mx-auto inline-grid max-w-[calc(100%-17rem-11rem)] gap-x-2 gap-y-1 sm:max-w-[calc(100%-20rem-12rem)]"
           style={{ gridTemplateColumns: "min(45.5vw, 36rem) auto" }}
         >
           <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-2 text-xs sm:text-sm">
@@ -316,14 +334,49 @@ export function DisplayClient() {
               key={`${slideIndex}-${progressTick}`}
               className="h-full w-full origin-left bg-sky-400"
               style={{
-                animation: `display-progress ${DISPLAY_SLIDE_INTERVAL_MS}ms linear forwards`,
+                animation: `display-progress ${slideIntervalMs}ms linear forwards`,
                 animationPlayState: isPaused ? "paused" : "running",
               }}
             />
           </div>
 
           <div className="col-start-2 row-start-1 row-span-2 flex items-center whitespace-nowrap text-xs tabular-nums text-slate-400 sm:text-sm">
-            {progressIndex} / {totalSlides} · {DISPLAY_SLIDE_INTERVAL_MS / 1000}초
+            {progressIndex} / {totalSlides} · {slideIntervalSec}초
+          </div>
+        </div>
+
+        <div className="absolute inset-y-0 right-4 flex items-center sm:right-6">
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <label className="sr-only" htmlFor="display-slide-interval-sec">
+              슬라이드 전환 간격(초)
+            </label>
+            <input
+              id="display-slide-interval-sec"
+              type="number"
+              inputMode="numeric"
+              min={DISPLAY_SLIDE_INTERVAL_MIN_SEC}
+              max={DISPLAY_SLIDE_INTERVAL_MAX_SEC}
+              step={1}
+              value={intervalInput}
+              onChange={(e) => setIntervalInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  applySlideInterval();
+                }
+              }}
+              className="w-14 rounded-lg border border-slate-600 bg-slate-800 px-2 py-1.5 text-center text-xs font-semibold tabular-nums text-white outline-none ring-sky-400/50 focus:border-sky-500 focus:ring-2 sm:w-16 sm:text-sm"
+              aria-label="슬라이드 전환 간격(초)"
+            />
+            <span className="text-xs text-slate-400 sm:text-sm">초</span>
+            <button
+              type="button"
+              className={footerBtnClass}
+              onClick={applySlideInterval}
+              aria-label="슬라이드 전환 간격 적용"
+            >
+              적용
+            </button>
           </div>
         </div>
       </footer>
