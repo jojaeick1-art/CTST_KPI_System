@@ -1,8 +1,10 @@
-import type { CapaRecipe } from "@/src/types/capa-recipe";
+import type { CapaRecipe, ThroughputBasis } from "@/src/types/capa-recipe";
 import type { ShiftSelection, SimulationCalendar } from "@/src/types/capa-shift";
 
 export type ProcessOverride = {
   ctSec?: number;
+  stdUph?: number;
+  throughputBasis?: ThroughputBasis;
   uptimeRate?: number;
   equipmentCount?: number;
 };
@@ -22,6 +24,8 @@ export type ProcessSimResult = {
   processName: string;
   seqNo: number;
   ctSec: number;
+  stdUph?: number;
+  throughputBasis?: ThroughputBasis;
   uptimeRate: number;
   equipmentCount: number;
   capacityUnits: number;

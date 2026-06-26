@@ -303,9 +303,8 @@ function indicatorTypeToBaseline(
   return "%";
 }
 
-function capTextToValue(raw: string): KpiAchievementCap {
-  if (raw === "none") return null;
-  return raw === "120" ? 120 : 100;
+function capTextToValue(_raw: string): KpiAchievementCap {
+  return 100;
 }
 
 /** B/M 등: 문자열 전체가 하나의 수일 때만 단위 접미(%) 표시. "1st"처럼 숫자+문자는 제외 */
@@ -488,13 +487,7 @@ export function KpiCreateModal({
     setQualitativeCalcType(source.qualitativeCalcType ?? "progress");
     setAggregationType(source.aggregationType ?? "monthly");
     setTargetFillPolicy(source.targetFillPolicy ?? "exclude");
-    setAchievementCapText(
-      source.achievementCap === null
-        ? "none"
-        : source.achievementCap === 120
-          ? "120"
-          : "100"
-    );
+    setAchievementCapText("100");
     setTargetValueText(
       source.targetPpm !== null && source.targetPpm !== undefined
         ? String(source.targetPpm)
@@ -1222,24 +1215,16 @@ export function KpiCreateModal({
                   </select>
                   {isQualitativeB ? unavailableText("정성 평가는 입력한 진행률 또는 완료 여부를 직접 평가합니다.") : null}
                 </div>
-                <div className={compactControlClass}>
-                  <label className="mb-1 block text-xs font-medium text-slate-600">
-                    달성률 상한
-                    <FieldHint text="200%, 300% 같은 초과 달성을 그대로 둘지 제한할지 선택합니다." />
-                  </label>
-                  <select
-                    className={`${selectClass} w-full ${selectDisabledClass}`}
-                    value={achievementCapTextB}
-                    onChange={(e) => setAchievementCapTextB(e.target.value as "100" | "120" | "none")}
-                  >
-                    <option value="100">100% 제한</option>
-                    <option value="120">120% 제한</option>
-                    <option value="none">제한 없음</option>
-                  </select>
-                </div>
-                <div className={compactControlClass}>
-                  <label className="mb-1 block text-xs font-medium text-slate-600">
-                    가중치
+              <div className={compactControlClass}>
+                <label className="mb-1 block text-xs font-medium text-slate-600">
+                  달성률 상한
+                  <FieldHint text="달성률은 최대 100%로 고정됩니다." />
+                </label>
+                <p className={`${inputClass} bg-slate-50 text-slate-600`}>100% 제한</p>
+              </div>
+              <div className={compactControlClass}>
+                <label className="mb-1 block text-xs font-medium text-slate-600">
+                  가중치
                     <FieldHint text="첫 번째 목표와 합쳐 부서 합계 100점을 넘지 않게 입력합니다. 월별 목표를 입력한 경우에만 저장 시 반영됩니다." />
                   </label>
                   <input
@@ -1623,17 +1608,9 @@ export function KpiCreateModal({
               <div className={compactControlClass}>
                 <label className="mb-1 block text-xs font-medium text-slate-600">
                   달성률 상한
-                  <FieldHint text="200%, 300% 같은 초과 달성을 그대로 둘지 제한할지 선택합니다." />
+                  <FieldHint text="달성률은 최대 100%로 고정됩니다." />
                 </label>
-                <select
-                  className={`${selectClass} w-full ${selectDisabledClass}`}
-                  value={achievementCapText}
-                  onChange={(e) => setAchievementCapText(e.target.value as "100" | "120" | "none")}
-                >
-                  <option value="100">100% 제한</option>
-                  <option value="120">120% 제한</option>
-                  <option value="none">제한 없음</option>
-                </select>
+                <p className={`${inputClass} bg-slate-50 text-slate-600`}>100% 제한</p>
               </div>
               <div className={compactControlClass}>
                 <label className="mb-1 block text-xs font-medium text-slate-600">

@@ -24,7 +24,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { CircleHelp, Download, Loader2, Upload, X } from "lucide-react";
+import { ChevronDown, CircleHelp, Download, Loader2, Upload, X } from "lucide-react";
 import {
   PERF_LEGACY_PENDING,
   PERF_STATUS_APPROVED,
@@ -38,6 +38,16 @@ import {
   computedAchievementPercent,
   qualitativeAchievementPercent,
   indicatorUsesComputedAchievement,
+  buildFollowingCumulativeRateUpdates,
+  computeEditorPreviewAchievementPercent,
+  computeMonthPerformanceSlice,
+  cumulativeTargetThroughMonth,
+  findLatestPriorRowWithSubmittedValue,
+  isChartVisiblePerformanceStep,
+  resolveMonthlyChartTargetLine,
+  resolveMonthlyTargetForMonth,
+  resolvePerformanceAggregationType,
+  actualForAchievementInPeriod,
   type ItemPerformanceRow,
   type KpiAchievementCap,
   type KpiAggregationType,
@@ -128,57 +138,72 @@ function KpiSummaryMetricGrid({
   effectiveIndicatorType,
   displayedFinalTargetValue,
   tone = "primary",
+  kioskMode = false,
 }: {
   item: KpiModalItem;
   effectiveIndicatorType: KpiIndicatorType;
   displayedFinalTargetValue: number | null;
   tone?: "primary" | "secondary";
+  kioskMode?: boolean;
 }) {
   const cellClassName =
     tone === "secondary"
-      ? "min-w-0 rounded-lg bg-orange-100 px-2.5 py-2"
-      : "min-w-0 rounded-lg bg-sky-100 px-2.5 py-2";
+      ? kioskMode
+        ? "min-h-[3.5rem] min-w-0 rounded-lg bg-orange-100 px-6 py-3.5"
+        : "min-w-0 rounded-lg bg-orange-100 px-2.5 py-2"
+      : kioskMode
+        ? "min-h-[3.5rem] min-w-0 rounded-lg bg-sky-100 px-6 py-3.5"
+        : "min-w-0 rounded-lg bg-sky-100 px-2.5 py-2";
+  const labelClassName = kioskMode
+    ? "shrink-0 text-left text-[15px] font-semibold text-slate-500"
+    : "truncate text-[10px] font-semibold text-slate-500";
+  const valueClassName = kioskMode
+    ? "min-w-0 shrink truncate whitespace-nowrap text-right text-[18px] font-semibold text-slate-800"
+    : "mt-0.5 truncate whitespace-nowrap text-[13px] font-semibold text-slate-800";
+  const cellLayoutClassName = kioskMode
+    ? "flex min-w-0 flex-[1_1_0] basis-0 items-center justify-between gap-2"
+    : "";
+  const gridClassName = kioskMode
+    ? "flex flex-nowrap items-stretch gap-4"
+    : "grid gap-2 sm:grid-cols-2 lg:grid-cols-3";
+  const metrics = [
+    {
+      label: "평가 유형",
+      value: item.evaluationType === "qualitative" ? "정성 평가" : "정량 평가",
+    },
+    {
+      label: "B/M",
+      value: item.bm ? benchmarkLabel(effectiveIndicatorType, item.bm) : "—",
+    },
+    {
+      label: "평가 기간",
+      value: periodRangeLabel(item.periodStartMonth, item.periodEndMonth),
+    },
+    {
+      label: "최종 목표값",
+      value:
+        displayedFinalTargetValue !== null &&
+        displayedFinalTargetValue !== undefined
+          ? chartValueLabel(effectiveIndicatorType, displayedFinalTargetValue)
+          : "—",
+    },
+    {
+      label: "가중치",
+      value: item.weight || "—",
+    },
+    {
+      label: "담당자",
+      value: item.owner || "—",
+    },
+  ] as const;
   return (
-    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-      <div className={cellClassName}>
-        <p className="truncate text-[10px] font-semibold text-slate-500">평가 유형</p>
-        <p className="mt-0.5 truncate whitespace-nowrap text-[13px] font-semibold text-slate-800">
-          {item.evaluationType === "qualitative" ? "정성 평가" : "정량 평가"}
-        </p>
-      </div>
-      <div className={cellClassName}>
-        <p className="truncate text-[10px] font-semibold text-slate-500">B/M</p>
-        <p className="mt-0.5 truncate whitespace-nowrap text-[13px] font-semibold text-slate-800">
-          {item.bm ? benchmarkLabel(effectiveIndicatorType, item.bm) : "—"}
-        </p>
-      </div>
-      <div className={cellClassName}>
-        <p className="truncate text-[10px] font-semibold text-slate-500">평가 기간</p>
-        <p className="mt-0.5 truncate whitespace-nowrap text-[13px] font-semibold text-slate-800">
-          {periodRangeLabel(item.periodStartMonth, item.periodEndMonth)}
-        </p>
-      </div>
-      <div className={cellClassName}>
-        <p className="truncate text-[10px] font-semibold text-slate-500">최종 목표값</p>
-        <p className="mt-0.5 truncate whitespace-nowrap text-[13px] font-semibold text-slate-800">
-          {displayedFinalTargetValue !== null &&
-          displayedFinalTargetValue !== undefined
-            ? chartValueLabel(effectiveIndicatorType, displayedFinalTargetValue)
-            : "—"}
-        </p>
-      </div>
-      <div className={cellClassName}>
-        <p className="truncate text-[10px] font-semibold text-slate-500">가중치</p>
-        <p className="mt-0.5 truncate whitespace-nowrap text-[13px] font-semibold text-slate-800">
-          {item.weight || "—"}
-        </p>
-      </div>
-      <div className={cellClassName}>
-        <p className="truncate text-[10px] font-semibold text-slate-500">담당자</p>
-        <p className="mt-0.5 truncate whitespace-nowrap text-[13px] font-semibold text-slate-800">
-          {item.owner || "—"}
-        </p>
-      </div>
+    <div className={gridClassName}>
+      {metrics.map(({ label, value }) => (
+        <div key={label} className={`${cellClassName} ${cellLayoutClassName}`}>
+          <p className={labelClassName}>{label}</p>
+          <p className={valueClassName}>{value}</p>
+        </div>
+      ))}
     </div>
   );
 }
@@ -189,29 +214,39 @@ function KpiSummaryCard({
   effectiveIndicatorType,
   displayedFinalTargetValue,
   tone = "primary",
+  kioskMode = false,
+  showKioskRowTitle = false,
 }: {
   title: string;
   item: KpiModalItem;
   effectiveIndicatorType: KpiIndicatorType;
   displayedFinalTargetValue: number | null;
   tone?: "primary" | "secondary";
+  kioskMode?: boolean;
+  showKioskRowTitle?: boolean;
 }) {
-  const cardClassName =
-    tone === "secondary"
+  const cardClassName = kioskMode
+    ? ""
+    : tone === "secondary"
       ? "rounded-xl border border-orange-200 bg-white p-4"
       : "rounded-xl border border-sky-200 bg-white p-4";
-  const titleClassName =
-    tone === "secondary"
+  const titleClassName = kioskMode
+    ? tone === "secondary"
+      ? "mb-1.5 truncate text-base font-semibold text-orange-700"
+      : "mb-1.5 truncate text-base font-semibold text-sky-700"
+    : tone === "secondary"
       ? "mb-2 truncate text-xs font-semibold text-orange-700"
       : "mb-2 truncate text-xs font-semibold text-sky-700";
+  const showTitle = !kioskMode || showKioskRowTitle;
   return (
     <section className={cardClassName}>
-      <p className={titleClassName}>{title}</p>
+      {showTitle ? <p className={titleClassName}>{title}</p> : null}
       <KpiSummaryMetricGrid
         item={item}
         effectiveIndicatorType={effectiveIndicatorType}
         displayedFinalTargetValue={displayedFinalTargetValue}
         tone={tone}
+        kioskMode={kioskMode}
       />
     </section>
   );
@@ -220,6 +255,55 @@ function KpiSummaryCard({
 function kpiSummaryCardTitle(goalLabel: string, item: KpiModalItem): string {
   const detail = item.detailActivity.trim();
   return detail ? `${goalLabel} : ${detail}` : goalLabel;
+}
+
+/** 디스플레이 — 월별 상세 카드와 푸터 사이 고정 여백(px) */
+const KIOSK_FOOTER_GAP_PX = 24;
+const KIOSK_CHART_MIN_HEIGHT_PX = 80;
+const KIOSK_METRICS_GAP_PX = 12;
+const KIOSK_CHART_GAP_PX = 16;
+
+/** 디스플레이 전용 — 대분류·소분류·세부사항 계층 블록 */
+function KpiKioskTitleBlock({
+  mainTopic,
+  subTopic,
+  detailActivity,
+  goalLabel,
+  tone = "primary",
+}: {
+  mainTopic: string;
+  subTopic: string;
+  detailActivity: string | null | undefined;
+  goalLabel?: string;
+  tone?: "primary" | "secondary";
+}) {
+  const goalAccentClass =
+    tone === "secondary" ? "text-orange-700" : "text-sky-700";
+  const mainTopicText = mainTopic?.trim() || "—";
+  const subTopicText = subTopic?.trim() || "—";
+  const detailText = detailActivity?.trim() || "—";
+
+  return (
+    <div className="min-w-0">
+      {goalLabel ? (
+        <p
+          className={`mb-2.5 text-sm font-bold uppercase tracking-[0.14em] ${goalAccentClass}`}
+        >
+          {goalLabel}
+        </p>
+      ) : null}
+      <p className="text-[1.05rem] font-medium leading-snug text-slate-500 sm:text-[1.15rem]">
+        <span className="font-semibold text-sky-700">{mainTopicText}</span>
+        <span className="mx-2 font-normal text-slate-300" aria-hidden>
+          ›
+        </span>
+        <span className="text-slate-600">{subTopicText}</span>
+      </p>
+      <h3 className="mt-3.5 text-[1.575rem] font-bold leading-tight tracking-tight text-slate-900 sm:text-[1.75rem] lg:text-[2rem]">
+        {detailText}
+      </h3>
+    </div>
+  );
 }
 
 function computedActualLabel(t: KpiIndicatorType): string {
@@ -449,8 +533,7 @@ function parseBenchmarkValue(raw: string | null | undefined): number | null {
 }
 
 function isChartVisibleStep(step: string | null | undefined): boolean {
-  const s = (step?.trim().toLowerCase() ?? "");
-  return s === PERF_STATUS_PENDING_FINAL || s === PERF_STATUS_APPROVED;
+  return isChartVisiblePerformanceStep(step);
 }
 
 function findRowByMonth(
@@ -504,32 +587,6 @@ function buildRowByMonthMap(rows: ItemPerformanceRow[]): Map<MonthKey, ItemPerfo
   return map;
 }
 
-function findLatestPriorRowWithSubmittedValue(
-  rowByMonth: Map<MonthKey, ItemPerformanceRow>,
-  month: MonthKey,
-  monthList: MonthKey[]
-): { month: MonthKey; row: ItemPerformanceRow } | null {
-  const idx = monthList.indexOf(month);
-  if (idx <= 0) return null;
-  for (let i = idx - 1; i >= 0; i -= 1) {
-    const prevMonth = monthList[i]!;
-    const prevRow = rowByMonth.get(prevMonth);
-    if (!prevRow) continue;
-    const hasRate =
-      prevRow.achievement_rate !== null &&
-      prevRow.achievement_rate !== undefined &&
-      !Number.isNaN(Number(prevRow.achievement_rate));
-    const hasActual =
-      prevRow.actual_value !== null &&
-      prevRow.actual_value !== undefined &&
-      Number.isFinite(Number(prevRow.actual_value));
-    if (hasRate || hasActual) {
-      return { month: prevMonth, row: prevRow };
-    }
-  }
-  return null;
-}
-
 function chartDatumFromClickData(data: unknown): ChartDatum | null {
   const rec = data && typeof data === "object" ? (data as Record<string, unknown>) : null;
   const payload = rec?.payload;
@@ -543,292 +600,8 @@ function chartDatumFromClickData(data: unknown): ChartDatum | null {
   return candidate as unknown as ChartDatum;
 }
 
-function resolveMonthlyTargetForMonth(
-  monthlyTargets: Partial<Record<number, number>> | undefined,
-  month: MonthKey,
-  policy: KpiTargetFillPolicy | null | undefined = "exclude"
-): number | null {
-  const raw = monthlyTargets?.[month];
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return raw;
-  }
-  if (policy === "carry_forward") {
-    for (let m = month - 1; m >= 1; m -= 1) {
-      const prev = monthlyTargets?.[m];
-      if (typeof prev === "number" && Number.isFinite(prev)) {
-        return prev;
-      }
-    }
-  }
-  return null;
-}
-
-function cumulativeTargetThroughMonth(
-  monthlyTargets: Partial<Record<number, number>> | undefined,
-  month: MonthKey
-): number | null {
-  let sum = 0;
-  let hasTarget = false;
-  for (let m = 1; m <= month; m += 1) {
-    const value = monthlyTargets?.[m];
-    if (typeof value === "number" && Number.isFinite(value)) {
-      sum += value;
-      hasTarget = true;
-    }
-  }
-  return hasTarget ? sum : null;
-}
-
-function resolvePerformanceAggregationType(
-  row: ItemPerformanceRow | null | undefined,
-  fallback: KpiAggregationType | null | undefined
-): KpiAggregationType {
-  return row?.aggregation_type ?? fallback ?? "monthly";
-}
-
 function aggregationTypeLabelKo(value: KpiAggregationType): string {
   return value === "cumulative" ? "누적 계산" : "당월 단독";
-}
-
-function cumulativeActualThroughPriorMonths(
-  rowByMonth: Map<MonthKey, ItemPerformanceRow>,
-  monthList: MonthKey[],
-  month: MonthKey
-): number {
-  return monthList.reduce((sum, m) => {
-    if (m >= month) return sum;
-    const prior = rowByMonth.get(m)?.actual_value;
-    const priorValue =
-      prior !== null && prior !== undefined && Number.isFinite(Number(prior))
-        ? Number(prior)
-        : 0;
-    return sum + priorValue;
-  }, 0);
-}
-
-/** 월별 목표선 값(차트). 실적 승인 여부와 무관하게 목표값만 계산. */
-function resolveMonthlyChartTargetLine(
-  m: MonthKey,
-  item: KpiModalItem,
-  rowMap: Map<MonthKey, ItemPerformanceRow>,
-  monthList: MonthKey[],
-  effType: KpiIndicatorType,
-  normCtx: NormalMonthlyTargetContext | null,
-  computedMetric: number | null
-): number | null {
-  const row = rowMap.get(m);
-  const monthlyTargetMap = item.monthlyTargets ?? {};
-  const hasMonthlyTargetPlan = Object.keys(monthlyTargetMap).length > 0;
-  const rowAggregationType = resolvePerformanceAggregationType(
-    row,
-    item.aggregationType
-  );
-  const monthTargetNormal =
-    effType === "normal"
-      ? (() => {
-          if (rowAggregationType === "cumulative") {
-            return (
-              cumulativeTargetThroughMonth(monthlyTargetMap, m) ??
-              (normCtx ? resolveNormalMonthlyTargetMetric(m, normCtx) : 0)
-            );
-          }
-          const fromMap = resolveMonthlyTargetForMonth(
-            monthlyTargetMap,
-            m,
-            item.targetFillPolicy
-          );
-          if (fromMap !== null) return fromMap;
-          if (hasMonthlyTargetPlan) return null;
-          return normCtx ? resolveNormalMonthlyTargetMetric(m, normCtx) : 0;
-        })()
-      : null;
-  const monthTargetComputed =
-    indicatorUsesComputedAchievement(effType)
-      ? (() => {
-          if (rowAggregationType === "cumulative") {
-            return (
-              cumulativeTargetThroughMonth(monthlyTargetMap, m) ??
-              computedMetric ??
-              0
-            );
-          }
-          const fromMonthly = resolveMonthlyTargetForMonth(
-            item.monthlyTargets,
-            m,
-            item.targetFillPolicy
-          );
-          if (fromMonthly !== null) return fromMonthly;
-          if (hasMonthlyTargetPlan) return null;
-          return computedMetric ?? 0;
-        })()
-      : null;
-  if (indicatorUsesComputedAchievement(effType)) {
-    return monthTargetComputed;
-  }
-  if (effType === "normal") {
-    return monthTargetNormal;
-  }
-  return 0;
-}
-
-/** 목표 단독·종합 공통: 월별 차트용 실적(지표값)·목표·달성률 계산 */
-function computeMonthPerfSliceForChart(
-  m: MonthKey,
-  chartMonths: MonthKey[],
-  sliceItem: KpiModalItem,
-  rowMap: Map<MonthKey, ItemPerformanceRow>,
-  sliceEffType: KpiIndicatorType,
-  normMonthlyCtx: NormalMonthlyTargetContext | null,
-  computedTargetMetric: number | null
-): {
-  actual: number;
-  target: number | null;
-  submittedPercent: number | null;
-} {
-  const row = rowMap.get(m);
-  const copied = row
-    ? null
-    : findLatestPriorRowWithSubmittedValue(rowMap, m, chartMonths);
-  const sourceRow = row ?? copied?.row ?? null;
-  const visibleOnChart =
-    row !== undefined
-      ? isChartVisibleStep(row?.approval_step ?? null)
-      : copied !== null;
-  const rawSubmitted =
-    sourceRow?.achievement_rate !== null &&
-    sourceRow?.achievement_rate !== undefined &&
-    !Number.isNaN(Number(sourceRow.achievement_rate))
-      ? Number(sourceRow.achievement_rate)
-      : null;
-  const rawActualMetric =
-    sourceRow?.actual_value !== null &&
-    sourceRow?.actual_value !== undefined &&
-    Number.isFinite(Number(sourceRow.actual_value))
-      ? Number(sourceRow.actual_value)
-      : null;
-  const monthlyTargetMap = sliceItem.monthlyTargets ?? {};
-  const hasMonthlyTargetPlan = Object.keys(monthlyTargetMap).length > 0;
-  const rowAggregationType = resolvePerformanceAggregationType(
-    row,
-    sliceItem.aggregationType
-  );
-  const monthTargetNormal =
-    sliceEffType === "normal"
-      ? (() => {
-          if (rowAggregationType === "cumulative") {
-            return (
-              cumulativeTargetThroughMonth(monthlyTargetMap, m) ??
-              (normMonthlyCtx
-                ? resolveNormalMonthlyTargetMetric(m, normMonthlyCtx)
-                : 0)
-            );
-          }
-          const fromMap = resolveMonthlyTargetForMonth(
-            monthlyTargetMap,
-            m,
-            sliceItem.targetFillPolicy
-          );
-          if (fromMap !== null) {
-            return fromMap;
-          }
-          if (hasMonthlyTargetPlan) {
-            return null;
-          }
-          return normMonthlyCtx
-            ? resolveNormalMonthlyTargetMetric(m, normMonthlyCtx)
-            : 0;
-        })()
-      : null;
-  const monthTargetComputed =
-    indicatorUsesComputedAchievement(sliceEffType)
-      ? (() => {
-          if (rowAggregationType === "cumulative") {
-            return (
-              cumulativeTargetThroughMonth(monthlyTargetMap, m) ??
-              computedTargetMetric ??
-              0
-            );
-          }
-          const fromMonthly = resolveMonthlyTargetForMonth(
-            sliceItem.monthlyTargets,
-            m,
-            sliceItem.targetFillPolicy
-          );
-          if (fromMonthly !== null) return fromMonthly;
-          if (hasMonthlyTargetPlan) {
-            return null;
-          }
-          return computedTargetMetric ?? 0;
-        })()
-      : null;
-  const normalRowMetricMode =
-    sliceEffType === "normal" &&
-    sliceItem.targetDirection !== "na" &&
-    monthTargetNormal !== null &&
-    monthTargetNormal >= 0;
-
-  let actual: number;
-  if (indicatorUsesComputedAchievement(sliceEffType)) {
-    actual =
-      visibleOnChart && rawActualMetric !== null
-        ? rowAggregationType === "cumulative"
-          ? cumulativeActualThroughPriorMonths(rowMap, chartMonths, m) +
-            rawActualMetric
-          : rawActualMetric
-        : 0;
-  } else if (normalRowMetricMode) {
-    if (rawActualMetric !== null) {
-      actual = visibleOnChart
-        ? rowAggregationType === "cumulative"
-          ? cumulativeActualThroughPriorMonths(rowMap, chartMonths, m) +
-            rawActualMetric
-          : rawActualMetric
-        : 0;
-    } else {
-      actual = visibleOnChart && rawSubmitted !== null ? rawSubmitted : 0;
-    }
-  } else {
-    actual = visibleOnChart && rawSubmitted !== null ? rawSubmitted : 0;
-  }
-
-  let target: number | null;
-  if (indicatorUsesComputedAchievement(sliceEffType)) {
-    target = monthTargetComputed;
-  } else if (sliceEffType === "normal") {
-    target = monthTargetNormal;
-  } else {
-    target = 0;
-  }
-
-  let submittedPercent = rawSubmitted;
-  if (row !== undefined && rawActualMetric !== null && target !== null && target >= 0) {
-    const actualForAchievement =
-      rowAggregationType === "cumulative"
-        ? cumulativeActualThroughPriorMonths(rowMap, chartMonths, m) +
-          rawActualMetric
-        : rawActualMetric;
-    if (sliceItem.evaluationType === "qualitative") {
-      submittedPercent = qualitativeAchievementPercent(
-        actualForAchievement,
-        target,
-        sliceItem.qualitativeCalcType ?? "progress",
-        sliceItem.achievementCap
-      );
-    } else if (
-      indicatorUsesComputedAchievement(sliceEffType) ||
-      normalRowMetricMode
-    ) {
-      submittedPercent = computedAchievementPercent(
-        sliceEffType,
-        actualForAchievement,
-        target,
-        sliceItem.targetDirection,
-        sliceItem.achievementCap
-      );
-    }
-  }
-
-  return { actual, target, submittedPercent };
 }
 
 function performanceStatusLabelKo(status: string | null | undefined): string {
@@ -1105,7 +878,8 @@ function ActualPerformanceBarShape(
     height?: number;
     fill?: string;
     payload?: ChartDatum;
-  }
+  },
+  barLabelFontSize = 10
 ) {
   const x = props.x ?? 0;
   const y = props.y ?? 0;
@@ -1165,7 +939,7 @@ function ActualPerformanceBarShape(
               : displayY - (displayH > 0 ? 6 : 2)
           }
           fill={labelInside ? insideFill : "#0f172a"}
-          fontSize={10}
+          fontSize={barLabelFontSize}
           fontWeight={600}
           textAnchor="middle"
           dominantBaseline={labelInside ? "middle" : "auto"}
@@ -1208,16 +982,26 @@ function legendMiniLine(stroke: string, dashed?: boolean) {
 }
 
 /** 차트 아래 범례 */
-function KpiChartFullLegend({ dualComposite }: { dualComposite?: boolean }) {
+function KpiChartFullLegend({
+  dualComposite,
+  kioskMode = false,
+}: {
+  dualComposite?: boolean;
+  kioskMode?: boolean;
+}) {
+  const legendTextClass = kioskMode
+    ? "text-[13px] font-medium text-slate-800"
+    : "text-[11px] font-medium text-slate-800";
+  const swatchClass = kioskMode ? "h-4 w-4" : "h-3.5 w-3.5";
   if (dualComposite) {
     return (
       <ul
-        className="mt-1 flex list-none flex-wrap items-center justify-center gap-x-3 gap-y-2 text-[11px] font-medium text-slate-800 sm:gap-x-4"
+        className={`mt-1 flex list-none flex-wrap items-center justify-center gap-x-3 gap-y-2 sm:gap-x-4 ${legendTextClass}`}
         aria-label="차트 범례"
       >
         <li className="flex items-center gap-1.5">
           <span
-            className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
+            className={`inline-block shrink-0 rounded-[2px] ${swatchClass}`}
             style={{ backgroundColor: "#0284c7" }}
             aria-hidden
           />
@@ -1225,7 +1009,7 @@ function KpiChartFullLegend({ dualComposite }: { dualComposite?: boolean }) {
         </li>
         <li className="flex items-center gap-1.5">
           <span
-            className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
+            className={`inline-block shrink-0 rounded-[2px] ${swatchClass}`}
             style={{ backgroundColor: "#ea580c" }}
             aria-hidden
           />
@@ -1245,7 +1029,7 @@ function KpiChartFullLegend({ dualComposite }: { dualComposite?: boolean }) {
         </li>
         <li className="flex items-center gap-1.5">
           <span
-            className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
+            className={`inline-block shrink-0 rounded-[2px] ${swatchClass}`}
             style={{ backgroundColor: "#0284c7" }}
             aria-hidden
           />
@@ -1253,7 +1037,7 @@ function KpiChartFullLegend({ dualComposite }: { dualComposite?: boolean }) {
         </li>
         <li className="flex items-center gap-1.5">
           <span
-            className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
+            className={`inline-block shrink-0 rounded-[2px] ${swatchClass}`}
             style={{ backgroundColor: "#ea580c" }}
             aria-hidden
           />
@@ -1264,12 +1048,12 @@ function KpiChartFullLegend({ dualComposite }: { dualComposite?: boolean }) {
   }
   return (
     <ul
-      className="mt-1 flex list-none flex-wrap items-center justify-center gap-x-4 gap-y-2 text-[11px] font-medium text-slate-800 sm:gap-x-5"
+      className={`mt-1 flex list-none flex-wrap items-center justify-center gap-x-4 gap-y-2 sm:gap-x-5 ${legendTextClass}`}
       aria-label="차트 범례"
     >
       <li className="flex items-center gap-1.5">
         <span
-          className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
+          className={`inline-block shrink-0 rounded-[2px] ${swatchClass}`}
           style={{ backgroundColor: CHART_BENCHMARK_BAR_FILL }}
           aria-hidden
         />
@@ -1283,7 +1067,7 @@ function KpiChartFullLegend({ dualComposite }: { dualComposite?: boolean }) {
       </li>
       <li className="flex items-center gap-1.5">
         <span
-          className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
+          className={`inline-block shrink-0 rounded-[2px] ${swatchClass}`}
           style={{ backgroundColor: "#ef4444" }}
           aria-hidden
         />
@@ -1291,7 +1075,7 @@ function KpiChartFullLegend({ dualComposite }: { dualComposite?: boolean }) {
       </li>
       <li className="flex items-center gap-1.5">
         <span
-          className="inline-block h-3.5 w-3.5 shrink-0 rounded-[2px]"
+          className={`inline-block shrink-0 rounded-[2px] ${swatchClass}`}
           style={{ backgroundColor: "#10b981" }}
           aria-hidden
         />
@@ -2114,18 +1898,76 @@ function buildYAxisTicks(min: number, max: number, segmentCount = 6): number[] {
   return dedup;
 }
 
+/** 디스플레이(TV)용 Y축 — 눈금을 정수 단위로만 표시 */
+function buildYAxisIntegerTicks(
+  min: number,
+  max: number,
+  targetSegments = 5
+): number[] {
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return [0, 100];
+  const lo = Math.floor(min);
+  const hi = Math.ceil(max);
+  const range = hi - lo;
+  if (range <= 0) return [lo];
+
+  const pickStep = (span: number, segments: number): number => {
+    const rough = span / Math.max(1, segments);
+    const pow = 10 ** Math.floor(Math.log10(Math.max(rough, 1e-9)));
+    const normalized = rough / pow;
+    const nice =
+      normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+    return nice * pow;
+  };
+
+  const step = pickStep(range, targetSegments);
+  let start = Math.floor(lo / step) * step;
+  if (min <= 0 && max >= 0) start = Math.min(start, 0);
+
+  const ticks: number[] = [];
+  for (let t = start; t <= hi + step * 0.001; t += step) {
+    const rounded = Math.round(t);
+    if (!ticks.includes(rounded)) ticks.push(rounded);
+  }
+  if (min <= 0 && max >= 0 && !ticks.includes(0)) ticks.push(0);
+  ticks.sort((a, b) => a - b);
+  return ticks.length >= 2 ? ticks : [lo, hi];
+}
+
 /** Y축 tick 라벨 표시용 — 축 눈금에는 소수 자릿수를 최소화 */
-function chartTickLabel(indicatorType: KpiIndicatorType, value: number): string {
-  if (indicatorType === "ppm") return `${formatKoMax2Decimals(value)} ppm`;
-  if (indicatorType === "quantity") return `${formatKoMax2Decimals(value)} k`;
-  if (indicatorType === "count") return `${formatKoMax2Decimals(value)} 건`;
-  if (indicatorType === "headcount") return `${formatKoMax2Decimals(value)} 명`;
-  if (indicatorType === "money") return `${formatKoMax2Decimals(value)}억`;
-  if (indicatorType === "time") return `${formatKoMax2Decimals(value)} h`;
-  if (indicatorType === "minutes") return `${formatKoMax2Decimals(value)} min`;
-  if (indicatorType === "uph") return `${formatKoMax2Decimals(value)} UPH`;
-  if (indicatorType === "cpk") return `${formatKoMax2Decimals(value)} Cpk`;
-  return formatKoPercentMax2(value);
+function chartTickLabel(
+  indicatorType: KpiIndicatorType,
+  value: number,
+  integerOnly = false
+): string {
+  const v = integerOnly ? Math.round(value) : value;
+  if (indicatorType === "ppm") {
+    return integerOnly ? `${Math.round(v)} ppm` : `${formatKoMax2Decimals(v)} ppm`;
+  }
+  if (indicatorType === "quantity") {
+    return integerOnly ? `${Math.round(v)} k` : `${formatKoMax2Decimals(v)} k`;
+  }
+  if (indicatorType === "count") {
+    return integerOnly ? `${Math.round(v)} 건` : `${formatKoMax2Decimals(v)} 건`;
+  }
+  if (indicatorType === "headcount") {
+    return integerOnly ? `${Math.round(v)} 명` : `${formatKoMax2Decimals(v)} 명`;
+  }
+  if (indicatorType === "money") {
+    return integerOnly ? `${Math.round(v)}억` : `${formatKoMax2Decimals(v)}억`;
+  }
+  if (indicatorType === "time") {
+    return integerOnly ? `${Math.round(v)} h` : `${formatKoMax2Decimals(v)} h`;
+  }
+  if (indicatorType === "minutes") {
+    return integerOnly ? `${Math.round(v)} min` : `${formatKoMax2Decimals(v)} min`;
+  }
+  if (indicatorType === "uph") {
+    return integerOnly ? `${Math.round(v)} UPH` : `${formatKoMax2Decimals(v)} UPH`;
+  }
+  if (indicatorType === "cpk") {
+    return integerOnly ? `${Math.round(v)} Cpk` : `${formatKoMax2Decimals(v)} Cpk`;
+  }
+  return integerOnly ? `${Math.round(v)}%` : formatKoPercentMax2(value);
 }
 
 /**
@@ -2248,6 +2090,11 @@ export function PerformanceModal({
     message: "",
     tone: "info",
   });
+  const [kioskMonthDetailOpen, setKioskMonthDetailOpen] = useState(false);
+  const kioskBodyRef = useRef<HTMLDivElement>(null);
+  const kioskMetricsRef = useRef<HTMLDivElement>(null);
+  const kioskMonthDetailRef = useRef<HTMLDivElement>(null);
+  const [kioskChartHeightPx, setKioskChartHeightPx] = useState(280);
   const actionConfirmResolverRef = useRef<((value: boolean) => void) | null>(
     null
   );
@@ -2701,26 +2548,19 @@ export function PerformanceModal({
       computedMonthlyTargetEditor >= 0
     ) {
       const ap = parseNonNegativeDecimal(editorActualPpm);
-      if (ap === null) return null;
-      const actualForAchievement =
-        editorAggregationType === "cumulative"
-          ? cumulativeActualThroughPriorMonths(rowByMonth, displayMonthList, editorMonth) + ap
-          : ap;
-      if (editorKpiItem.evaluationType === "qualitative") {
-        return qualitativeAchievementPercent(
-          actualForAchievement,
-          computedMonthlyTargetEditor,
-          editorKpiItem.qualitativeCalcType ?? "progress",
-          editorKpiItem.achievementCap
-        );
-      }
-      return computedAchievementPercent(
-        effectiveIndicatorType,
-        actualForAchievement,
-        computedMonthlyTargetEditor,
-        editorKpiItem.targetDirection,
-        editorKpiItem.achievementCap
-      );
+      return computeEditorPreviewAchievementPercent({
+        indicatorType: effectiveIndicatorType,
+        evaluationType: editorKpiItem.evaluationType,
+        qualitativeCalcType: editorKpiItem.qualitativeCalcType,
+        targetDirection: editorKpiItem.targetDirection,
+        achievementCap: editorKpiItem.achievementCap,
+        aggregationType: editorAggregationType,
+        monthlyTarget: computedMonthlyTargetEditor,
+        draftActual: ap,
+        rowByMonth,
+        monthList: displayMonthList,
+        editorMonth,
+      });
     }
     if (
       normalMetricEntryActive &&
@@ -2729,18 +2569,19 @@ export function PerformanceModal({
       normalMonthlyTargetEditor >= 0
     ) {
       const ap = parseNonNegativeDecimal(editorRate);
-      if (ap === null) return null;
-      const actualForAchievement =
-        editorAggregationType === "cumulative"
-          ? cumulativeActualThroughPriorMonths(rowByMonth, displayMonthList, editorMonth) + ap
-          : ap;
-      return computedAchievementPercent(
-        "normal",
-        actualForAchievement,
-        normalMonthlyTargetEditor,
-        editorKpiItem.targetDirection,
-        editorKpiItem.achievementCap
-      );
+      return computeEditorPreviewAchievementPercent({
+        indicatorType: "normal",
+        evaluationType: editorKpiItem.evaluationType,
+        qualitativeCalcType: editorKpiItem.qualitativeCalcType,
+        targetDirection: editorKpiItem.targetDirection,
+        achievementCap: editorKpiItem.achievementCap,
+        aggregationType: editorAggregationType,
+        monthlyTarget: normalMonthlyTargetEditor,
+        draftActual: ap,
+        rowByMonth,
+        monthList: displayMonthList,
+        editorMonth,
+      });
     }
     return null;
   }, [
@@ -2768,6 +2609,56 @@ export function PerformanceModal({
     setSelectedMonth(prefer);
     setEditorMonth(prefer);
   }, [isOpen, kpiItem, canEditPerformance, activeMonthList, initialEditorMonth]);
+
+  useEffect(() => {
+    if (kioskMode) setKioskMonthDetailOpen(false);
+  }, [kioskMode, kpiItem?.id]);
+
+  const remeasureKioskChartHeight = useCallback(() => {
+    if (!kioskMode || kioskMonthDetailOpen) return;
+    const body = kioskBodyRef.current;
+    if (!body) return;
+    const metricsEl = kioskMetricsRef.current;
+    const monthEl = kioskMonthDetailRef.current;
+    const style = getComputedStyle(body);
+    const paddingY =
+      (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+    const metricsH = metricsEl?.offsetHeight ?? 0;
+    const monthH = monthEl?.offsetHeight ?? 0;
+    const available =
+      body.clientHeight -
+      paddingY -
+      metricsH -
+      monthH -
+      KIOSK_METRICS_GAP_PX -
+      KIOSK_CHART_GAP_PX;
+    setKioskChartHeightPx(
+      Math.max(KIOSK_CHART_MIN_HEIGHT_PX, Math.floor(available))
+    );
+  }, [kioskMode, kioskMonthDetailOpen]);
+
+  useLayoutEffect(() => {
+    if (!kioskMode || kioskMonthDetailOpen) return;
+    remeasureKioskChartHeight();
+    const body = kioskBodyRef.current;
+    if (!body) return;
+    const ro = new ResizeObserver(() => remeasureKioskChartHeight());
+    ro.observe(body);
+    if (kioskMetricsRef.current) ro.observe(kioskMetricsRef.current);
+    if (kioskMonthDetailRef.current) ro.observe(kioskMonthDetailRef.current);
+    window.addEventListener("resize", remeasureKioskChartHeight);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", remeasureKioskChartHeight);
+    };
+  }, [
+    kioskMode,
+    kioskMonthDetailOpen,
+    remeasureKioskChartHeight,
+    kpiItem?.id,
+    linkedSecondaryItem?.id,
+    kpiItem?.isFinalCompleted,
+  ]);
 
   useEffect(() => {
     if (!isOpen || !kpiItem) return;
@@ -2872,139 +2763,19 @@ export function PerformanceModal({
         !Number.isNaN(Number(sourceRow.achievement_rate))
           ? Number(sourceRow.achievement_rate)
           : null;
-      const rawActualMetric =
-        sourceRow?.actual_value !== null &&
-        sourceRow?.actual_value !== undefined &&
-        Number.isFinite(Number(sourceRow.actual_value))
-          ? Number(sourceRow.actual_value)
-          : null;
-      const monthlyTargetMap = sliceItem.monthlyTargets ?? {};
-      const hasMonthlyTargetPlan = Object.keys(monthlyTargetMap).length > 0;
-      const rowAggregationType = resolvePerformanceAggregationType(
-        row,
-        sliceItem.aggregationType
+      const { actual, target, submittedPercent } = computeMonthPerformanceSlice(
+        m,
+        chartMonths,
+        sliceItem,
+        rowMap,
+        sliceEffType,
+        normMonthlyCtx,
+        computedTargetMetric
       );
-      const monthTargetNormal =
-        sliceEffType === "normal"
-          ? (() => {
-              if (rowAggregationType === "cumulative") {
-                return (
-                  cumulativeTargetThroughMonth(monthlyTargetMap, m) ??
-                  (normMonthlyCtx
-                    ? resolveNormalMonthlyTargetMetric(m, normMonthlyCtx)
-                    : 0)
-                );
-              }
-              const fromMap = resolveMonthlyTargetForMonth(
-                monthlyTargetMap,
-                m,
-                sliceItem.targetFillPolicy
-              );
-              if (fromMap !== null) {
-                return fromMap;
-              }
-              if (hasMonthlyTargetPlan) {
-                return null;
-              }
-              return normMonthlyCtx
-                ? resolveNormalMonthlyTargetMetric(m, normMonthlyCtx)
-                : 0;
-            })()
-          : null;
-      const monthTargetComputed =
-        indicatorUsesComputedAchievement(sliceEffType)
-          ? (() => {
-              if (rowAggregationType === "cumulative") {
-                return (
-                  cumulativeTargetThroughMonth(monthlyTargetMap, m) ??
-                  computedTargetMetric ??
-                  0
-                );
-              }
-              const fromMonthly = resolveMonthlyTargetForMonth(
-                sliceItem.monthlyTargets,
-                m,
-                sliceItem.targetFillPolicy
-              );
-              if (fromMonthly !== null) return fromMonthly;
-              if (hasMonthlyTargetPlan) {
-                return null;
-              }
-              return computedTargetMetric ?? 0;
-            })()
-          : null;
-      const normalRowMetricMode =
-        sliceEffType === "normal" &&
-        sliceItem.targetDirection !== "na" &&
-        monthTargetNormal !== null &&
-        monthTargetNormal >= 0;
-
-      let actual: number;
-      if (indicatorUsesComputedAchievement(sliceEffType)) {
-        actual =
-          visibleOnChart && rawActualMetric !== null
-            ? rowAggregationType === "cumulative"
-              ? cumulativeActualThroughPriorMonths(rowMap, chartMonths, m) +
-                rawActualMetric
-              : rawActualMetric
-            : 0;
-      } else if (normalRowMetricMode) {
-        if (rawActualMetric !== null) {
-          actual = visibleOnChart
-            ? rowAggregationType === "cumulative"
-              ? cumulativeActualThroughPriorMonths(rowMap, chartMonths, m) +
-                rawActualMetric
-              : rawActualMetric
-            : 0;
-        } else {
-          actual =
-            visibleOnChart && rawSubmitted !== null ? rawSubmitted : 0;
-        }
-      } else {
-        actual =
-          visibleOnChart && rawSubmitted !== null ? rawSubmitted : 0;
-      }
 
       const description = row?.description ?? null;
       const bubbleNote = row?.bubble_note ?? sourceRow?.bubble_note ?? null;
       const targetNote = sliceItem.monthlyTargetNotes?.[m] ?? null;
-
-      let target: number | null;
-      if (indicatorUsesComputedAchievement(sliceEffType)) {
-        target = monthTargetComputed;
-      } else if (sliceEffType === "normal") {
-        target = monthTargetNormal;
-      } else {
-        target = 0;
-      }
-
-      let submittedPercent = rawSubmitted;
-      if (row !== undefined && rawActualMetric !== null && target !== null && target >= 0) {
-        const actualForAchievement =
-          rowAggregationType === "cumulative"
-            ? cumulativeActualThroughPriorMonths(rowMap, chartMonths, m) +
-              rawActualMetric
-            : rawActualMetric;
-        if (sliceItem.evaluationType === "qualitative") {
-          submittedPercent = qualitativeAchievementPercent(
-            actualForAchievement,
-            target,
-            sliceItem.qualitativeCalcType ?? "progress",
-            sliceItem.achievementCap
-          );
-        } else if (
-          indicatorUsesComputedAchievement(sliceEffType) ||
-          normalRowMetricMode
-        ) {
-          submittedPercent = computedAchievementPercent(
-            sliceEffType,
-            actualForAchievement,
-            target,
-            sliceItem.targetDirection,
-            sliceItem.achievementCap
-          );
-        }
-      }
 
       const showBarTopLabel =
         visibleOnChart ||
@@ -3041,7 +2812,7 @@ export function PerformanceModal({
       }
 
       if (modeComposite && linkedSecondaryItem) {
-        const secondarySlice = computeMonthPerfSliceForChart(
+        const secondarySlice = computeMonthPerformanceSlice(
           m,
           chartMonths,
           linkedSecondaryItem,
@@ -3053,8 +2824,7 @@ export function PerformanceModal({
         const targetSecondary = resolveMonthlyChartTargetLine(
           m,
           linkedSecondaryItem,
-          rowByMonthSecondary,
-          chartMonths,
+          rowByMonthSecondary.get(m),
           effectiveIndicatorTypeSecondary,
           normalMonthlyContextSecondary,
           computedTargetMetricSecondary
@@ -3268,20 +3038,46 @@ export function PerformanceModal({
   }, [kpiItem, chartData, chartShowsDualGroupedBars, chartYDomain]);
 
   const yAxisTicks = useMemo(
-    () => buildYAxisTicks(chartYDomain.min, chartYDomain.max),
-    [chartYDomain.min, chartYDomain.max]
+    () =>
+      kioskMode
+        ? buildYAxisIntegerTicks(chartYDomain.min, chartYDomain.max)
+        : buildYAxisTicks(chartYDomain.min, chartYDomain.max),
+    [chartYDomain.min, chartYDomain.max, kioskMode]
   );
   const yAxisTicksSecondary = useMemo(
-    () => buildYAxisTicks(chartYDomainSecondary.min, chartYDomainSecondary.max),
-    [chartYDomainSecondary.min, chartYDomainSecondary.max]
+    () =>
+      kioskMode
+        ? buildYAxisIntegerTicks(chartYDomainSecondary.min, chartYDomainSecondary.max)
+        : buildYAxisTicks(chartYDomainSecondary.min, chartYDomainSecondary.max),
+    [chartYDomainSecondary.min, chartYDomainSecondary.max, kioskMode]
+  );
+
+  const kioskChartAxisFontSize = kioskMode ? 13 : 11;
+  const kioskChartBarMaxSize = kioskMode ? 58 : 44;
+  const kioskChartBarCategoryGap = kioskMode ? 2 : 10;
+  const kioskChartBarLabelFontSize = kioskMode ? 12 : 10;
+  const ActualBarShape = useMemo(
+    () => (props: Parameters<typeof ActualPerformanceBarShape>[0]) =>
+      ActualPerformanceBarShape(props, kioskChartBarLabelFontSize),
+    [kioskChartBarLabelFontSize]
   );
 
   const yAxisWidth = useMemo(
     () =>
       chartShowsDualGroupedBars
-        ? estimateYAxisWidth(yAxisTicks, chartAxisIndicatorType, 52, 80)
-        : estimateYAxisWidth(yAxisTicks, chartAxisIndicatorType, 44, 72),
-    [yAxisTicks, chartAxisIndicatorType, chartShowsDualGroupedBars]
+        ? estimateYAxisWidth(
+            yAxisTicks,
+            chartAxisIndicatorType,
+            kioskMode ? 56 : 52,
+            kioskMode ? 88 : 80
+          )
+        : estimateYAxisWidth(
+            yAxisTicks,
+            chartAxisIndicatorType,
+            kioskMode ? 50 : 44,
+            kioskMode ? 88 : 72
+          ),
+    [yAxisTicks, chartAxisIndicatorType, chartShowsDualGroupedBars, kioskMode]
   );
   const yAxisWidthSecondary = useMemo(
     () =>
@@ -3631,7 +3427,7 @@ export function PerformanceModal({
     if (kpiItem.isFinalCompleted) {
       return {
         barWidth: 100,
-        lineMain: "완료",
+        lineMain: "최종 완료",
         lineSub: "",
         completedTone: true,
       };
@@ -3648,7 +3444,7 @@ export function PerformanceModal({
     return {
       barWidth: 0,
       lineMain: "0%",
-      lineSub: "데이터 없음",
+      lineSub: "",
       completedTone: false,
     };
   }, [kpiItem]);
@@ -3725,83 +3521,19 @@ export function PerformanceModal({
     applyMonthSelection(nextDelayMonth);
   }
 
-  function buildFollowingCumulativeRateUpdates(
+  function followingCumulativeRateUpdates(
     currentActualValue: number | undefined
   ): Array<{ month: MonthKey; achievementRate: number }> {
-    if (currentActualValue === undefined || !normalMonthlyContext) return [];
-    const updates: Array<{ month: MonthKey; achievementRate: number }> = [];
-    const actualThroughMonth = (targetMonth: MonthKey) =>
-      displayMonthList.reduce((sum, month) => {
-        if (month > targetMonth) return sum;
-        const raw =
-          month === editorMonth
-            ? currentActualValue
-            : rowByMonth.get(month)?.actual_value;
-        const value =
-          raw !== null && raw !== undefined && Number.isFinite(Number(raw))
-            ? Number(raw)
-            : 0;
-        return sum + value;
-      }, 0);
-
-    for (const month of displayMonthList) {
-      if (month <= editorMonth) continue;
-      const row = rowByMonth.get(month);
-      if (resolvePerformanceAggregationType(row, item.aggregationType) !== "cumulative") {
-        continue;
-      }
-      const ownActual = row?.actual_value;
-      if (
-        ownActual === null ||
-        ownActual === undefined ||
-        !Number.isFinite(Number(ownActual))
-      ) {
-        continue;
-      }
-
-      const actual = actualThroughMonth(month);
-      let target: number | null = null;
-      let rate: number | null = null;
-      if (indicatorUsesComputedAchievement(effectiveIndicatorType)) {
-        target =
-          cumulativeTargetThroughMonth(item.monthlyTargets, month) ??
-          computedTargetMetric;
-        if (target !== null && target >= 0) {
-          rate =
-            item.evaluationType === "qualitative"
-              ? qualitativeAchievementPercent(
-                  actual,
-                  target,
-                  item.qualitativeCalcType ?? "progress",
-                  item.achievementCap
-                )
-              : computedAchievementPercent(
-                  effectiveIndicatorType,
-                  actual,
-                  target,
-                  item.targetDirection,
-                  item.achievementCap
-                );
-        }
-      } else if (effectiveIndicatorType === "normal" && item.targetDirection !== "na") {
-        target =
-          cumulativeTargetThroughMonth(item.monthlyTargets, month) ??
-          resolveNormalMonthlyTargetMetric(month, normalMonthlyContext);
-        if (target !== null && target >= 0) {
-          rate = computedAchievementPercent(
-            "normal",
-            actual,
-            target,
-            item.targetDirection,
-            item.achievementCap
-          );
-        }
-      }
-      if (rate !== null && Number.isFinite(rate)) {
-        updates.push({ month, achievementRate: rate });
-      }
-    }
-    return updates;
+    return buildFollowingCumulativeRateUpdates({
+      displayMonthList,
+      editorMonth,
+      rowByMonth,
+      currentActualValue,
+      item,
+      effectiveIndicatorType,
+      normalMonthlyContext,
+      computedTargetMetric,
+    });
   }
 
   function editorMonthHasSavedInputForConfirm(month: MonthKey): boolean {
@@ -3852,10 +3584,13 @@ export function PerformanceModal({
         return;
       }
       actualMetricSave = ap;
-      const actualForAchievement =
-        editorAggregationType === "cumulative"
-          ? cumulativeActualThroughPriorMonths(rowByMonth, displayMonthList, editorMonth) + ap
-          : ap;
+      const actualForAchievement = actualForAchievementInPeriod(
+        rowByMonth,
+        displayMonthList,
+        editorMonth,
+        ap,
+        editorAggregationType
+      );
       rateNum =
         item.evaluationType === "qualitative"
           ? qualitativeAchievementPercent(
@@ -3884,10 +3619,13 @@ export function PerformanceModal({
         return;
       }
       actualMetricSave = metric;
-      const actualForAchievement =
-        editorAggregationType === "cumulative"
-          ? cumulativeActualThroughPriorMonths(rowByMonth, displayMonthList, editorMonth) + metric
-          : metric;
+      const actualForAchievement = actualForAchievementInPeriod(
+        rowByMonth,
+        displayMonthList,
+        editorMonth,
+        metric,
+        editorAggregationType
+      );
       rateNum = computedAchievementPercent(
         "normal",
         actualForAchievement,
@@ -3973,7 +3711,7 @@ export function PerformanceModal({
       }
 
       const followingRateUpdates =
-        buildFollowingCumulativeRateUpdates(actualMetricSave);
+        followingCumulativeRateUpdates(actualMetricSave);
       if (followingRateUpdates.length > 0) {
         if (!targetId) {
           throw new Error(
@@ -4203,7 +3941,13 @@ export function PerformanceModal({
             : "relative flex max-h-[95vh] w-full max-w-[min(100%,88rem)] flex-col overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-2xl shadow-sky-200/50"
         }
       >
-        <div className="relative shrink-0 border-b border-sky-200 bg-gradient-to-br from-sky-600 to-sky-700 px-5 py-5 text-white">
+        <div
+          className={
+            kioskMode
+              ? "relative shrink-0 border-b border-slate-700/80 bg-gradient-to-br from-slate-800 via-slate-900 to-slate-950 px-5 py-4 text-white"
+              : "relative shrink-0 border-b border-sky-200 bg-gradient-to-br from-sky-600 to-sky-700 px-5 py-5 text-white"
+          }
+        >
           {!kioskMode ? (
             <button
               type="button"
@@ -4214,14 +3958,20 @@ export function PerformanceModal({
               <X className="h-5 w-5" />
             </button>
           ) : null}
-          {kioskMode && kioskDeptName ? (
-            <p className="pointer-events-none absolute left-1/2 top-1/2 z-[1] -translate-x-1/2 -translate-y-1/2 whitespace-nowrap text-3xl font-bold tracking-wide text-white sm:text-4xl lg:text-5xl">
-              {kioskDeptName}
-            </p>
-          ) : null}
           <div
-            className={`relative z-[2] flex gap-4 ${kioskMode ? "items-center" : "items-start pr-9 sm:pr-11"}`}
+            className={`relative z-[2] flex gap-4 ${kioskMode ? "items-center justify-between" : "items-start pr-9 sm:pr-11"}`}
           >
+            {kioskMode ? (
+              <div className="flex w-[11.5rem] shrink-0 items-center sm:w-[13rem]">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src="/logo_ctst_white.png"
+                  alt="CTST"
+                  className="h-[4.5rem] w-auto max-w-full object-contain object-left"
+                />
+              </div>
+            ) : null}
+            {!kioskMode ? (
             <div className="min-w-0 flex-1">
               <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold leading-snug text-sky-50 sm:text-base">
                 <span
@@ -4256,14 +4006,37 @@ export function PerformanceModal({
                 </h3>
               )}
             </div>
+            ) : kioskDeptName ? (
+              <p className="min-w-0 flex-1 truncate px-2 text-center text-3xl font-bold tracking-wide text-white sm:text-4xl lg:text-5xl">
+                {kioskDeptName}
+              </p>
+            ) : (
+              <div className="min-w-0 flex-1" />
+            )}
             <div className="flex w-[11.5rem] shrink-0 flex-col gap-2 sm:w-[13rem]">
-              <div className="rounded-xl border border-white/25 bg-white/10 px-3.5 py-2.5 shadow-sm sm:px-4">
+              {kioskMode && headerItem.isFinalCompleted ? (
+                <div
+                  className="flex min-h-[4.25rem] w-full flex-col items-center justify-center rounded-xl border border-emerald-300/45 bg-emerald-400/20 px-3.5 py-2.5 shadow-sm sm:px-4"
+                  role="status"
+                  aria-label="전체 기간 달성률 최종 완료"
+                >
+                  <p className="text-center text-[11px] font-medium text-emerald-100/90">
+                    전체 기간 달성률
+                  </p>
+                  <p className="mt-1 text-center text-base font-bold tracking-tight text-emerald-50 sm:text-lg">
+                    최종 완료
+                  </p>
+                </div>
+              ) : (
+              <div className="rounded-xl border border-white/20 bg-white/10 px-3.5 py-2.5 shadow-sm sm:px-4">
                 <p className="text-center text-sm font-semibold leading-snug text-white sm:text-base">
                   전체 기간 달성률
                 </p>
                 <div className="mt-2 flex items-center gap-2">
                   <div
-                    className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-white shadow-sm ring-1 ring-sky-900/15"
+                    className={`h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-white shadow-sm ring-1 ${
+                      kioskMode ? "ring-white/15" : "ring-sky-900/15"
+                    }`}
                     role="progressbar"
                     aria-valuenow={headerOverallAchievementUi.barWidth}
                     aria-valuemin={0}
@@ -4291,6 +4064,7 @@ export function PerformanceModal({
                   </p>
                 ) : null}
               </div>
+              )}
               {canFinalComplete && headerItem.isFinalCompleted && !kioskMode ? (
                 <button
                   type="button"
@@ -4304,22 +4078,97 @@ export function PerformanceModal({
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col lg:flex-row lg:overflow-hidden">
-          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5">
+        {kioskMode ? (
+          <div className="shrink-0 bg-gradient-to-b from-slate-50/90 via-white to-white px-5 pb-3 pt-4 sm:pb-4 sm:pt-5">
+            {linkedSecondaryItem ? (
+              <div className="grid gap-5 lg:grid-cols-2 lg:gap-8">
+                <KpiKioskTitleBlock
+                  goalLabel="목표 1"
+                  tone="primary"
+                  mainTopic={headerItem.mainTopic}
+                  subTopic={headerItem.subTopic}
+                  detailActivity={headerItem.detailActivity}
+                />
+                <KpiKioskTitleBlock
+                  goalLabel="목표 2"
+                  tone="secondary"
+                  mainTopic={linkedSecondaryItem.mainTopic}
+                  subTopic={linkedSecondaryItem.subTopic}
+                  detailActivity={linkedSecondaryItem.detailActivity}
+                />
+              </div>
+            ) : (
+              <KpiKioskTitleBlock
+                mainTopic={headerItem.mainTopic}
+                subTopic={headerItem.subTopic}
+                detailActivity={headerItem.detailActivity}
+              />
+            )}
+          </div>
+        ) : null}
 
-          <div className="mb-4">
+        <div className="flex min-h-0 flex-1 flex-col lg:flex-row lg:overflow-hidden">
+          <div
+            ref={kioskMode ? kioskBodyRef : undefined}
+            className={`min-h-0 min-w-0 flex-1 ${
+              kioskMode
+                ? `flex flex-col overflow-hidden px-5 pt-4 ${
+                    kioskMonthDetailOpen ? "overflow-y-auto" : ""
+                  }`
+                : "overflow-y-auto p-5"
+            }`}
+            style={
+              kioskMode
+                ? { paddingBottom: `${KIOSK_FOOTER_GAP_PX}px` }
+                : undefined
+            }
+          >
+
+          <div
+            ref={kioskMode ? kioskMetricsRef : undefined}
+            className={kioskMode ? "mb-3 shrink-0" : "mb-4"}
+          >
             {headerItem.needsStructureReview ? (
               <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
                 KPI 평가 구조가 Rev02 이전 형식입니다. 수정 화면에서 평가 유형, 단위, 계산 기준, 목표 공백 처리, 달성률 상한을 확인해 저장해 주세요.
               </p>
             ) : null}
-            {linkedSecondaryItem && chartViewMode === "composite" ? (
+            {kioskMode && linkedSecondaryItem ? (
+              <div className="flex flex-col gap-3">
+                <KpiSummaryCard
+                  title="목표 1"
+                  item={kpiItem}
+                  effectiveIndicatorType={effectiveIndicatorTypePrimary}
+                  displayedFinalTargetValue={displayedFinalTargetValuePrimary}
+                  kioskMode={kioskMode}
+                  showKioskRowTitle
+                />
+                <KpiSummaryCard
+                  title="목표 2"
+                  item={linkedSecondaryItem}
+                  effectiveIndicatorType={effectiveIndicatorTypeSecondary}
+                  displayedFinalTargetValue={displayedFinalTargetValueSecondary}
+                  tone="secondary"
+                  kioskMode={kioskMode}
+                  showKioskRowTitle
+                />
+              </div>
+            ) : kioskMode ? (
+              <KpiSummaryCard
+                title={kpiSummaryCardTitle("목표 1", kpiItem)}
+                item={kpiItem}
+                effectiveIndicatorType={effectiveIndicatorTypePrimary}
+                displayedFinalTargetValue={displayedFinalTargetValuePrimary}
+                kioskMode={kioskMode}
+              />
+            ) : linkedSecondaryItem && chartViewMode === "composite" ? (
               <div className="grid gap-3 lg:grid-cols-2">
                 <KpiSummaryCard
                   title={kpiSummaryCardTitle("목표 1", kpiItem)}
                   item={kpiItem}
                   effectiveIndicatorType={effectiveIndicatorTypePrimary}
                   displayedFinalTargetValue={displayedFinalTargetValuePrimary}
+                  kioskMode={kioskMode}
                 />
                 <KpiSummaryCard
                   title={kpiSummaryCardTitle("목표 2", linkedSecondaryItem)}
@@ -4327,6 +4176,7 @@ export function PerformanceModal({
                   effectiveIndicatorType={effectiveIndicatorTypeSecondary}
                   displayedFinalTargetValue={displayedFinalTargetValueSecondary}
                   tone="secondary"
+                  kioskMode={kioskMode}
                 />
               </div>
             ) : linkedSecondaryItem && chartViewMode === "secondary" ? (
@@ -4336,6 +4186,7 @@ export function PerformanceModal({
                 effectiveIndicatorType={effectiveIndicatorTypeSecondary}
                 displayedFinalTargetValue={displayedFinalTargetValueSecondary}
                 tone="secondary"
+                kioskMode={kioskMode}
               />
             ) : (
               <KpiSummaryCard
@@ -4343,11 +4194,25 @@ export function PerformanceModal({
                 item={kpiItem}
                 effectiveIndicatorType={effectiveIndicatorTypePrimary}
                 displayedFinalTargetValue={displayedFinalTargetValuePrimary}
+                kioskMode={kioskMode}
               />
             )}
           </div>
 
-          <div className="kpi-modal-composed-chart flex h-[320px] flex-col rounded-xl border border-sky-200 bg-white p-1 sm:h-[360px] [&_.recharts-wrapper]:outline-none [&_.recharts-surface]:outline-none [&_svg]:outline-none">
+          <div
+            className={`kpi-modal-composed-chart flex flex-col rounded-xl border border-sky-200 bg-white [&_.recharts-wrapper]:outline-none [&_.recharts-surface]:outline-none [&_svg]:outline-none ${
+              kioskMode
+                ? `mb-4 shrink-0 p-2${
+                    kioskMonthDetailOpen ? " min-h-[280px] flex-1" : ""
+                  }`
+                : "h-[320px] p-1 sm:h-[360px]"
+            }`}
+            style={
+              kioskMode && !kioskMonthDetailOpen
+                ? { height: kioskChartHeightPx }
+                : undefined
+            }
+          >
             {chartViewOptions.length > 0 ? (
               <div className="mb-1 flex items-center justify-end gap-3 px-1">
                 {chartViewOptions.map(({ mode, label }) => (
@@ -4388,16 +4253,17 @@ export function PerformanceModal({
                 data={chartData}
                 accessibilityLayer={false}
                 style={{ outline: "none" }}
+                barCategoryGap={kioskChartBarCategoryGap}
                 margin={{
                   top: 22,
-                  right: chartShowsDualGroupedBars ? 26 : 8,
-                  left: chartShowsDualGroupedBars ? 14 : -4,
+                  right: chartShowsDualGroupedBars ? 26 : kioskMode ? 18 : 8,
+                  left: chartShowsDualGroupedBars ? 14 : kioskMode ? 18 : -4,
                   bottom: 6,
                 }}
                 {...(chartShowsDualGroupedBars
                   ? {
-                      barSize: COMPOSITE_BAR_SIZE_PX,
-                      barGap: COMPOSITE_BAR_GAP_PX,
+                      barSize: kioskMode ? 30 : COMPOSITE_BAR_SIZE_PX,
+                      barGap: kioskMode ? 4 : COMPOSITE_BAR_GAP_PX,
                     }
                   : {})}
                 onClick={(state) => {
@@ -4417,7 +4283,7 @@ export function PerformanceModal({
                   axisLine={{ stroke: "#94a3b8", strokeWidth: 1 }}
                   tickLine={{ stroke: "#94a3b8" }}
                   tickMargin={8}
-                  tick={{ fill: "#334155", fontSize: 11 }}
+                  tick={{ fill: "#334155", fontSize: kioskChartAxisFontSize }}
                 />
                 <YAxis
                   yAxisId="primary"
@@ -4428,12 +4294,12 @@ export function PerformanceModal({
                   tickFormatter={(v) => {
                     const numeric = typeof v === "number" ? v : Number(v);
                     if (!Number.isFinite(numeric)) return "";
-                    return chartTickLabel(chartAxisIndicatorType, numeric);
+                    return chartTickLabel(chartAxisIndicatorType, numeric, kioskMode);
                   }}
                   axisLine={{ stroke: "#94a3b8", strokeWidth: 1 }}
                   tickLine={{ stroke: "#94a3b8" }}
-                  tickMargin={6}
-                  tick={{ fill: "#64748b", fontSize: 11 }}
+                  tickMargin={kioskMode ? 10 : 6}
+                  tick={{ fill: "#64748b", fontSize: kioskChartAxisFontSize }}
                 />
                 {chartShowsDualGroupedBars ? (
                   <YAxis
@@ -4446,12 +4312,16 @@ export function PerformanceModal({
                     tickFormatter={(v) => {
                       const numeric = typeof v === "number" ? v : Number(v);
                       if (!Number.isFinite(numeric)) return "";
-                      return chartTickLabel(effectiveIndicatorTypeSecondary, numeric);
+                      return chartTickLabel(
+                        effectiveIndicatorTypeSecondary,
+                        numeric,
+                        kioskMode
+                      );
                     }}
                     axisLine={{ stroke: CHART_COMPOSITE_GOAL2_TARGET_STROKE, strokeWidth: 1 }}
                     tickLine={{ stroke: CHART_COMPOSITE_GOAL2_TARGET_STROKE }}
-                    tickMargin={6}
-                    tick={{ fill: "#9a3412", fontSize: 11 }}
+                    tickMargin={kioskMode ? 10 : 6}
+                    tick={{ fill: "#9a3412", fontSize: kioskChartAxisFontSize }}
                   />
                 ) : null}
                 <Tooltip
@@ -4752,8 +4622,8 @@ export function PerformanceModal({
                       name="실적"
                       fill={CHART_BAR_LEGEND_FILL}
                       activeBar={false}
-                      maxBarSize={44}
-                      shape={ActualPerformanceBarShape}
+                      maxBarSize={kioskChartBarMaxSize}
+                      shape={ActualBarShape}
                       style={{ outline: "none" }}
                       onClick={(data: unknown) => handlePerformanceBarClick(data, "primary")}
                     >
@@ -4833,10 +4703,42 @@ export function PerformanceModal({
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
-            <KpiChartFullLegend dualComposite={chartShowsDualGroupedBars} />
+            <KpiChartFullLegend
+              dualComposite={chartShowsDualGroupedBars}
+              kioskMode={kioskMode}
+            />
           </div>
 
-          <div className="mt-4">
+          <div
+            ref={kioskMode ? kioskMonthDetailRef : undefined}
+            className={
+              kioskMode
+                ? "shrink-0 overflow-hidden rounded-xl border border-sky-200 bg-white"
+                : undefined
+            }
+          >
+            {kioskMode ? (
+              <button
+                type="button"
+                onClick={() => setKioskMonthDetailOpen((open) => !open)}
+                aria-expanded={kioskMonthDetailOpen}
+                className="flex min-h-[3.75rem] w-full items-center justify-between gap-3 px-5 py-4 text-left transition hover:bg-sky-50/80"
+              >
+                <span className="text-base font-semibold text-slate-800">월별 상세</span>
+                <span className="flex items-center gap-2 text-sm font-medium text-slate-500">
+                  {kioskMonthDetailOpen ? "접기" : "펼치기"}
+                  <ChevronDown
+                    className={`h-5 w-5 text-slate-500 transition-transform duration-200 ${
+                      kioskMonthDetailOpen ? "rotate-180" : ""
+                    }`}
+                    aria-hidden
+                  />
+                </span>
+              </button>
+            ) : null}
+            {!kioskMode || kioskMonthDetailOpen ? (
+              <div className={kioskMode ? "border-t border-sky-100 px-4 pb-4 pt-3" : undefined}>
+          <div className={kioskMode ? undefined : "mt-4"}>
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
               월 선택
             </p>
@@ -4869,7 +4771,13 @@ export function PerformanceModal({
             </div>
           </div>
 
-          <div className="mt-5 rounded-xl border border-sky-200 bg-white p-4">
+          <div
+            className={
+              kioskMode
+                ? "mt-4 rounded-xl border border-sky-100 bg-slate-50/40 p-4"
+                : "mt-5 rounded-xl border border-sky-200 bg-white p-4"
+            }
+          >
             <h4 className="mb-2 text-sm font-semibold text-slate-800">
               {formatAxisLabel(selectedMonth)} 상세
             </h4>
@@ -5065,6 +4973,9 @@ export function PerformanceModal({
                 </div>
               </div>
               ) : null
+            ) : null}
+          </div>
+              </div>
             ) : null}
           </div>
           </div>

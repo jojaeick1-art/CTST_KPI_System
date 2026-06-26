@@ -7,7 +7,8 @@ import {
   ProcessThroughputInput,
   type ThroughputInputMode,
 } from "@/src/components/capa/process-throughput-input";
-import { uphFromCtSec } from "@/src/lib/capa/throughput";
+import { displayCtSec, displayUph } from "@/src/lib/capa/throughput";
+import type { ProcessOverride } from "@/src/types/capa-simulation";
 
 function formatInt(n: number): string {
   return new Intl.NumberFormat("ko-KR").format(Math.round(n));
@@ -39,10 +40,7 @@ function ProcessDetailRow({
   process: ProcessSimResult;
   arrayMultiplier?: number;
   sandboxMode?: boolean;
-  onOverride?: (
-    processId: string,
-    patch: { ctSec?: number; uptimeRate?: number; equipmentCount?: number }
-  ) => void;
+  onOverride?: (processId: string, patch: ProcessOverride) => void;
   onSelect?: (processId: string) => void;
   highlighted?: boolean;
 }) {
@@ -108,18 +106,30 @@ function ProcessDetailRow({
               <ProcessThroughputInput
                 layout="inline"
                 ctSec={process.ctSec}
+                stdUph={process.stdUph}
+                throughputBasis={process.throughputBasis}
                 arrayMultiplier={arrayMultiplier}
                 mode={throughputMode}
                 onModeChange={setThroughputMode}
-                onCtSecChange={(ctSec) =>
-                  onOverride(process.processId, { ctSec })
+                onThroughputChange={(change) =>
+                  onOverride(process.processId, change)
                 }
               />
             ) : (
               <span className="font-semibold tabular-nums text-slate-900">
                 {throughputMode === "ct"
-                  ? process.ctSec.toFixed(1)
-                  : uphFromCtSec(process.ctSec, arrayMultiplier).toFixed(2)}
+                  ? displayCtSec(
+                      process.ctSec,
+                      process.stdUph,
+                      process.throughputBasis,
+                      arrayMultiplier
+                    ).toFixed(2)
+                  : displayUph(
+                      process.ctSec,
+                      process.stdUph,
+                      process.throughputBasis,
+                      arrayMultiplier
+                    ).toFixed(2)}
               </span>
             )}
           </MetricBlock>
@@ -185,10 +195,7 @@ export function ProcessDetailPanel({
   selectedProcessId?: string | null;
   arrayMultiplier?: number;
   sandboxMode?: boolean;
-  onOverride?: (
-    processId: string,
-    patch: { ctSec?: number; uptimeRate?: number; equipmentCount?: number }
-  ) => void;
+  onOverride?: (processId: string, patch: ProcessOverride) => void;
   onSelectProcess?: (processId: string) => void;
 }) {
   if (!processes.length) {

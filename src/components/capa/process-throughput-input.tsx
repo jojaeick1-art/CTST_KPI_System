@@ -7,14 +7,22 @@ import {
   capaMetricInputWidthClass,
 } from "@/src/components/capa/capa-input-classes";
 import {
-  ctSecFromUph,
+  displayCtSec,
+  displayUph,
   formatCtSecForInput,
   formatUphForInput,
   roundCtSec,
-  uphFromCtSec,
+  roundUph,
 } from "@/src/lib/capa/throughput";
+import type { ThroughputBasis } from "@/src/types/capa-recipe";
 
-export type ThroughputInputMode = "ct" | "uph";
+export type ThroughputInputMode = ThroughputBasis;
+
+export type ThroughputChange = {
+  throughputBasis: ThroughputInputMode;
+  ctSec?: number;
+  stdUph?: number;
+};
 
 const modeBtnBase =
   "flex h-full items-center rounded-md px-3 text-sm font-medium transition-colors";
@@ -23,42 +31,38 @@ const modeBtnIdle = "text-slate-600 hover:bg-slate-100";
 
 function formatForMode(
   ctSec: number,
+  stdUph: number | undefined,
+  throughputBasis: ThroughputBasis,
   mode: ThroughputInputMode,
   arrayMultiplier: number
 ): string {
   return mode === "ct"
-    ? formatCtSecForInput(ctSec)
-    : formatUphForInput(uphFromCtSec(ctSec, arrayMultiplier));
-}
-
-function ctSecFromDraft(
-  raw: string,
-  mode: ThroughputInputMode,
-  arrayMultiplier: number
-): number | null {
-  const trimmed = raw.trim();
-  if (trimmed === "" || trimmed === "." || trimmed === "-") return null;
-  const n = Number(trimmed);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  return mode === "ct"
-    ? roundCtSec(n)
-    : roundCtSec(ctSecFromUph(n, arrayMultiplier));
+    ? formatCtSecForInput(
+        displayCtSec(ctSec, stdUph, throughputBasis, arrayMultiplier)
+      )
+    : formatUphForInput(
+        displayUph(ctSec, stdUph, throughputBasis, arrayMultiplier)
+      );
 }
 
 export function ProcessThroughputInput({
   ctSec,
+  stdUph,
+  throughputBasis = "ct",
   mode,
   onModeChange,
-  onCtSecChange,
+  onThroughputChange,
   arrayMultiplier = 1,
   layout = "default",
   inlineInputWidthClass,
 }: {
   ctSec: number;
+  stdUph?: number;
+  throughputBasis?: ThroughputBasis;
   mode: ThroughputInputMode;
   onModeChange: (mode: ThroughputInputMode) => void;
-  onCtSecChange: (ctSec: number) => void;
-  /** 연배 — UPH 표시·역산에 반영 */
+  onThroughputChange: (change: ThroughputChange) => void;
+  /** 연배 — ct 기준 UPH 참고 표시에만 사용 */
   arrayMultiplier?: number;
   layout?: "default" | "inline";
   inlineInputWidthClass?: string;
@@ -68,20 +72,43 @@ export function ProcessThroughputInput({
 
   useEffect(() => {
     if (!editing) return;
-    setDraft(formatForMode(ctSec, mode, arrayMultiplier));
-  }, [mode, editing, ctSec, arrayMultiplier]);
+    setDraft(
+      formatForMode(ctSec, stdUph, throughputBasis, mode, arrayMultiplier)
+    );
+  }, [mode, editing, ctSec, stdUph, throughputBasis, arrayMultiplier]);
 
   const displayValue = editing
     ? draft
-    : formatForMode(ctSec, mode, arrayMultiplier);
+    : formatForMode(ctSec, stdUph, throughputBasis, mode, arrayMultiplier);
 
   function commitDraft(raw: string) {
-    const next = ctSecFromDraft(raw, mode, arrayMultiplier);
-    if (next != null) {
-      onCtSecChange(next);
+    const trimmed = raw.trim();
+    if (trimmed === "" || trimmed === "." || trimmed === "-") {
+      setDraft(
+        formatForMode(ctSec, stdUph, throughputBasis, mode, arrayMultiplier)
+      );
       return;
     }
-    setDraft(formatForMode(ctSec, mode, arrayMultiplier));
+    const n = Number(trimmed);
+    if (!Number.isFinite(n) || n <= 0) {
+      setDraft(
+        formatForMode(ctSec, stdUph, throughputBasis, mode, arrayMultiplier)
+      );
+      return;
+    }
+
+    if (mode === "ct") {
+      onThroughputChange({
+        throughputBasis: "ct",
+        ctSec: roundCtSec(n),
+      });
+      return;
+    }
+
+    onThroughputChange({
+      throughputBasis: "uph",
+      stdUph: roundUph(n),
+    });
   }
 
   const inputClass =
@@ -117,7 +144,9 @@ export function ProcessThroughputInput({
         value={displayValue}
         onFocus={() => {
           setEditing(true);
-          setDraft(formatForMode(ctSec, mode, arrayMultiplier));
+          setDraft(
+            formatForMode(ctSec, stdUph, throughputBasis, mode, arrayMultiplier)
+          );
         }}
         onChange={(ev) => setDraft(ev.target.value)}
         onBlur={(ev) => {

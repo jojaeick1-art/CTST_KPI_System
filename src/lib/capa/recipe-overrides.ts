@@ -1,17 +1,28 @@
 import type { CapaProcess, CapaRecipe } from "@/src/types/capa-recipe";
 import type { RecipeOverrideMap } from "@/src/types/capa-simulation";
+import { resolveThroughputBasis } from "@/src/lib/capa/throughput";
 
 function applyProcessOverride(
   process: CapaProcess,
   override?: RecipeOverrideMap[string]
 ): CapaProcess {
   if (!override) return process;
+
+  const throughputBasis = resolveThroughputBasis(
+    override.throughputBasis ?? process.throughputBasis
+  );
+
   return {
     ...process,
     ctSec:
       override.ctSec != null && override.ctSec > 0
         ? override.ctSec
         : process.ctSec,
+    stdUph:
+      override.stdUph != null && override.stdUph > 0
+        ? override.stdUph
+        : process.stdUph,
+    throughputBasis,
     defaultUptimeRate:
       override.uptimeRate != null && override.uptimeRate > 0
         ? override.uptimeRate > 1

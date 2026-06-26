@@ -3,7 +3,9 @@ import {
   type CapaProcess,
   type CapaRecipe,
   type CapaRecipeFile,
+  type ThroughputBasis,
 } from "@/src/types/capa-recipe";
+import { roundCtSec, roundUph } from "@/src/lib/capa/throughput";
 
 /** v1.0 레거시 설비 노드 */
 type LegacyEquipment = {
@@ -55,6 +57,10 @@ function normalizeEquipmentCount(
   return 1;
 }
 
+function normalizeThroughputBasis(raw: unknown): ThroughputBasis {
+  return raw === "uph" ? "uph" : "ct";
+}
+
 function normalizeProcess(raw: LegacyProcess, index: number): CapaProcess {
   const legacyEq = (raw.equipments ?? []).filter((e) => e?.isActive !== false);
 
@@ -68,11 +74,23 @@ function normalizeProcess(raw: LegacyProcess, index: number): CapaProcess {
     );
   }
 
+  const throughputBasis = normalizeThroughputBasis(raw.throughputBasis);
+  const stdUphRaw = Number(raw.stdUph);
+
   return {
     id: raw.id?.trim() || newId(),
     processName: raw.processName?.trim() || `공정 ${index + 1}`,
     seqNo: Number.isFinite(raw.seqNo) ? Number(raw.seqNo) : index + 1,
-    ctSec: Math.max(0.001, Number.isFinite(ctSec) && ctSec > 0 ? ctSec : 1),
+    ctSec: roundCtSec(
+      Math.max(0.001, Number.isFinite(ctSec) && ctSec > 0 ? ctSec : 1)
+    ),
+    stdUph:
+      throughputBasis === "uph" &&
+      Number.isFinite(stdUphRaw) &&
+      stdUphRaw > 0
+        ? roundUph(stdUphRaw)
+        : undefined,
+    throughputBasis,
     defaultUptimeRate: clampUptime(
       uptime != null ? Number(uptime) : 0.9
     ),

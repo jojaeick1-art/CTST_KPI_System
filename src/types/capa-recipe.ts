@@ -5,6 +5,9 @@ export type CapaRecipeSchemaVersion = typeof CAPA_RECIPE_SCHEMA_VERSION;
 /** 라인 구성: 직렬(공정 순차) | 병렬(유사 공정 다수 호기) */
 export type CapaLineTopology = "serial" | "parallel";
 
+/** 생산성 입력 기준 — C/T 또는 UPH 중 사용자가 입력한 쪽이 100% 가동 기준 */
+export type ThroughputBasis = "ct" | "uph";
+
 export type CapaRecipeMeta = {
   id: string;
   name: string;
@@ -24,8 +27,12 @@ export type CapaProcess = {
   id: string;
   processName: string;
   seqNo: number;
-  /** 표준 Cycle Time (초) */
+  /** 표준 Cycle Time (초) — throughputBasis가 ct일 때 100% 가동 기준 */
   ctSec: number;
+  /** 표준 UPH(시간당, 연배 반영) — throughputBasis가 uph일 때 100% 가동 기준 */
+  stdUph?: number;
+  /** 생산성 계산·표시 기준 (기본 ct, 레거시 호환) */
+  throughputBasis?: ThroughputBasis;
   /** 기본 가동률 0~1 */
   defaultUptimeRate: number;
   /** 동일 공정 내 병렬 설비(호기) 수 — CAPA = (가용시간/C/T) × 설비 대수 */

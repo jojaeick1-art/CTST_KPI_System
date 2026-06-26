@@ -1,4 +1,5 @@
 import { normalizeArrayMultiplier } from "@/src/lib/capa/recipe-normalize";
+import { resolveThroughputBasis } from "@/src/lib/capa/throughput";
 import type { CapaProcess } from "@/src/types/capa-recipe";
 import type { ProcessSimResult } from "@/src/types/capa-simulation";
 
@@ -12,6 +13,33 @@ export function bottleneckCtSecFromEquipments(ctSecList: number[]): number | nul
 export function effectiveUptimeFromEquipments(uptimeList: number[]): number {
   if (!uptimeList.length) return 0.9;
   return Math.min(...uptimeList.map((v) => Number(v) || 0));
+}
+
+function capacityFromCt(input: {
+  ctSec: number;
+  effectiveMinutes: number;
+  uptime: number;
+  equipmentCount: number;
+  arrayMultiplier: number;
+}): number {
+  const ct = Math.max(0.001, input.ctSec);
+  const minutes = input.effectiveMinutes * input.uptime;
+  return (
+    Math.floor((minutes * 60) / ct) *
+    input.equipmentCount *
+    input.arrayMultiplier
+  );
+}
+
+function capacityFromUph(input: {
+  stdUph: number;
+  effectiveMinutes: number;
+  uptime: number;
+  equipmentCount: number;
+}): number {
+  const uph = Math.max(0.001, input.stdUph);
+  const effectiveHours = (input.effectiveMinutes * input.uptime) / 60;
+  return Math.floor(effectiveHours * uph) * input.equipmentCount;
 }
 
 export function calcProcessSimulation(input: {
@@ -28,9 +56,24 @@ export function calcProcessSimulation(input: {
     Math.floor(Number(p.equipmentCount)) || 1
   );
   const arrayMultiplier = normalizeArrayMultiplier(input.arrayMultiplier);
-  const minutes = input.effectiveMinutes * uptime;
+  const throughputBasis = resolveThroughputBasis(p.throughputBasis);
+
   const capacityUnits =
-    Math.floor((minutes * 60) / ct) * equipmentCount * arrayMultiplier;
+    throughputBasis === "uph" && p.stdUph != null && p.stdUph > 0
+      ? capacityFromUph({
+          stdUph: p.stdUph,
+          effectiveMinutes: input.effectiveMinutes,
+          uptime,
+          equipmentCount,
+        })
+      : capacityFromCt({
+          ctSec: ct,
+          effectiveMinutes: input.effectiveMinutes,
+          uptime,
+          equipmentCount,
+          arrayMultiplier,
+        });
+
   const loadRate =
     input.targetQty > 0 && capacityUnits > 0
       ? input.targetQty / capacityUnits
@@ -41,6 +84,8 @@ export function calcProcessSimulation(input: {
     processName: p.processName,
     seqNo: p.seqNo,
     ctSec: ct,
+    stdUph: p.stdUph,
+    throughputBasis,
     uptimeRate: uptime,
     equipmentCount,
     capacityUnits,

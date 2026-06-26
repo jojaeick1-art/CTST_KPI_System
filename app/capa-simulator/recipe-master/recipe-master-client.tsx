@@ -68,6 +68,8 @@ function recipeFingerprint(recipe: CapaRecipe | null | undefined): string {
       id: p.id,
       processName: p.processName,
       ctSec: p.ctSec,
+      stdUph: p.stdUph,
+      throughputBasis: p.throughputBasis ?? "ct",
       defaultUptimeRate: p.defaultUptimeRate,
       equipmentCount: p.equipmentCount,
     })),
@@ -878,14 +880,16 @@ export function RecipeMasterClient({ pageTitle = "모델 마스터" }: { pageTit
                             layout="inline"
                             inlineInputWidthClass="w-[110px]"
                             ctSec={p.ctSec}
+                            stdUph={p.stdUph}
+                            throughputBasis={p.throughputBasis}
                             arrayMultiplier={resolveArrayMultiplier(draft.meta)}
                             mode={throughputMode}
                             onModeChange={setThroughputMode}
-                            onCtSecChange={(ctSec) =>
+                            onThroughputChange={(change) =>
                               dispatch({
                                 type: "UPDATE_PROCESS",
                                 processId: p.id,
-                                patch: { ctSec },
+                                patch: change,
                               })
                             }
                           />

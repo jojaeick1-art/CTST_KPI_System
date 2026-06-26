@@ -236,7 +236,8 @@ export type KpiEvaluationType = "quantitative" | "qualitative";
 export type KpiQualitativeCalcType = "progress" | "completion";
 export type KpiAggregationType = "monthly" | "cumulative";
 export type KpiTargetFillPolicy = "exclude" | "carry_forward";
-export type KpiAchievementCap = 100 | 120 | null;
+/** 달성률 상한 — 항상 100% */
+export type KpiAchievementCap = 100;
 
 export function indicatorUsesComputedAchievement(
   t: KpiIndicatorType
@@ -253,11 +254,9 @@ export function indicatorUsesComputedAchievement(
   return t !== "normal";
 }
 
-function applyAchievementCap(n: number, cap: KpiAchievementCap = 100): number {
+function applyAchievementCap(n: number, _cap: KpiAchievementCap = 100): number {
   if (!Number.isFinite(n)) return 0;
-  const lowerBounded = Math.max(0, n);
-  if (cap === null) return lowerBounded;
-  return Math.min(cap, lowerBounded);
+  return Math.min(100, Math.max(0, n));
 }
 
 /**
@@ -588,7 +587,7 @@ type PerformanceMonthlyCell = {
   performance_submit_kind?: "신규" | "수정" | "재등록";
 };
 
-type MonthlyAchievementRateContext = {
+export type MonthlyAchievementRateContext = {
   indicatorType: KpiIndicatorType;
   evaluationType: KpiEvaluationType | null;
   qualitativeCalcType: KpiQualitativeCalcType | null;
@@ -601,7 +600,7 @@ type MonthlyAchievementRateContext = {
   normalMonthlyContext: NormalMonthlyTargetContext | null;
 };
 
-function resolveMonthlyTargetFromPlan(
+export function resolveMonthlyTargetForMonth(
   monthlyTargets: Partial<Record<number, number>>,
   month: MonthKey,
   policy: KpiTargetFillPolicy | null | undefined = "exclude"
@@ -617,7 +616,7 @@ function resolveMonthlyTargetFromPlan(
   return null;
 }
 
-function cumulativeTargetThroughMonthFromPlan(
+export function cumulativeTargetThroughMonth(
   monthlyTargets: Partial<Record<number, number>>,
   month: MonthKey
 ): number | null {
@@ -688,34 +687,123 @@ function normalizeEvaluationPeriodMonths(
   return { periodStart, periodEnd };
 }
 
-/** 당월 단독 전체 기간 평균 분모에 포함되는 평가월(목표 공백 처리 반영). */
-function monthCountsInStandalonePeriodAverage(
-  month: MonthKey,
+function monthCellHasPerformanceInput(
+  cell: PerformanceMonthlyCell | null | undefined
+): boolean {
+  if (!cell) return false;
+  const actual = toNum(
+    cell.actual_value as number | string | null | undefined
+  );
+  if (actual !== null && Number.isFinite(actual)) return true;
+  const stored = toNum(
+    cell.achievement_rate as number | string | null | undefined
+  );
+  return stored !== null && Number.isFinite(stored);
+}
+
+/** 평가 구간 내 실적(지표값·달성률)이 입력된 가장 늦은 월 */
+function findLatestPerformanceMonthInPeriod(
+  cells: Record<string, unknown>,
   periodStart: MonthKey,
-  periodEnd: MonthKey,
+  periodEnd: MonthKey
+): MonthKey | null {
+  let latestM = -1;
+  for (const mi of KPI_MONTHS) {
+    const mn = Number(mi);
+    if (mn < periodStart || mn > periodEnd) continue;
+    const cell = cells[String(mi)];
+    if (!cell || typeof cell !== "object" || Array.isArray(cell)) continue;
+    if (!monthCellHasPerformanceInput(cell as PerformanceMonthlyCell)) continue;
+    if (mn > latestM) latestM = mn;
+  }
+  return latestM >= 0 ? (latestM as MonthKey) : null;
+}
+
+/** 누적 전체 기간 달성률 분모 — 최종 목표값(건수·% 등), 월별 마일스톤 합이 아님 */
+function resolveOverallFinalTargetMetric(
+  ctx: MonthlyAchievementRateContext,
+  periodEnd: MonthKey
+): number | null {
+  if (
+    ctx.computedTargetMetric !== null &&
+    Number.isFinite(ctx.computedTargetMetric) &&
+    ctx.computedTargetMetric >= 0
+  ) {
+    return ctx.computedTargetMetric;
+  }
+  const finalValue = ctx.normalMonthlyContext?.targetFinalValue;
+  if (
+    finalValue !== null &&
+    finalValue !== undefined &&
+    Number.isFinite(finalValue) &&
+    finalValue >= 0
+  ) {
+    return finalValue;
+  }
+  if (ctx.normalMonthlyContext && ctx.indicatorType === "normal") {
+    return resolveNormalMonthlyTargetMetric(periodEnd, ctx.normalMonthlyContext);
+  }
+  return null;
+}
+
+function actualMetricAtMonth(
+  cells: Record<string, unknown>,
+  month: MonthKey
+): number | null {
+  const cell = cells[String(month)];
+  if (!cell || typeof cell !== "object" || Array.isArray(cell)) return null;
+  const actual = toNum(
+    (cell as PerformanceMonthlyCell).actual_value as number | string | null | undefined
+  );
+  return actual !== null && Number.isFinite(actual) ? actual : null;
+}
+
+/**
+ * 진행률(%)·정성 등 — 월별 실적값이 '현재까지 진척'인 경우 마지막 월 값을 YTD로 사용.
+ * 건수·수량 등 가산 KPI는 구간 합산.
+ */
+function overallActualMetricThroughLatestMonth(
+  cells: Record<string, unknown>,
+  ctx: MonthlyAchievementRateContext,
+  periodStart: MonthKey,
+  latestM: MonthKey
+): number {
+  const pointInTime =
+    ctx.indicatorType === "normal" && ctx.targetDirection !== "na";
+  const qualitativeProgress =
+    ctx.evaluationType === "qualitative" &&
+    (ctx.qualitativeCalcType ?? "progress") === "progress";
+  if (pointInTime || qualitativeProgress) {
+    const atLatest = actualMetricAtMonth(cells, latestM);
+    if (atLatest !== null) return atLatest;
+  }
+  return actualSumFromPeriodStartThroughMonth(cells, periodStart, latestM);
+}
+
+/**
+ * 당월 단독 — 전체 기간 달성률을 최종 목표 대비로 볼지 여부.
+ * 건수 등 월별 마일스톤이 있으면 그달 목표 대비, 금액·진행률(%) 등은 최종 목표 대비.
+ */
+function standaloneOverallUsesFinalTarget(
   ctx: MonthlyAchievementRateContext
 ): boolean {
-  if (month < periodStart || month > periodEnd) return false;
-
-  const exactTarget = ctx.monthlyTargets[month];
-  if (typeof exactTarget === "number" && Number.isFinite(exactTarget)) return true;
-
-  if (ctx.targetFillPolicy === "carry_forward") {
-    for (let m = month - 1; m >= periodStart; m -= 1) {
-      const prior = ctx.monthlyTargets[m];
-      if (typeof prior === "number" && Number.isFinite(prior)) return true;
-    }
+  if (ctx.indicatorType === "normal" && ctx.targetDirection !== "na") {
+    return true;
   }
-
-  const resolved = resolveCurrentMonthlyTargetMetric(month, "monthly", ctx);
-  if (resolved !== null && Number.isFinite(resolved)) return true;
-
-  return Object.keys(ctx.monthlyTargets).length === 0 && ctx.normalMonthlyContext !== null;
+  if (ctx.evaluationType === "qualitative") return true;
+  if (ctx.indicatorType === "money") return true;
+  const hasMonthlyPlan = Object.keys(ctx.monthlyTargets).length > 0;
+  if (ctx.indicatorType === "count" && hasMonthlyPlan) return false;
+  if (indicatorUsesComputedAchievement(ctx.indicatorType)) {
+    return !hasMonthlyPlan;
+  }
+  return false;
 }
 
 /**
  * 당월 단독 KPI 전체 기간 달성률.
- * 평가 기간 내 각 월 달성률의 산술 평균 — 실적 없는 평가월은 0%.
+ * - 금액·진행률(%)·정성: 마지막 실적월 vs **최종 목표값**.
+ * - 건수 등(월별 마일스톤): 마지막 실적월 vs **그달 월별 목표**.
  */
 function monthlyStandaloneOverallAchievementPercent(
   cells: Record<string, unknown>,
@@ -723,41 +811,42 @@ function monthlyStandaloneOverallAchievementPercent(
   periodStart: MonthKey,
   periodEnd: MonthKey
 ): number | null {
-  let sum = 0;
-  let count = 0;
+  const latestM = findLatestPerformanceMonthInPeriod(
+    cells,
+    periodStart,
+    periodEnd
+  );
+  if (latestM === null) return null;
 
-  for (let m = periodStart; m <= periodEnd; m += 1) {
-    const month = m as MonthKey;
-    if (!monthCountsInStandalonePeriodAverage(month, periodStart, periodEnd, ctx)) {
-      continue;
+  const finalTarget = resolveOverallFinalTargetMetric(ctx, periodEnd);
+  const actualAtLatest = actualMetricAtMonth(cells, latestM);
+
+  if (
+    standaloneOverallUsesFinalTarget(ctx) &&
+    actualAtLatest !== null &&
+    finalTarget !== null &&
+    finalTarget >= 0
+  ) {
+    if (ctx.evaluationType === "qualitative") {
+      return qualitativeAchievementPercent(
+        actualAtLatest,
+        finalTarget,
+        ctx.qualitativeCalcType ?? "progress",
+        ctx.achievementCap ?? 100
+      );
     }
-    count += 1;
-
-    const cell = cells[String(month)];
-    const actual =
-      cell && typeof cell === "object" && !Array.isArray(cell)
-        ? toNum(
-            (cell as PerformanceMonthlyCell).actual_value as
-              | number
-              | string
-              | null
-              | undefined
-          )
-        : null;
-
-    if (actual === null || !Number.isFinite(actual)) {
-      continue;
-    }
-
-    const rate = monthlyAchievementRateFromCurrentTarget(cells, month, ctx);
-    sum +=
-      rate !== null && Number.isFinite(rate)
-        ? applyAchievementCap(rate, ctx.achievementCap ?? 100)
-        : 0;
+    return computedAchievementPercent(
+      ctx.indicatorType,
+      actualAtLatest,
+      finalTarget,
+      ctx.targetDirection,
+      ctx.achievementCap
+    );
   }
 
-  if (count <= 0) return null;
-  return sum / count;
+  const rate = monthlyAchievementRateFromCurrentTarget(cells, latestM, ctx);
+  if (rate === null || !Number.isFinite(rate)) return null;
+  return applyAchievementCap(rate, ctx.achievementCap ?? 100);
 }
 
 function resolveOverallAggregationType(
@@ -787,8 +876,8 @@ function resolveOverallAggregationType(
 
 /**
  * 부서 KPI 목록·전체보기 대표 달성률.
- * - **당월 단독**: 평가 기간 각 월 달성률 평균(실적 없는 평가월 = 0%).
- * - **누적 계산**: 평가 시작~최신 실적월까지 실적 합 vs **평가 말월 누적 목표 합**.
+ * - **당월 단독**: 마지막 실적월 — 금액·진행률은 최종목표 대비, 건수(월별마일스톤)는 그달 목표 대비.
+ * - **누적 계산**: 마지막 실적월 YTD 실적 vs **최종 목표값**.
  */
 function periodEndOverallAchievementPercentFromMonthlyTarget(
   targetRow: Record<string, unknown>,
@@ -809,30 +898,17 @@ function periodEndOverallAchievementPercentFromMonthlyTarget(
     return monthlyStandaloneOverallAchievementPercent(o, ctx, periodStart, periodEnd);
   }
 
-  let latestM = -1;
-  for (const mi of KPI_MONTHS) {
-    const mn = Number(mi);
-    if (mn < periodStart || mn > periodEnd) continue;
-    const cell = o[String(mi)];
-    if (!cell || typeof cell !== "object" || Array.isArray(cell)) continue;
-    const rate = monthlyAchievementRateFromCurrentTarget(o, mi, ctx);
-    if (rate === null || !Number.isFinite(rate)) continue;
-    if (mn > latestM) latestM = mn;
-  }
-  if (latestM < 0) return null;
+  const latestM = findLatestPerformanceMonthInPeriod(o, periodStart, periodEnd);
+  if (latestM === null) return null;
 
-  const sumThroughLatest = actualSumFromPeriodStartThroughMonth(
+  const actualOverall = overallActualMetricThroughLatestMonth(
     o,
+    ctx,
     periodStart,
-    latestM as MonthKey
+    latestM
   );
-  const actualOverall = sumThroughLatest;
 
-  let periodTarget = cumulativeTargetThroughMonthFromPlan(ctx.monthlyTargets, periodEnd);
-  if (periodTarget === null) {
-    periodTarget = resolveCurrentMonthlyTargetMetric(periodEnd, "cumulative", ctx);
-  }
-
+  const periodTarget = resolveOverallFinalTargetMetric(ctx, periodEnd);
   if (periodTarget === null || !Number.isFinite(periodTarget) || periodTarget < 0) {
     return null;
   }
@@ -858,20 +934,20 @@ function periodEndOverallAchievementPercentFromMonthlyTarget(
     );
   }
 
-  const stored = monthlyAchievementRateFromCurrentTarget(o, latestM as MonthKey, ctx);
+  const stored = monthlyAchievementRateFromCurrentTarget(o, latestM, ctx);
   return stored !== null
     ? applyAchievementCap(stored, ctx.achievementCap ?? 100)
     : null;
 }
 
-function resolveCurrentMonthlyTargetMetric(
+export function resolveCurrentMonthlyTargetMetric(
   month: MonthKey,
   aggregationType: KpiAggregationType,
   ctx: MonthlyAchievementRateContext
 ): number | null {
   const hasMonthlyTargetPlan = Object.keys(ctx.monthlyTargets).length > 0;
   if (aggregationType === "cumulative") {
-    const cumulative = cumulativeTargetThroughMonthFromPlan(ctx.monthlyTargets, month);
+    const cumulative = cumulativeTargetThroughMonth(ctx.monthlyTargets, month);
     if (cumulative !== null) return cumulative;
     if (
       ctx.indicatorType === "normal" &&
@@ -883,7 +959,7 @@ function resolveCurrentMonthlyTargetMetric(
     return ctx.computedTargetMetric;
   }
 
-  const fromMonthly = resolveMonthlyTargetFromPlan(
+  const fromMonthly = resolveMonthlyTargetForMonth(
     ctx.monthlyTargets,
     month,
     ctx.targetFillPolicy
@@ -922,9 +998,10 @@ function monthlyAchievementRateFromCurrentTarget(
     return stored === null ? null : applyAchievementCap(stored, ctx.achievementCap ?? 100);
   }
 
+  const { periodStart } = resolvePeriodBoundsFromCtx(ctx);
   const actualForAchievement =
     aggregationType === "cumulative"
-      ? actualThroughMonthFromCells(cells, month)
+      ? actualSumFromPeriodStartThroughMonth(cells, periodStart, month)
       : actual;
 
   if (ctx.evaluationType === "qualitative") {
@@ -971,25 +1048,24 @@ function monthlyAchievementRatesLatestRegisteredMonth(
   const raw = t.performance_monthly;
   if (!performanceMonthlyIsNonEmpty(raw)) return [];
   const o = raw as Record<string, unknown>;
-  let bestMonth = -1;
-  let bestRate: number | null = null;
-  for (const mi of KPI_MONTHS) {
-    const cell = o[String(mi)];
-    if (!cell || typeof cell !== "object" || Array.isArray(cell)) continue;
-    const rec = cell as PerformanceMonthlyCell;
-    const rate =
-      ctx !== undefined
-        ? monthlyAchievementRateFromCurrentTarget(o, mi, ctx)
-        : toNum(rec.achievement_rate as number | string | null | undefined);
-    if (rate === null || !Number.isFinite(rate)) continue;
-    const miNum = Number(mi);
-    if (miNum > bestMonth) {
-      bestMonth = miNum;
-      bestRate = applyAchievementCap(rate, ctx?.achievementCap ?? 100);
-    }
-  }
-  if (bestMonth < 0 || bestRate === null) return [];
-  return [bestRate];
+  const { periodStart, periodEnd } = ctx
+    ? resolvePeriodBoundsFromCtx(ctx)
+    : { periodStart: 1 as MonthKey, periodEnd: 12 as MonthKey };
+  const latestM = findLatestPerformanceMonthInPeriod(
+    o,
+    periodStart,
+    periodEnd
+  );
+  if (latestM === null) return [];
+  const rate =
+    ctx !== undefined
+      ? monthlyAchievementRateFromCurrentTarget(o, latestM, ctx)
+      : toNum(
+          (o[String(latestM)] as PerformanceMonthlyCell | undefined)
+            ?.achievement_rate as number | string | null | undefined
+        );
+  if (rate === null || !Number.isFinite(rate)) return [];
+  return [applyAchievementCap(rate, ctx?.achievementCap ?? 100)];
 }
 
 function monthlyAchievementRatesByMonth(
@@ -1123,7 +1199,7 @@ function collectApprovedAchievementRatesForItemTargets(
 /**
  * 목록·집계에서 KPI 항목 1건의 대표 달성률(평균용 보조).
  * - 월별 JSON이 있으면 `periodEndOverallAchievementPercentFromMonthlyTarget`가 우선
- *   (당월 단독: 평가월 달성률 평균, 누적: 말월 누적 목표 대비).
+ *   (당월 단독: 마지막 실적월·진행률은 최종목표 대비, 누적: YTD vs 최종 목표값).
  * - 레거시 분기·반기: 수집된 값 평균.
  */
 function representativeAchievementPercentForRates(
@@ -1711,10 +1787,26 @@ function parseTargetFillPolicy(raw: unknown): KpiTargetFillPolicy | null {
   return null;
 }
 
-function parseAchievementCap(raw: unknown): KpiAchievementCap {
-  const n = toNum(raw as number | string | null | undefined);
-  if (n === null || !Number.isFinite(n)) return null;
-  return n >= 120 ? 120 : 100;
+function parseAchievementCap(_raw: unknown): KpiAchievementCap {
+  return 100;
+}
+
+function resolvePeriodBoundsFromCtx(ctx: MonthlyAchievementRateContext): {
+  periodStart: MonthKey;
+  periodEnd: MonthKey;
+} {
+  const ps = ctx.normalMonthlyContext?.periodStartMonth;
+  const pe = ctx.normalMonthlyContext?.periodEndMonth;
+  const periodStart = (
+    ps != null && Number.isInteger(ps) && ps >= 1 && ps <= 15 ? ps : 1
+  ) as MonthKey;
+  const periodEnd = (
+    pe != null && Number.isInteger(pe) && pe >= 1 && pe <= 15 ? pe : 12
+  ) as MonthKey;
+  return {
+    periodStart,
+    periodEnd: periodEnd >= periodStart ? periodEnd : periodStart,
+  };
 }
 
 function buildMonthlyAchievementRateContext(input: {
@@ -3500,7 +3592,7 @@ export async function updatePerformanceMonthlyCalculatedRates(input: {
     if (!pm[key]) continue;
     pm[key] = {
       ...pm[key],
-      achievement_rate: applyAchievementCap(update.achievementRate, null),
+      achievement_rate: applyAchievementCap(update.achievementRate, 100),
     };
   }
   const filtered = await filterPayloadToExistingKpiTargetColumns({
@@ -6046,4 +6138,457 @@ export async function importKpisFromExcelRows(input: {
   }
 
   return successCount;
+}
+
+/** 실적 모달·차트 UI용 KPI 필드(달성률 계산 공통 입력). */
+export type PerformanceUiItemSlice = {
+  monthlyTargets: Partial<Record<number, number>>;
+  targetFillPolicy: KpiTargetFillPolicy | null;
+  aggregationType: KpiAggregationType | null;
+  evaluationType: KpiEvaluationType | null;
+  qualitativeCalcType: KpiQualitativeCalcType | null;
+  targetDirection: "up" | "down" | "na";
+  achievementCap: KpiAchievementCap;
+};
+
+export function buildPerformanceUiAchievementContext(input: {
+  indicatorType: KpiIndicatorType;
+  evaluationType: KpiEvaluationType | null;
+  qualitativeCalcType: KpiQualitativeCalcType | null;
+  targetDirection: "up" | "down" | "na";
+  aggregationType: KpiAggregationType | null;
+  targetFillPolicy: KpiTargetFillPolicy | null;
+  achievementCap: KpiAchievementCap;
+  monthlyTargets: Partial<Record<number, number>>;
+  computedTargetMetric: number | null;
+  normalMonthlyContext: NormalMonthlyTargetContext | null;
+}): MonthlyAchievementRateContext {
+  return {
+    indicatorType: input.indicatorType,
+    evaluationType: input.evaluationType,
+    qualitativeCalcType: input.qualitativeCalcType,
+    targetDirection: input.targetDirection,
+    aggregationType: input.aggregationType,
+    targetFillPolicy: input.targetFillPolicy,
+    achievementCap: input.achievementCap,
+    computedTargetMetric: input.computedTargetMetric,
+    monthlyTargets: input.monthlyTargets,
+    normalMonthlyContext: input.normalMonthlyContext,
+  };
+}
+
+export function resolvePerformanceAggregationType(
+  row: ItemPerformanceRow | null | undefined,
+  fallback: KpiAggregationType | null | undefined
+): KpiAggregationType {
+  return row?.aggregation_type ?? fallback ?? "monthly";
+}
+
+export function isChartVisiblePerformanceStep(
+  step: string | null | undefined
+): boolean {
+  const s = (step?.trim().toLowerCase() ?? "");
+  return s === PERF_STATUS_PENDING_FINAL || s === PERF_STATUS_APPROVED;
+}
+
+export function findLatestPriorRowWithSubmittedValue(
+  rowByMonth: Map<MonthKey, ItemPerformanceRow>,
+  month: MonthKey,
+  monthList: MonthKey[]
+): { month: MonthKey; row: ItemPerformanceRow } | null {
+  const idx = monthList.indexOf(month);
+  if (idx <= 0) return null;
+  for (let i = idx - 1; i >= 0; i -= 1) {
+    const prevMonth = monthList[i]!;
+    const prevRow = rowByMonth.get(prevMonth);
+    if (!prevRow) continue;
+    const hasRate =
+      prevRow.achievement_rate !== null &&
+      prevRow.achievement_rate !== undefined &&
+      !Number.isNaN(Number(prevRow.achievement_rate));
+    const hasActual =
+      prevRow.actual_value !== null &&
+      prevRow.actual_value !== undefined &&
+      Number.isFinite(Number(prevRow.actual_value));
+    if (hasRate || hasActual) {
+      return { month: prevMonth, row: prevRow };
+    }
+  }
+  return null;
+}
+
+/** 평가 구간 월 목록에서 month 이전 월들의 actual_value 합. */
+export function cumulativeActualBeforeMonthInList(
+  rowByMonth: Map<MonthKey, ItemPerformanceRow>,
+  monthList: MonthKey[],
+  month: MonthKey
+): number {
+  return monthList.reduce((sum, m) => {
+    if (m >= month) return sum;
+    const prior = rowByMonth.get(m)?.actual_value;
+    const priorValue =
+      prior !== null && prior !== undefined && Number.isFinite(Number(prior))
+        ? Number(prior)
+        : 0;
+    return sum + priorValue;
+  }, 0);
+}
+
+/** 평가 구간 월 목록에서 throughMonth까지 actual_value 합(편집 중인 월 draft 반영 가능). */
+export function actualSumThroughMonthInList(
+  rowByMonth: Map<MonthKey, ItemPerformanceRow>,
+  monthList: MonthKey[],
+  throughMonth: MonthKey,
+  editorMonth?: MonthKey,
+  editorDraftActual?: number
+): number {
+  return monthList.reduce((sum, month) => {
+    if (month > throughMonth) return sum;
+    const raw =
+      editorMonth !== undefined &&
+      month === editorMonth &&
+      editorDraftActual !== undefined
+        ? editorDraftActual
+        : rowByMonth.get(month)?.actual_value;
+    const value =
+      raw !== null && raw !== undefined && Number.isFinite(Number(raw))
+        ? Number(raw)
+        : 0;
+    return sum + value;
+  }, 0);
+}
+
+export function actualForAchievementInPeriod(
+  rowByMonth: Map<MonthKey, ItemPerformanceRow>,
+  monthList: MonthKey[],
+  month: MonthKey,
+  monthActual: number,
+  aggregationType: KpiAggregationType
+): number {
+  return aggregationType === "cumulative"
+    ? cumulativeActualBeforeMonthInList(rowByMonth, monthList, month) +
+        monthActual
+    : monthActual;
+}
+
+/** 월별 목표선 값(차트). 실적 승인 여부와 무관하게 목표값만 계산. */
+export function resolveMonthlyChartTargetLine(
+  month: MonthKey,
+  item: PerformanceUiItemSlice,
+  row: ItemPerformanceRow | null | undefined,
+  effType: KpiIndicatorType,
+  normCtx: NormalMonthlyTargetContext | null,
+  computedMetric: number | null
+): number | null {
+  const monthlyTargetMap = item.monthlyTargets ?? {};
+  const hasMonthlyTargetPlan = Object.keys(monthlyTargetMap).length > 0;
+  const rowAggregationType = resolvePerformanceAggregationType(
+    row,
+    item.aggregationType
+  );
+  const monthTargetNormal =
+    effType === "normal"
+      ? (() => {
+          if (rowAggregationType === "cumulative") {
+            return (
+              cumulativeTargetThroughMonth(monthlyTargetMap, month) ??
+              (normCtx ? resolveNormalMonthlyTargetMetric(month, normCtx) : 0)
+            );
+          }
+          const fromMap = resolveMonthlyTargetForMonth(
+            monthlyTargetMap,
+            month,
+            item.targetFillPolicy
+          );
+          if (fromMap !== null) return fromMap;
+          if (hasMonthlyTargetPlan) return null;
+          return normCtx ? resolveNormalMonthlyTargetMetric(month, normCtx) : 0;
+        })()
+      : null;
+  const monthTargetComputed = indicatorUsesComputedAchievement(effType)
+    ? (() => {
+        if (rowAggregationType === "cumulative") {
+          return (
+            cumulativeTargetThroughMonth(monthlyTargetMap, month) ??
+            computedMetric ??
+            0
+          );
+        }
+        const fromMonthly = resolveMonthlyTargetForMonth(
+          item.monthlyTargets,
+          month,
+          item.targetFillPolicy
+        );
+        if (fromMonthly !== null) return fromMonthly;
+        if (hasMonthlyTargetPlan) return null;
+        return computedMetric ?? 0;
+      })()
+    : null;
+  if (indicatorUsesComputedAchievement(effType)) {
+    return monthTargetComputed;
+  }
+  if (effType === "normal") {
+    return monthTargetNormal;
+  }
+  return 0;
+}
+
+export type MonthPerformanceSlice = {
+  actual: number;
+  target: number | null;
+  submittedPercent: number | null;
+};
+
+/** 월별 차트용 실적(지표값)·목표·달성률 계산. */
+export function computeMonthPerformanceSlice(
+  month: MonthKey,
+  chartMonths: MonthKey[],
+  item: PerformanceUiItemSlice,
+  rowMap: Map<MonthKey, ItemPerformanceRow>,
+  effType: KpiIndicatorType,
+  normMonthlyCtx: NormalMonthlyTargetContext | null,
+  computedTargetMetric: number | null
+): MonthPerformanceSlice {
+  const row = rowMap.get(month);
+  const copied = row
+    ? null
+    : findLatestPriorRowWithSubmittedValue(rowMap, month, chartMonths);
+  const sourceRow = row ?? copied?.row ?? null;
+  const visibleOnChart =
+    row !== undefined
+      ? isChartVisiblePerformanceStep(row?.approval_step ?? null)
+      : copied !== null;
+  const rawSubmitted =
+    sourceRow?.achievement_rate !== null &&
+    sourceRow?.achievement_rate !== undefined &&
+    !Number.isNaN(Number(sourceRow.achievement_rate))
+      ? Number(sourceRow.achievement_rate)
+      : null;
+  const rawActualMetric =
+    sourceRow?.actual_value !== null &&
+    sourceRow?.actual_value !== undefined &&
+    Number.isFinite(Number(sourceRow.actual_value))
+      ? Number(sourceRow.actual_value)
+      : null;
+  const target = resolveMonthlyChartTargetLine(
+    month,
+    item,
+    row,
+    effType,
+    normMonthlyCtx,
+    computedTargetMetric
+  );
+  const rowAggregationType = resolvePerformanceAggregationType(
+    row,
+    item.aggregationType
+  );
+  const normalRowMetricMode =
+    effType === "normal" &&
+    item.targetDirection !== "na" &&
+    target !== null &&
+    target >= 0;
+
+  let actual: number;
+  if (indicatorUsesComputedAchievement(effType)) {
+    actual =
+      visibleOnChart && rawActualMetric !== null
+        ? actualForAchievementInPeriod(
+            rowMap,
+            chartMonths,
+            month,
+            rawActualMetric,
+            rowAggregationType
+          )
+        : 0;
+  } else if (normalRowMetricMode) {
+    if (rawActualMetric !== null) {
+      actual = visibleOnChart
+        ? actualForAchievementInPeriod(
+            rowMap,
+            chartMonths,
+            month,
+            rawActualMetric,
+            rowAggregationType
+          )
+        : 0;
+    } else {
+      actual = visibleOnChart && rawSubmitted !== null ? rawSubmitted : 0;
+    }
+  } else {
+    actual = visibleOnChart && rawSubmitted !== null ? rawSubmitted : 0;
+  }
+
+  let submittedPercent = rawSubmitted;
+  if (row !== undefined && rawActualMetric !== null && target !== null && target >= 0) {
+    const actualForAchievement = actualForAchievementInPeriod(
+      rowMap,
+      chartMonths,
+      month,
+      rawActualMetric,
+      rowAggregationType
+    );
+    if (item.evaluationType === "qualitative") {
+      submittedPercent = qualitativeAchievementPercent(
+        actualForAchievement,
+        target,
+        item.qualitativeCalcType ?? "progress",
+        item.achievementCap
+      );
+    } else if (indicatorUsesComputedAchievement(effType) || normalRowMetricMode) {
+      submittedPercent = computedAchievementPercent(
+        effType,
+        actualForAchievement,
+        target,
+        item.targetDirection,
+        item.achievementCap
+      );
+    }
+  }
+
+  return { actual, target, submittedPercent };
+}
+
+export function computeEditorPreviewAchievementPercent(input: {
+  indicatorType: KpiIndicatorType;
+  evaluationType: KpiEvaluationType | null;
+  qualitativeCalcType: KpiQualitativeCalcType | null;
+  targetDirection: "up" | "down" | "na";
+  achievementCap: KpiAchievementCap;
+  aggregationType: KpiAggregationType;
+  monthlyTarget: number | null;
+  draftActual: number | null;
+  rowByMonth: Map<MonthKey, ItemPerformanceRow>;
+  monthList: MonthKey[];
+  editorMonth: MonthKey;
+}): number | null {
+  const {
+    indicatorType,
+    evaluationType,
+    qualitativeCalcType,
+    targetDirection,
+    achievementCap,
+    aggregationType,
+    monthlyTarget,
+    draftActual,
+    rowByMonth,
+    monthList,
+    editorMonth,
+  } = input;
+  if (monthlyTarget === null || monthlyTarget < 0 || draftActual === null) {
+    return null;
+  }
+  const actualForAchievement = actualForAchievementInPeriod(
+    rowByMonth,
+    monthList,
+    editorMonth,
+    draftActual,
+    aggregationType
+  );
+  if (evaluationType === "qualitative") {
+    return qualitativeAchievementPercent(
+      actualForAchievement,
+      monthlyTarget,
+      qualitativeCalcType ?? "progress",
+      achievementCap
+    );
+  }
+  return computedAchievementPercent(
+    indicatorType,
+    actualForAchievement,
+    monthlyTarget,
+    targetDirection,
+    achievementCap
+  );
+}
+
+export function buildFollowingCumulativeRateUpdates(input: {
+  displayMonthList: MonthKey[];
+  editorMonth: MonthKey;
+  rowByMonth: Map<MonthKey, ItemPerformanceRow>;
+  currentActualValue: number | undefined;
+  item: PerformanceUiItemSlice;
+  effectiveIndicatorType: KpiIndicatorType;
+  normalMonthlyContext: NormalMonthlyTargetContext | null;
+  computedTargetMetric: number | null;
+}): Array<{ month: MonthKey; achievementRate: number }> {
+  const {
+    displayMonthList,
+    editorMonth,
+    rowByMonth,
+    currentActualValue,
+    item,
+    effectiveIndicatorType,
+    normalMonthlyContext,
+    computedTargetMetric,
+  } = input;
+  if (currentActualValue === undefined || !normalMonthlyContext) return [];
+  const updates: Array<{ month: MonthKey; achievementRate: number }> = [];
+
+  for (const month of displayMonthList) {
+    if (month <= editorMonth) continue;
+    const row = rowByMonth.get(month);
+    if (resolvePerformanceAggregationType(row, item.aggregationType) !== "cumulative") {
+      continue;
+    }
+    const ownActual = row?.actual_value;
+    if (
+      ownActual === null ||
+      ownActual === undefined ||
+      !Number.isFinite(Number(ownActual))
+    ) {
+      continue;
+    }
+
+    const actual = actualSumThroughMonthInList(
+      rowByMonth,
+      displayMonthList,
+      month,
+      editorMonth,
+      currentActualValue
+    );
+    let target: number | null = null;
+    let rate: number | null = null;
+    if (indicatorUsesComputedAchievement(effectiveIndicatorType)) {
+      target =
+        cumulativeTargetThroughMonth(item.monthlyTargets, month) ??
+        computedTargetMetric;
+      if (target !== null && target >= 0) {
+        rate =
+          item.evaluationType === "qualitative"
+            ? qualitativeAchievementPercent(
+                actual,
+                target,
+                item.qualitativeCalcType ?? "progress",
+                item.achievementCap
+              )
+            : computedAchievementPercent(
+                effectiveIndicatorType,
+                actual,
+                target,
+                item.targetDirection,
+                item.achievementCap
+              );
+      }
+    } else if (
+      effectiveIndicatorType === "normal" &&
+      item.targetDirection !== "na"
+    ) {
+      target =
+        cumulativeTargetThroughMonth(item.monthlyTargets, month) ??
+        resolveNormalMonthlyTargetMetric(month, normalMonthlyContext);
+      if (target !== null && target >= 0) {
+        rate = computedAchievementPercent(
+          "normal",
+          actual,
+          target,
+          item.targetDirection,
+          item.achievementCap
+        );
+      }
+    }
+    if (rate !== null && Number.isFinite(rate)) {
+      updates.push({ month, achievementRate: rate });
+    }
+  }
+  return updates;
 }
