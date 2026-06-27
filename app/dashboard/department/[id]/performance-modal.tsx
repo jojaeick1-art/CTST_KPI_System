@@ -39,11 +39,14 @@ import {
   qualitativeAchievementPercent,
   indicatorUsesComputedAchievement,
   buildFollowingCumulativeRateUpdates,
+  buildPerformanceUiAchievementContext,
   computeEditorPreviewAchievementPercent,
+  computeKpiPeriodOverallAchievementPercent,
   computeMonthPerformanceSlice,
   cumulativeTargetThroughMonth,
   findLatestPriorRowWithSubmittedValue,
   isChartVisiblePerformanceStep,
+  performanceMonthlyCellsFromRows,
   resolveMonthlyChartTargetLine,
   resolveMonthlyTargetForMonth,
   resolvePerformanceAggregationType,
@@ -432,45 +435,33 @@ function monthHasSubmittedPerformanceInput(
   return rawSubmittedPercent !== null;
 }
 
-/** 막대 위 표기: 일반(%) / PPM·수량(k)·건수 원값 (승인 전·0%여도 저장값이 있으면 표시) */
+/** 막대 위 표기 — 차트 `actual`(막대 높이)와 동일한 값 사용 (누적 계산 시 YTD 합) */
 function chartBarTopLabel(
   indicatorType: KpiIndicatorType,
-  row: ItemPerformanceRow | undefined,
   showBarTopLabel: boolean,
+  displayActual: number | null,
   rawSubmittedPercent: number | null
 ): string {
   if (!showBarTopLabel) return "";
-  if (indicatorUsesComputedAchievement(indicatorType)) {
-    const av = row?.actual_value;
-    if (av !== null && av !== undefined) {
-      const n = Number(av);
-      if (Number.isFinite(n)) {
-        if (indicatorType === "ppm") return `${formatKoMax2Decimals(n)}ppm`;
-        if (indicatorType === "quantity") return `${formatKoMax2Decimals(n)}k`;
-        if (indicatorType === "count") return `${formatKoMax2Decimals(n)}건`;
-        if (indicatorType === "headcount") return `${formatKoMax2Decimals(n)}명`;
-        if (indicatorType === "money") return `${formatKoMax2Decimals(n)}억`;
-        if (indicatorType === "time") return `${formatKoMax2Decimals(n)}h`;
-        if (indicatorType === "minutes") return `${formatKoMax2Decimals(n)} min`;
-        if (indicatorType === "uph") return `${formatKoMax2Decimals(n)} UPH`;
-        if (indicatorType === "cpk") return `${formatKoMax2Decimals(n)} Cpk`;
-      }
+  if (
+    displayActual !== null &&
+    displayActual !== undefined &&
+    Number.isFinite(displayActual)
+  ) {
+    const n = displayActual;
+    if (indicatorUsesComputedAchievement(indicatorType)) {
+      if (indicatorType === "ppm") return `${formatKoMax2Decimals(n)}ppm`;
+      if (indicatorType === "quantity") return `${formatKoMax2Decimals(n)}k`;
+      if (indicatorType === "count") return `${formatKoMax2Decimals(n)}건`;
+      if (indicatorType === "headcount") return `${formatKoMax2Decimals(n)}명`;
+      if (indicatorType === "money") return `${formatKoMax2Decimals(n)}억`;
+      if (indicatorType === "time") return `${formatKoMax2Decimals(n)}h`;
+      if (indicatorType === "minutes") return `${formatKoMax2Decimals(n)} min`;
+      if (indicatorType === "uph") return `${formatKoMax2Decimals(n)} UPH`;
+      if (indicatorType === "cpk") return `${formatKoMax2Decimals(n)} Cpk`;
     }
-    if (rawSubmittedPercent !== null && rawSubmittedPercent !== undefined) {
-      const pct = Number(rawSubmittedPercent);
-      if (Number.isFinite(pct)) {
-        return formatKoPercentMax2(pct);
-      }
-    }
-    return "";
-  }
-  if (indicatorType === "normal") {
-    const avn = row?.actual_value;
-    if (avn !== null && avn !== undefined) {
-      const n = Number(avn);
-      if (Number.isFinite(n)) {
-        return `${formatKoMax2Decimals(n)}%`;
-      }
+    if (indicatorType === "normal") {
+      return `${formatKoMax2Decimals(n)}%`;
     }
   }
   if (rawSubmittedPercent === null || rawSubmittedPercent === undefined) return "";
@@ -636,6 +627,168 @@ function previewComment(text: string | null, max = 52): string | null {
   if (!text?.trim()) return null;
   const t = text.trim();
   return t.length <= max ? t : `${t.slice(0, max)}…`;
+}
+
+function bubbleFullText(text: string | null | undefined): string | null {
+  if (!text?.trim()) return null;
+  return text.trim();
+}
+
+const CHART_BUBBLE_MAX_WIDTH_PX = 240;
+const CHART_BUBBLE_FONT_SIZE_PX = 10;
+const CHART_BUBBLE_LINE_HEIGHT_PX = 14;
+const CHART_BUBBLE_PAD_X_PX = 10;
+const CHART_BUBBLE_PAD_Y_PX = 8;
+const CHART_BUBBLE_GAP_PX = 10;
+
+type ChartBubbleTheme = "target" | "performance" | "goal1" | "goal2";
+type ChartBubblePlacement = "top-left" | "bottom-right";
+
+const CHART_BUBBLE_THEME: Record<
+  ChartBubbleTheme,
+  { bg: string; border: string; text: string; anchor: string }
+> = {
+  target: { bg: "#fee2e2", border: "#dc2626", text: "#991b1b", anchor: "#dc2626" },
+  performance: { bg: "#fef3c7", border: "#f59e0b", text: "#92400e", anchor: "#f59e0b" },
+  goal1: { bg: "#e0f2fe", border: "#0284c7", text: "#075985", anchor: "#0284c7" },
+  goal2: { bg: "#ffedd5", border: "#ea580c", text: "#9a3412", anchor: "#ea580c" },
+};
+
+function estimateBubbleBoxHeight(text: string, boxWidth: number): number {
+  const charWidth = CHART_BUBBLE_FONT_SIZE_PX * 0.92;
+  const charsPerLine = Math.max(
+    4,
+    Math.floor((boxWidth - CHART_BUBBLE_PAD_X_PX * 2) / charWidth)
+  );
+  const lineCount = Math.max(1, Math.ceil(text.length / charsPerLine));
+  return (
+    lineCount * CHART_BUBBLE_LINE_HEIGHT_PX + CHART_BUBBLE_PAD_Y_PX * 2
+  );
+}
+
+function estimateBubbleBoxWidth(text: string): number {
+  const charWidth = CHART_BUBBLE_FONT_SIZE_PX * 0.92;
+  const raw = text.length * charWidth + CHART_BUBBLE_PAD_X_PX * 2;
+  return Math.max(52, Math.min(CHART_BUBBLE_MAX_WIDTH_PX, Math.ceil(raw)));
+}
+
+function KpiChartSpeechBubble({
+  anchorX,
+  anchorY,
+  text,
+  placement,
+  theme,
+}: {
+  anchorX: number;
+  anchorY: number;
+  text: string;
+  placement: ChartBubblePlacement;
+  theme: ChartBubbleTheme;
+}) {
+  const label = bubbleFullText(text);
+  if (!label) return null;
+  const palette = CHART_BUBBLE_THEME[theme];
+  const boxWidth = estimateBubbleBoxWidth(label);
+  const boxHeight = estimateBubbleBoxHeight(label, boxWidth);
+  const boxX =
+    placement === "top-left"
+      ? anchorX - boxWidth - CHART_BUBBLE_GAP_PX
+      : anchorX + CHART_BUBBLE_GAP_PX;
+  const boxY =
+    placement === "top-left"
+      ? anchorY - boxHeight - CHART_BUBBLE_GAP_PX
+      : anchorY + CHART_BUBBLE_GAP_PX;
+  const pointerX =
+    placement === "top-left" ? boxX + boxWidth : boxX;
+  const pointerY =
+    placement === "top-left" ? boxY + boxHeight : boxY;
+
+  return (
+    <g pointerEvents="none">
+      <line
+        x1={anchorX}
+        y1={anchorY}
+        x2={pointerX}
+        y2={pointerY}
+        stroke={palette.anchor}
+        strokeWidth={1}
+        strokeDasharray="2 2"
+      />
+      <circle cx={anchorX} cy={anchorY} r={2.5} fill={palette.anchor} />
+      <rect
+        x={boxX}
+        y={boxY}
+        width={boxWidth}
+        height={boxHeight}
+        rx={8}
+        fill={palette.bg}
+        stroke={palette.border}
+        strokeWidth={1}
+      />
+      <foreignObject x={boxX} y={boxY} width={boxWidth} height={boxHeight}>
+        <div
+          xmlns="http://www.w3.org/1999/xhtml"
+          style={{
+            boxSizing: "border-box",
+            width: "100%",
+            height: "100%",
+            padding: `${CHART_BUBBLE_PAD_Y_PX}px ${CHART_BUBBLE_PAD_X_PX}px`,
+            fontSize: `${CHART_BUBBLE_FONT_SIZE_PX}px`,
+            fontWeight: 700,
+            lineHeight: `${CHART_BUBBLE_LINE_HEIGHT_PX}px`,
+            color: palette.text,
+            wordBreak: "break-word",
+            overflowWrap: "anywhere",
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          {label}
+        </div>
+      </foreignObject>
+    </g>
+  );
+}
+
+function createTargetLineDotRenderer(options: {
+  onTargetClick: (month: MonthKey, goalKind: "primary" | "secondary") => void;
+  goalKind: "primary" | "secondary";
+  stroke: string;
+  shiftX?: number;
+}) {
+  const { onTargetClick, goalKind, stroke, shiftX = 0 } = options;
+  return function TargetLineDot(props: {
+    cx?: number;
+    cy?: number;
+    payload?: ChartDatum;
+  }) {
+    const month = props.payload?.month;
+    if (
+      !Number.isFinite(props.cx) ||
+      !Number.isFinite(props.cy) ||
+      typeof month !== "number" ||
+      month === 0
+    ) {
+      return null;
+    }
+    const cx = (props.cx as number) + shiftX;
+    const cy = props.cy as number;
+    return (
+      <g className="cursor-pointer">
+        <circle
+          cx={cx}
+          cy={cy}
+          r={10}
+          fill="transparent"
+          stroke="transparent"
+          onClick={(event) => {
+            event.stopPropagation();
+            onTargetClick(month as MonthKey, goalKind);
+          }}
+        />
+        <circle cx={cx} cy={cy} r={3} fill={stroke} strokeWidth={0} pointerEvents="none" />
+      </g>
+    );
+  };
 }
 
 /** 비관리자: draft(또는 비어 있음)만 편집 가능. 관리자는 항상 편집 가능. */
@@ -1085,140 +1238,57 @@ function KpiChartFullLegend({
   );
 }
 
-/** 실적 말풍선: 막대 상단 아래쪽에 두어 목표선 말풍선과 세로로 겹치지 않게 함 */
+/** 실적 말풍선 — 막대 상단 기준 우측 하단 */
 function KpiCommentBubbleLabel(props: {
   x?: number | string;
   y?: number | string;
   width?: number | string;
-  chartBottom?: number | string;
   value?: unknown;
-  payload?: ChartDatum;
 }) {
-  const { x, y, width, chartBottom, value, payload } = props;
+  const { x, y, width, value } = props;
   if (typeof value !== "string" || !value.trim()) return null;
   const nx = Number(x);
   const ny = Number(y);
   const widthRaw = Number(width);
   const nw = Number.isFinite(widthRaw) && widthRaw > 0 ? widthRaw : 26;
-  if (!Number.isFinite(nx) || !Number.isFinite(ny)) {
-    return null;
-  }
-
-  const label = previewComment(value, 14) ?? "";
-  const boxWidth = Math.max(44, Math.min(96, label.length * 8 + 18));
+  if (!Number.isFinite(nx) || !Number.isFinite(ny)) return null;
   const anchorX = nx + nw / 2;
   const anchorY = ny;
-  const month = typeof payload?.month === "number" ? payload.month : 0;
-  const jitterX = month % 2 === 0 ? -6 : 6;
-  const boxX = anchorX - boxWidth / 2 + jitterX;
-  const bottomRaw = Number(chartBottom);
-  const maxBoxY = Number.isFinite(bottomRaw) ? bottomRaw - 26 : Number.POSITIVE_INFINITY;
-  const boxY = Math.max(2, Math.min(anchorY + 12, maxBoxY));
-  const tipX = boxX + boxWidth / 2;
-  const tipY = boxY <= anchorY ? boxY + 22 : boxY;
-
   return (
-    <g pointerEvents="none">
-      <line
-        x1={anchorX}
-        y1={anchorY}
-        x2={tipX}
-        y2={tipY}
-        stroke="#f59e0b"
-        strokeWidth={1}
-        strokeDasharray="2 2"
-      />
-      <circle cx={anchorX} cy={anchorY} r={2.5} fill="#f59e0b" />
-      <rect
-        x={boxX}
-        y={boxY}
-        width={boxWidth}
-        height={22}
-        rx={8}
-        fill="#fef3c7"
-        stroke="#f59e0b"
-        strokeWidth={1}
-      />
-      <text
-        x={boxX + boxWidth / 2}
-        y={boxY + 14}
-        textAnchor="middle"
-        fill="#92400e"
-        fontSize={10}
-        fontWeight={700}
-      >
-        {label}
-      </text>
-    </g>
+    <KpiChartSpeechBubble
+      anchorX={anchorX}
+      anchorY={anchorY}
+      text={value}
+      placement="bottom-right"
+      theme="performance"
+    />
   );
 }
 
-/** 종합(이중 목표)에서 목표2 실적 말풍선: 기본보다 더 아래/반대쪽으로 배치 */
+/** 종합(이중 목표) 목표2 실적 말풍선 — 우측 하단 (약간 오프셋) */
 function KpiCommentBubbleLabelSecondary(props: {
   x?: number | string;
   y?: number | string;
   width?: number | string;
-  chartBottom?: number | string;
   value?: unknown;
-  payload?: ChartDatum;
 }) {
-  const { x, y, width, chartBottom, value, payload } = props;
+  const { x, y, width, value } = props;
   if (typeof value !== "string" || !value.trim()) return null;
   const nx = Number(x);
   const ny = Number(y);
   const widthRaw = Number(width);
   const nw = Number.isFinite(widthRaw) && widthRaw > 0 ? widthRaw : 26;
-  if (!Number.isFinite(nx) || !Number.isFinite(ny)) {
-    return null;
-  }
-
-  const label = previewComment(value, 14) ?? "";
-  const boxWidth = Math.max(44, Math.min(96, label.length * 8 + 18));
-  const anchorX = nx + nw / 2;
-  const anchorY = ny;
-  const month = typeof payload?.month === "number" ? payload.month : 0;
-  // 목표1과 반대로 살짝 이동
-  const jitterX = month % 2 === 0 ? 10 : -10;
-  const boxX = anchorX - boxWidth / 2 + jitterX;
-  const bottomRaw = Number(chartBottom);
-  const maxBoxY = Number.isFinite(bottomRaw) ? bottomRaw - 26 : Number.POSITIVE_INFINITY;
-  const boxY = Math.max(2, Math.min(anchorY - 34, maxBoxY));
-  const tipX = boxX + boxWidth / 2;
-  const tipY = boxY + 22;
-
+  if (!Number.isFinite(nx) || !Number.isFinite(ny)) return null;
+  const anchorX = nx + nw / 2 + 8;
+  const anchorY = ny + 4;
   return (
-    <g pointerEvents="none">
-      <line
-        x1={anchorX}
-        y1={anchorY}
-        x2={tipX}
-        y2={tipY}
-        stroke="#f59e0b"
-        strokeWidth={1}
-        strokeDasharray="2 2"
-      />
-      <circle cx={anchorX} cy={anchorY} r={2.5} fill="#f59e0b" />
-      <rect
-        x={boxX}
-        y={boxY}
-        width={boxWidth}
-        height={22}
-        rx={8}
-        fill="#fef3c7"
-        stroke="#f59e0b"
-        strokeWidth={1}
-      />
-      <text
-        x={boxX + boxWidth / 2}
-        y={boxY + 14}
-        textAnchor="middle"
-        fill="#92400e"
-        fontSize={10}
-        fontWeight={700}
-      >
-        {label}
-      </text>
-    </g>
+    <KpiChartSpeechBubble
+      anchorX={anchorX}
+      anchorY={anchorY}
+      text={value}
+      placement="bottom-right"
+      theme="performance"
+    />
   );
 }
 
@@ -1258,9 +1328,7 @@ function resolveFocusedCommentBubbleValue(opts: {
         ""
       : "";
   const resolvedValue =
-    displayMode === "bar" && draftValue.trim()
-      ? draftValue.trim()
-      : fallbackValueFromDatum || fallbackFromRows || draftValue.trim();
+    fallbackValueFromDatum || fallbackFromRows || draftValue.trim();
 
   return resolvedValue.trim() ? resolvedValue.trim() : null;
 }
@@ -1327,18 +1395,14 @@ function CompositeActualPerformanceBarShape(props: {
             x={x}
             y={barTop}
             width={width}
-            chartBottom={barBottom}
             value={bubbleValue}
-            payload={props.payload}
           />
         ) : (
           <KpiCommentBubbleLabel
             x={x}
             y={barTop}
             width={width}
-            chartBottom={barBottom}
             value={bubbleValue}
-            payload={props.payload}
           />
         )
       ) : null}
@@ -1346,12 +1410,7 @@ function CompositeActualPerformanceBarShape(props: {
   );
 }
 
-/** 목표 말풍선: 목을 짧게 유지하고, 차트 좌측에서는 B/M 막대를 피해서 오른쪽에 둔다. */
-const TARGET_BUBBLE_LIFT_PX = 28;
-const TARGET_BUBBLE_EDGE_AVOID_X_PX = 150;
-const TARGET_BUBBLE_GAP_PX = 12;
-const TARGET_BUBBLE_BOTTOM_FLIP_Y_PX = 244;
-
+/** 목표 말풍선 — 목표선 점 기준 좌측 상단 */
 function KpiTargetBubbleLabel({
   x,
   y,
@@ -1364,61 +1423,18 @@ function KpiTargetBubbleLabel({
   if (typeof value !== "string" || !value.trim()) return null;
   const nx = Number(x);
   const ny = Number(y);
-  if (!Number.isFinite(nx) || !Number.isFinite(ny)) {
-    return null;
-  }
-
-  const label = previewComment(value, 12) ?? "";
-  const boxWidth = Math.max(42, Math.min(92, label.length * 8 + 18));
-  const anchorX = nx;
-  const anchorY = ny;
-  const forceRight = anchorX < TARGET_BUBBLE_EDGE_AVOID_X_PX;
-  const placeLeft = !forceRight && anchorX > boxWidth + TARGET_BUBBLE_GAP_PX + 8;
-  const boxX = placeLeft
-    ? anchorX - boxWidth - TARGET_BUBBLE_GAP_PX
-    : anchorX + TARGET_BUBBLE_GAP_PX;
-  const boxY = Math.max(0, anchorY - TARGET_BUBBLE_LIFT_PX);
-  const connectorY = boxY + 11;
-  const pointerX = placeLeft ? boxX + boxWidth : boxX;
-
+  if (!Number.isFinite(nx) || !Number.isFinite(ny)) return null;
   return (
-    <g pointerEvents="none">
-      <line
-        x1={anchorX}
-        y1={anchorY}
-        x2={pointerX}
-        y2={connectorY}
-        stroke="#dc2626"
-        strokeWidth={1}
-        strokeDasharray="2 2"
-      />
-      <circle cx={anchorX} cy={anchorY} r={2.5} fill="#dc2626" />
-      <rect
-        x={boxX}
-        y={boxY}
-        width={boxWidth}
-        height={22}
-        rx={8}
-        fill="#fee2e2"
-        stroke="#dc2626"
-        strokeWidth={1}
-      />
-      <text
-        x={boxX + boxWidth / 2}
-        y={boxY + 14}
-        textAnchor="middle"
-        fill="#991b1b"
-        fontSize={10}
-        fontWeight={700}
-      >
-        {label}
-      </text>
-    </g>
+    <KpiChartSpeechBubble
+      anchorX={nx}
+      anchorY={ny}
+      text={value}
+      placement="top-left"
+      theme="target"
+    />
   );
 }
 
-const COMPOSITE_GOAL1_BUBBLE_LIFT_PX = 30;
-const COMPOSITE_GOAL2_BUBBLE_DROP_PX = 18;
 const COMPOSITE_BAR_SIZE_PX = 26;
 const COMPOSITE_BAR_GAP_PX = 8;
 const COMPOSITE_BAR_CENTER_SHIFT_PX =
@@ -1438,56 +1454,15 @@ function KpiTargetBubbleLabelGoal1({
   if (typeof value !== "string" || !value.trim()) return null;
   const nx = Number(x);
   const ny = Number(y);
-  if (!Number.isFinite(nx) || !Number.isFinite(ny)) {
-    return null;
-  }
-
-  const label = previewComment(value, 12) ?? "";
-  const boxWidth = Math.max(42, Math.min(92, label.length * 8 + 18));
-  const anchorX = nx;
-  const anchorY = ny;
-  const forceRight = anchorX < TARGET_BUBBLE_EDGE_AVOID_X_PX;
-  const placeLeft = !forceRight && anchorX > boxWidth + TARGET_BUBBLE_GAP_PX + 8;
-  const boxX = placeLeft
-    ? anchorX - boxWidth - TARGET_BUBBLE_GAP_PX
-    : anchorX + TARGET_BUBBLE_GAP_PX;
-  const boxY = Math.max(0, anchorY - COMPOSITE_GOAL1_BUBBLE_LIFT_PX);
-  const connectorY = boxY + 11;
-  const pointerX = placeLeft ? boxX + boxWidth : boxX;
-
+  if (!Number.isFinite(nx) || !Number.isFinite(ny)) return null;
   return (
-    <g pointerEvents="none">
-      <line
-        x1={anchorX}
-        y1={anchorY}
-        x2={pointerX}
-        y2={connectorY}
-        stroke={CHART_COMPOSITE_GOAL1_TARGET_STROKE}
-        strokeWidth={1}
-        strokeDasharray="2 2"
-      />
-      <circle cx={anchorX} cy={anchorY} r={2.5} fill={CHART_COMPOSITE_GOAL1_TARGET_STROKE} />
-      <rect
-        x={boxX}
-        y={boxY}
-        width={boxWidth}
-        height={22}
-        rx={8}
-        fill="#e0f2fe"
-        stroke={CHART_COMPOSITE_GOAL1_TARGET_STROKE}
-        strokeWidth={1}
-      />
-      <text
-        x={boxX + boxWidth / 2}
-        y={boxY + 14}
-        textAnchor="middle"
-        fill="#075985"
-        fontSize={10}
-        fontWeight={700}
-      >
-        {label}
-      </text>
-    </g>
+    <KpiChartSpeechBubble
+      anchorX={nx}
+      anchorY={ny}
+      text={value}
+      placement="top-left"
+      theme="goal1"
+    />
   );
 }
 
@@ -1503,59 +1478,15 @@ function KpiTargetBubbleLabelGoal2({
   if (typeof value !== "string" || !value.trim()) return null;
   const nx = Number(x);
   const ny = Number(y);
-  if (!Number.isFinite(nx) || !Number.isFinite(ny)) {
-    return null;
-  }
-
-  const label = previewComment(value, 12) ?? "";
-  const boxWidth = Math.max(42, Math.min(92, label.length * 8 + 18));
-  const anchorX = nx;
-  const anchorY = ny;
-  const forceRight = anchorX < TARGET_BUBBLE_EDGE_AVOID_X_PX;
-  const placeLeft = !forceRight && anchorX > boxWidth + TARGET_BUBBLE_GAP_PX + 8;
-  const boxX = placeLeft
-    ? anchorX - boxWidth - TARGET_BUBBLE_GAP_PX
-    : anchorX + TARGET_BUBBLE_GAP_PX;
-  const placeAbove = anchorY > TARGET_BUBBLE_BOTTOM_FLIP_Y_PX;
-  const boxY = placeAbove
-    ? Math.max(2, anchorY - COMPOSITE_GOAL1_BUBBLE_LIFT_PX)
-    : anchorY + COMPOSITE_GOAL2_BUBBLE_DROP_PX;
-  const connectorY = placeAbove ? boxY + 22 : boxY;
-  const pointerX = placeLeft ? boxX + boxWidth : boxX;
-
+  if (!Number.isFinite(nx) || !Number.isFinite(ny)) return null;
   return (
-    <g pointerEvents="none">
-      <line
-        x1={anchorX}
-        y1={anchorY}
-        x2={pointerX}
-        y2={connectorY}
-        stroke={CHART_COMPOSITE_GOAL2_TARGET_STROKE}
-        strokeWidth={1}
-        strokeDasharray="2 2"
-      />
-      <circle cx={anchorX} cy={anchorY} r={2.5} fill={CHART_COMPOSITE_GOAL2_TARGET_STROKE} />
-      <rect
-        x={boxX}
-        y={boxY}
-        width={boxWidth}
-        height={22}
-        rx={8}
-        fill="#ffedd5"
-        stroke={CHART_COMPOSITE_GOAL2_TARGET_STROKE}
-        strokeWidth={1}
-      />
-      <text
-        x={boxX + boxWidth / 2}
-        y={boxY + 14}
-        textAnchor="middle"
-        fill="#9a3412"
-        fontSize={10}
-        fontWeight={700}
-      >
-        {label}
-      </text>
-    </g>
+    <KpiChartSpeechBubble
+      anchorX={nx}
+      anchorY={ny}
+      text={value}
+      placement="top-left"
+      theme="goal2"
+    />
   );
 }
 
@@ -1641,27 +1572,18 @@ function FocusedCommentBubbleLabelFactory(
           : rawX;
     const resolvedY = p.y ?? vb.y;
     const resolvedWidth = p.width ?? vb.width;
-    const rawHeight = p.height ?? vb.height;
-    const resolvedChartBottom =
-      Number.isFinite(Number(resolvedY)) && Number.isFinite(Number(rawHeight))
-        ? Number(resolvedY) + Number(rawHeight)
-        : undefined;
     return kind === "secondary" ? (
       <KpiCommentBubbleLabelSecondary
-        {...p}
         x={resolvedX}
         y={resolvedY}
         width={resolvedWidth}
-        chartBottom={resolvedChartBottom}
         value={resolvedValue}
       />
     ) : (
       <KpiCommentBubbleLabel
-        {...p}
         x={resolvedX}
         y={resolvedY}
         width={resolvedWidth}
-        chartBottom={resolvedChartBottom}
         value={resolvedValue}
       />
     );
@@ -1763,17 +1685,6 @@ function CompositeTargetLineShapeFactory(shiftX: number) {
         />
       </g>
     );
-  };
-}
-
-function CompositeTargetDotFactory(shiftX: number) {
-  return function CompositeTargetDot(props: {
-    cx?: number;
-    cy?: number;
-    stroke?: string;
-  }) {
-    if (!Number.isFinite(props.cx) || !Number.isFinite(props.cy)) return null;
-    return <circle cx={(props.cx as number) + shiftX} cy={props.cy} r={3} fill={props.stroke ?? "#0ea5e9"} strokeWidth={0} />;
   };
 }
 
@@ -2319,6 +2230,40 @@ export function PerformanceModal({
     return kpiItem.targetFinalValue;
   }, [kpiItem]);
 
+  const periodOverallAchievementContext = useMemo(() => {
+    if (!kpiItem) return null;
+    return buildPerformanceUiAchievementContext({
+      indicatorType: effectiveIndicatorTypePrimary,
+      evaluationType: kpiItem.evaluationType,
+      qualitativeCalcType: kpiItem.qualitativeCalcType,
+      targetDirection: kpiItem.targetDirection,
+      aggregationType: kpiItem.aggregationType,
+      targetFillPolicy: kpiItem.targetFillPolicy,
+      achievementCap: kpiItem.achievementCap,
+      monthlyTargets: kpiItem.monthlyTargets,
+      computedTargetMetric: computedTargetMetricPrimary,
+      normalMonthlyContext: normalMonthlyContextPrimary,
+    });
+  }, [
+    kpiItem,
+    effectiveIndicatorTypePrimary,
+    computedTargetMetricPrimary,
+    normalMonthlyContextPrimary,
+  ]);
+
+  const livePeriodOverallAchievement = useMemo(() => {
+    if (!kpiItem || !periodOverallAchievementContext) return null;
+    const cells = performanceMonthlyCellsFromRows(liveRowsPrimary, {
+      chartVisibleOnly: true,
+    });
+    return computeKpiPeriodOverallAchievementPercent({
+      performanceMonthly: cells,
+      ctx: periodOverallAchievementContext,
+      periodStart: kpiItem.periodStartMonth,
+      periodEnd: kpiItem.periodEndMonth,
+    });
+  }, [kpiItem, periodOverallAchievementContext, liveRowsPrimary]);
+
   const effectiveIndicatorTypeSecondary = useMemo(
     () =>
       linkedSecondaryItem
@@ -2782,8 +2727,8 @@ export function PerformanceModal({
         monthHasSubmittedPerformanceInput(sliceEffType, row, rawSubmitted);
       const topLabel = chartBarTopLabel(
         sliceEffType,
-        sourceRow ?? undefined,
         showBarTopLabel,
+        actual,
         rawSubmitted
       );
       const base: ChartDatum = {
@@ -3432,7 +3377,7 @@ export function PerformanceModal({
         completedTone: true,
       };
     }
-    const v = kpiItem.averageAchievement;
+    const v = livePeriodOverallAchievement ?? kpiItem.averageAchievement;
     if (v !== null && Number.isFinite(v)) {
       return {
         barWidth: Math.max(0, Math.min(100, v)),
@@ -3447,7 +3392,7 @@ export function PerformanceModal({
       lineSub: "",
       completedTone: false,
     };
-  }, [kpiItem]);
+  }, [kpiItem, livePeriodOverallAchievement]);
 
   if (!isOpen || !kpiItem) return null;
   const headerItem = kpiItem;
@@ -3486,10 +3431,22 @@ export function PerformanceModal({
     mo: MonthKey,
     goalKind: "primary" | "secondary"
   ) {
+    barClickHandledRef.current = true;
     applyMonthSelection(mo, goalKind, { keepBubbles: true });
     setFocusedBubbleMonth(mo);
     setFocusedBubbleKind(goalKind);
     setBubbleDisplayMode("bar");
+  }
+
+  function focusBubblesByTargetClick(
+    mo: MonthKey,
+    goalKind: "primary" | "secondary"
+  ) {
+    barClickHandledRef.current = true;
+    applyMonthSelection(mo, goalKind, { keepBubbles: true });
+    setFocusedBubbleMonth(mo);
+    setFocusedBubbleKind(goalKind);
+    setBubbleDisplayMode("target");
   }
 
   function handlePerformanceBarClick(
@@ -4348,7 +4305,12 @@ export function PerformanceModal({
                       connectNulls
                       shape={CompositeTargetLineShapeFactory(COMPOSITE_GOAL1_X_SHIFT)}
                       isAnimationActive={false}
-                      dot={CompositeTargetDotFactory(COMPOSITE_GOAL1_X_SHIFT)}
+                      dot={createTargetLineDotRenderer({
+                        onTargetClick: focusBubblesByTargetClick,
+                        goalKind: "primary",
+                        stroke: CHART_COMPOSITE_GOAL1_TARGET_STROKE,
+                        shiftX: COMPOSITE_GOAL1_X_SHIFT,
+                      })}
                       activeDot={false}
                       style={{ outline: "none" }}
                     >
@@ -4379,7 +4341,12 @@ export function PerformanceModal({
                       connectNulls
                       shape={CompositeTargetLineShapeFactory(COMPOSITE_GOAL2_X_SHIFT)}
                       isAnimationActive={false}
-                      dot={CompositeTargetDotFactory(COMPOSITE_GOAL2_X_SHIFT)}
+                      dot={createTargetLineDotRenderer({
+                        onTargetClick: focusBubblesByTargetClick,
+                        goalKind: "secondary",
+                        stroke: CHART_COMPOSITE_GOAL2_TARGET_STROKE,
+                        shiftX: COMPOSITE_GOAL2_X_SHIFT,
+                      })}
                       activeDot={false}
                       style={{ outline: "none" }}
                     >
@@ -4650,6 +4617,20 @@ export function PerformanceModal({
                           />
                         );
                       })}
+                    </Bar>
+                    <Line
+                      yAxisId="primary"
+                      type="linear"
+                      dataKey="actual"
+                      stroke="transparent"
+                      strokeWidth={0}
+                      dot={false}
+                      activeDot={false}
+                      isAnimationActive={false}
+                      connectNulls
+                      legendType="none"
+                      tooltipType="none"
+                    >
                       <LabelList
                         dataKey="periodLabel"
                         content={FocusedCommentBubbleLabelFactory({
@@ -4663,7 +4644,7 @@ export function PerformanceModal({
                           monthList: displayMonthList,
                         })}
                       />
-                    </Bar>
+                    </Line>
                     <Line
                       yAxisId="primary"
                       type="linear"
@@ -4674,12 +4655,11 @@ export function PerformanceModal({
                       strokeDasharray="6 5"
                       connectNulls
                       isAnimationActive={false}
-                      dot={{
-                        r: 3,
-                        fill: CHART_TARGET_LINE_STROKE,
-                        strokeWidth: 0,
-                        style: { outline: "none" },
-                      }}
+                      dot={createTargetLineDotRenderer({
+                        onTargetClick: focusBubblesByTargetClick,
+                        goalKind: "primary",
+                        stroke: CHART_TARGET_LINE_STROKE,
+                      })}
                       activeDot={false}
                       style={{ outline: "none" }}
                     >

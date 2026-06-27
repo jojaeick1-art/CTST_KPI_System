@@ -761,13 +761,18 @@ function actualMetricAtMonth(
 /**
  * 진행률(%)·정성 등 — 월별 실적값이 '현재까지 진척'인 경우 마지막 월 값을 YTD로 사용.
  * 건수·수량 등 가산 KPI는 구간 합산.
+ * **누적 계산**은 각 월 actual_value가 당월 증분이므로 항상 구간 합산.
  */
 function overallActualMetricThroughLatestMonth(
   cells: Record<string, unknown>,
   ctx: MonthlyAchievementRateContext,
   periodStart: MonthKey,
-  latestM: MonthKey
+  latestM: MonthKey,
+  aggregationType: KpiAggregationType
 ): number {
+  if (aggregationType === "cumulative") {
+    return actualSumFromPeriodStartThroughMonth(cells, periodStart, latestM);
+  }
   const pointInTime =
     ctx.indicatorType === "normal" && ctx.targetDirection !== "na";
   const qualitativeProgress =
@@ -905,7 +910,8 @@ function periodEndOverallAchievementPercentFromMonthlyTarget(
     o,
     ctx,
     periodStart,
-    latestM
+    latestM,
+    agg
   );
 
   const periodTarget = resolveOverallFinalTargetMetric(ctx, periodEnd);
@@ -6189,6 +6195,54 @@ export function isChartVisiblePerformanceStep(
 ): boolean {
   const s = (step?.trim().toLowerCase() ?? "");
   return s === PERF_STATUS_PENDING_FINAL || s === PERF_STATUS_APPROVED;
+}
+
+/** UI 실적 행 → `performance_monthly` JSON 형태 (전체 기간 달성률 재계산용) */
+export function performanceMonthlyCellsFromRows(
+  rows: Array<{
+    month: number;
+    actual_value?: number | null;
+    achievement_rate?: number | null;
+    aggregation_type?: KpiAggregationType | string | null;
+    approval_step?: string | null;
+  }>,
+  opts?: { chartVisibleOnly?: boolean }
+): Record<string, PerformanceMonthlyCell> {
+  const out: Record<string, PerformanceMonthlyCell> = {};
+  for (const row of rows) {
+    if (
+      opts?.chartVisibleOnly &&
+      !isChartVisiblePerformanceStep(row.approval_step)
+    ) {
+      continue;
+    }
+    out[String(row.month)] = {
+      actual_value: row.actual_value ?? null,
+      achievement_rate: row.achievement_rate ?? null,
+      aggregation_type: parseAggregationType(row.aggregation_type) ?? undefined,
+    };
+  }
+  return out;
+}
+
+/**
+ * KPI 1건의 **전체 기간 달성률** (부서 목록·모달 헤더·전시와 동일 규칙).
+ * - 당월 단독: 마지막 실적월 vs 최종 목표(또는 월별 목표).
+ * - 누적 계산: 마지막 실적월 **YTD 실적 합** vs 최종 목표값.
+ */
+export function computeKpiPeriodOverallAchievementPercent(input: {
+  performanceMonthly: Record<string, unknown>;
+  ctx: MonthlyAchievementRateContext;
+  periodStart: number | null;
+  periodEnd: number | null;
+}): number | null {
+  if (!performanceMonthlyIsNonEmpty(input.performanceMonthly)) return null;
+  return periodEndOverallAchievementPercentFromMonthlyTarget(
+    { performance_monthly: input.performanceMonthly },
+    input.ctx,
+    input.periodStart,
+    input.periodEnd
+  );
 }
 
 export function findLatestPriorRowWithSubmittedValue(
