@@ -727,7 +727,6 @@ function KpiChartSpeechBubble({
       />
       <foreignObject x={boxX} y={boxY} width={boxWidth} height={boxHeight}>
         <div
-          xmlns="http://www.w3.org/1999/xhtml"
           style={{
             boxSizing: "border-box",
             width: "100%",
@@ -2253,9 +2252,14 @@ export function PerformanceModal({
 
   const livePeriodOverallAchievement = useMemo(() => {
     if (!kpiItem || !periodOverallAchievementContext) return null;
-    const cells = performanceMonthlyCellsFromRows(liveRowsPrimary, {
-      chartVisibleOnly: true,
-    });
+    const cells = performanceMonthlyCellsFromRows(
+      liveRowsPrimary.flatMap((row) => {
+        const month = halfTypeLabelToMonth(row.half_type);
+        if (month === null) return [];
+        return [{ month, ...row }];
+      }),
+      { chartVisibleOnly: true }
+    );
     return computeKpiPeriodOverallAchievementPercent({
       performanceMonthly: cells,
       ctx: periodOverallAchievementContext,
