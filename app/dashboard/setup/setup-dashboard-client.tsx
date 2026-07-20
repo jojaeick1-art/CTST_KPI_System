@@ -30,9 +30,6 @@ export function SetupDashboardClient() {
             <h1 className="text-xl font-bold tracking-tight text-slate-800 sm:text-2xl">
               Set-up
             </h1>
-            <p className="mt-0.5 text-sm text-slate-500">
-              SMT Line Set-up 현황
-            </p>
           </div>
         </div>
       </header>

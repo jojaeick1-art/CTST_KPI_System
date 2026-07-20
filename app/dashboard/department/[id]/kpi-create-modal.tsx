@@ -77,6 +77,7 @@ type BaselineOption =
   | "명"
   | "k"
   | "억"
+  | "만원"
   | "분(min)"
   | "시간(hr)"
   | "UPH"
@@ -93,6 +94,7 @@ const BASELINE_OPTIONS: BaselineOption[] = [
   "명",
   "k",
   "억",
+  "만원",
   "분(min)",
   "시간(hr)",
   "UPH",
@@ -270,6 +272,7 @@ function baselineToIndicatorType(baseline: BaselineOption): KpiIndicatorType {
   if (baseline === "건") return "count";
   if (baseline === "명") return "headcount";
   if (baseline === "억") return "money";
+  if (baseline === "만원") return "money_manwon";
   if (baseline === "분(min)") return "minutes";
   if (baseline === "시간(hr)") return "time";
   if (baseline === "UPH") return "uph";
@@ -291,6 +294,7 @@ function indicatorTypeToBaseline(
   if (indicatorType === "count") return "건";
   if (indicatorType === "headcount") return "명";
   if (indicatorType === "money") return "억";
+  if (indicatorType === "money_manwon") return "만원";
   if (indicatorType === "time") return "시간(hr)";
   if (indicatorType === "minutes") return "분(min)";
   if (indicatorType === "uph") return "UPH";
@@ -607,6 +611,7 @@ export function KpiCreateModal({
     baseline === "건" ||
     baseline === "명" ||
     baseline === "억" ||
+    baseline === "만원" ||
     baseline === "분(min)" ||
     baseline === "시간(hr)" ||
     baseline === "UPH" ||
@@ -633,6 +638,7 @@ export function KpiCreateModal({
     baselineB === "건" ||
     baselineB === "명" ||
     baselineB === "억" ||
+    baselineB === "만원" ||
     baselineB === "분(min)" ||
     baselineB === "시간(hr)" ||
     baselineB === "UPH" ||
@@ -1113,7 +1119,7 @@ export function KpiCreateModal({
                 <div className={compactControlClass}>
                   <label className="mb-1 block text-xs font-medium text-slate-600">
                     측정 기준
-                    <FieldHint text="%, 수율(%), PPM, ea·건·명·k·억, 분(min), 시간(hr), UPH, Cpk 등 프로젝트 단위에 맞게 선택합니다." />
+                    <FieldHint text="%, 수율(%), PPM, ea·건·명·k·억·만원, 분(min), 시간(hr), UPH, Cpk 등 프로젝트 단위에 맞게 선택합니다." />
                   </label>
                   <select
                     className={`${selectClass} w-full ${selectDisabledClass}`}

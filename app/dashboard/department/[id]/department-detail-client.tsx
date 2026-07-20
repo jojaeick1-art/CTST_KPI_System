@@ -20,8 +20,13 @@ import {
   CURRENT_KPI_YEAR,
   KPI_MONTHS,
   indicatorUsesComputedAchievement,
+  isKpiHoldDropActive,
+  isMoneyIndicatorType,
+  moneyIndicatorKindLabel,
+  moneyIndicatorUnitSuffix,
   resolveEffectiveIndicatorTypeForUi,
   type DepartmentKpiDetailItem,
+  type KpiHoldDropStatus,
   type KpiIndicatorType,
   type MonthKey,
 } from "@/src/lib/kpi-queries";
@@ -53,6 +58,7 @@ import {
   useUpdateManualKpiMutation,
   useUpdateKpiItemIndicatorMutation,
   useUpdateKpiItemFinalCompletionMutation,
+  useUpdateKpiItemHoldDropMutation,
 } from "@/src/hooks/useKpiQueries";
 import { PerformanceModal } from "./performance-modal";
 import { KpiCreateModal } from "./kpi-create-modal";
@@ -89,6 +95,7 @@ function indicatorBadgeClass(t: KpiIndicatorType): string {
     case "count":
       return "bg-amber-50 text-amber-900 ring-amber-200";
     case "money":
+    case "money_manwon":
       return "bg-teal-50 text-teal-900 ring-teal-200";
     case "time":
       return "bg-orange-50 text-orange-800 ring-orange-200";
@@ -110,7 +117,7 @@ function indicatorModeShortLabel(t: KpiIndicatorType): string {
   if (t === "ppm") return "PPM";
   if (t === "quantity") return "수량(k)";
   if (t === "count") return "건수";
-  if (t === "money") return "금액(억)";
+  if (isMoneyIndicatorType(t)) return moneyIndicatorKindLabel(t);
   if (t === "time") return "시간(h)";
   if (t === "minutes") return "분(min)";
   if (t === "uph") return "생산성(UPH)";
@@ -236,7 +243,9 @@ function benchmarkValueLabel(item: DepartmentKpiDetailItem): string {
   if (indicatorType === "quantity") return `${formatKoMax2Decimals(parsed)} k`;
   if (indicatorType === "count") return `${formatKoMax2Decimals(parsed)} 건`;
   if (indicatorType === "headcount") return `${formatKoMax2Decimals(parsed)} 명`;
-  if (indicatorType === "money") return `${formatKoMax2Decimals(parsed)}억`;
+  if (isMoneyIndicatorType(indicatorType)) {
+    return `${formatKoMax2Decimals(parsed)}${moneyIndicatorUnitSuffix(indicatorType)}`;
+  }
   if (indicatorType === "time") return `${formatKoMax2Decimals(parsed)} h`;
   if (indicatorType === "minutes") return `${formatKoMax2Decimals(parsed)} min`;
   if (indicatorType === "uph") return `${formatKoMax2Decimals(parsed)} UPH`;
@@ -297,6 +306,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   const deleteKpiItemMutation = useDeleteKpiItemMutation();
   const updateIndicatorMutation = useUpdateKpiItemIndicatorMutation();
   const updateFinalCompletionMutation = useUpdateKpiItemFinalCompletionMutation();
+  const updateHoldDropMutation = useUpdateKpiItemHoldDropMutation();
   const extendPeriodEndMonthMutation = useExtendKpiItemPeriodEndMonthMutation();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const periodPickerRef = useRef<HTMLDivElement | null>(null);
@@ -650,6 +660,7 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   const canEditPerformance = isAdmin || isOwnDepartment;
   const canManageKpiItems = roleCanAlwaysEdit && (isAdmin || isOwnDepartment);
   const canFinalizeKpiItems = roleCanAlwaysEdit && (isAdmin || isOwnDepartment);
+  const canHoldDropKpiItems = canFinalizeKpiItems;
   /** 관리자: 모든 부서, 그룹장·팀장: 본인 부서 KPI 항목 추가/수정/삭제 가능 */
   const canCreateKpi = canManageKpiItems;
   const totalWeight = detailItems.reduce((sum, item) => {
@@ -663,7 +674,10 @@ export function DepartmentDetailClient({ departmentId }: Props) {
       : detailItems.filter((item) =>
           itemIsEvaluatedInMonth(item, selectedAchievementMonth)
         );
-  const selectedMonthRates = monthSelectableItems.map((item) => {
+  const monthRateSourceItems = monthSelectableItems.filter(
+    (item) => !isKpiHoldDropActive(item.holdDropStatus)
+  );
+  const selectedMonthRates = monthRateSourceItems.map((item) => {
     if (selectedAchievementMonth === "all") {
       return item.averageAchievement ?? 0;
     }
@@ -787,6 +801,8 @@ export function DepartmentDetailClient({ departmentId }: Props) {
               ...prev,
               status: completed ? "closed" : "active",
               isFinalCompleted: completed,
+              holdDropStatus: completed ? null : prev.holdDropStatus,
+              holdDropReason: completed ? null : prev.holdDropReason,
             }
           : prev
       );
@@ -799,6 +815,45 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     } catch (e) {
       window.alert(
         e instanceof Error ? e.message : "최종 완료/철회 처리 중 오류가 발생했습니다."
+      );
+      return false;
+    }
+  }
+
+  async function handleHoldDropKpiItem(
+    kpiItemId: string,
+    status: KpiHoldDropStatus | null,
+    reason?: string | null
+  ): Promise<boolean> {
+    if (!canHoldDropKpiItems) {
+      window.alert("Hold/Drop 처리는 관리자·팀장·그룹장만 가능합니다.");
+      return false;
+    }
+    try {
+      await updateHoldDropMutation.mutateAsync({
+        kpiItemId,
+        status,
+        reason: reason ?? null,
+      });
+      await detailQuery.refetch();
+      setSelectedKpi((prev) =>
+        prev && prev.id === kpiItemId
+          ? {
+              ...prev,
+              holdDropStatus: status,
+              holdDropReason:
+                status === null
+                  ? null
+                  : (reason ?? "").trim() || prev.holdDropReason,
+              averageAchievement:
+                status === null ? prev.averageAchievement : null,
+            }
+          : prev
+      );
+      return true;
+    } catch (e) {
+      window.alert(
+        e instanceof Error ? e.message : "Hold/Drop 처리 중 오류가 발생했습니다."
       );
       return false;
     }
@@ -900,9 +955,6 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                   대시보드로
                 </Link>
               </div>
-              <p className="mt-1 text-sm text-slate-500">
-                KPI 항목·실적·가중치를 관리합니다
-              </p>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-3">
               <CtstUserProfileMenu
@@ -1373,12 +1425,20 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                             <td className="align-middle px-4 py-2">
                               <span
                                 className={`inline-flex flex-col items-start gap-0.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${
-                                  item.isFinalCompleted
-                                    ? "bg-emerald-50 text-emerald-700 ring-emerald-100"
-                                    : "bg-sky-50 text-sky-700 ring-sky-200"
+                                  item.holdDropStatus === "drop"
+                                    ? "bg-rose-50 text-rose-700 ring-rose-100"
+                                    : item.holdDropStatus === "hold"
+                                      ? "bg-amber-50 text-amber-800 ring-amber-100"
+                                      : item.isFinalCompleted
+                                        ? "bg-emerald-50 text-emerald-700 ring-emerald-100"
+                                        : "bg-sky-50 text-sky-700 ring-sky-200"
                                 }`}
                               >
-                                {item.isFinalCompleted ? (
+                                {item.holdDropStatus === "drop" ? (
+                                  <span className="leading-tight">DROP</span>
+                                ) : item.holdDropStatus === "hold" ? (
+                                  <span className="leading-tight">HOLD</span>
+                                ) : item.isFinalCompleted ? (
                                   <span className="leading-tight">완료</span>
                                 ) : has ? (
                                   <span className="tabular-nums leading-tight">
@@ -1454,6 +1514,10 @@ export function DepartmentDetailClient({ departmentId }: Props) {
         canFinalizeKpiItem={canFinalizeKpiItems}
         onFinalizeKpiItem={(kpiId, completed) =>
           handleFinalizeKpiItem(kpiId, completed)
+        }
+        canHoldDropKpiItem={canHoldDropKpiItems}
+        onHoldDropKpiItem={(kpiId, status, reason) =>
+          handleHoldDropKpiItem(kpiId, status, reason)
         }
         onExtendPeriodEndMonth={(kpiId) => handleExtendKpiItemPeriodEndMonth(kpiId)}
         initialEditorMonth={performanceModalInitialMonth}

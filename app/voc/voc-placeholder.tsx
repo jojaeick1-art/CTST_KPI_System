@@ -2,6 +2,8 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
+import { useSearchParams } from "next/navigation";
+
 import { Loader2, Trash2, X } from "lucide-react";
 
 import { CtstPortalShell } from "@/src/components/ctst-portal-shell";
@@ -739,6 +741,14 @@ export function VocPlaceholderContent() {
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
+  const searchParams = useSearchParams();
+
+  useEffect(() => {
+    const vocId = searchParams.get("vocId")?.trim();
+    if (!vocId) return;
+    setSelectedId(vocId);
+  }, [searchParams]);
+
   const [vocViewScope, setVocViewScope] = useState<VocViewScope>("all");
 
   useEffect(() => {
@@ -871,9 +881,6 @@ export function VocPlaceholderContent() {
                 <h1 className="text-xl font-bold tracking-tight text-slate-800 sm:text-2xl">
                   VOC
                 </h1>
-                <p className="mt-1 text-sm text-slate-500">
-                  운영 개선 요청을 접수하고 처리 현황을 확인합니다.
-                </p>
               </div>
               <div className="flex flex-wrap items-center justify-end gap-3">
                 <CtstUserProfileMenu

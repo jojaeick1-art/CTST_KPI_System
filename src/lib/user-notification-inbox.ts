@@ -4,7 +4,9 @@ import type {
   MySubmittedPerformanceProgressRow,
 } from "@/src/lib/kpi-queries";
 
-const STORAGE_KEY = "ctst-kpi-seen-notifications-v1";
+const SEEN_KEY_PREFIX = "ctst-kpi-seen-notifications-v2:";
+const HISTORY_KEY_PREFIX = "ctst-kpi-notification-history-v2:";
+const HISTORY_LIMIT = 200;
 
 /** 프로필·사이드바 배지 갱신용 */
 export const USER_NOTIFICATION_SEEN_EVENT = "ctst-user-notification-seen";
@@ -19,6 +21,18 @@ export type UserNotificationItem = {
   sortKey: number;
 };
 
+export type UserNotificationHistoryEntry = UserNotificationItem & {
+  readAt: string;
+};
+
+function seenStorageKey(userId: string): string {
+  return `${SEEN_KEY_PREFIX}${userId.trim()}`;
+}
+
+function historyStorageKey(userId: string): string {
+  return `${HISTORY_KEY_PREFIX}${userId.trim()}`;
+}
+
 function safeParseSeen(raw: string | null): Set<string> {
   if (!raw) return new Set();
   try {
@@ -30,28 +44,115 @@ function safeParseSeen(raw: string | null): Set<string> {
   }
 }
 
-export function loadSeenNotificationIds(): Set<string> {
-  if (typeof window === "undefined") return new Set();
-  return safeParseSeen(window.localStorage.getItem(STORAGE_KEY));
+function safeParseHistory(raw: string | null): UserNotificationHistoryEntry[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw) as unknown;
+    if (!Array.isArray(v)) return [];
+    return v.filter(
+      (row): row is UserNotificationHistoryEntry =>
+        row != null &&
+        typeof row === "object" &&
+        typeof (row as UserNotificationHistoryEntry).id === "string" &&
+        typeof (row as UserNotificationHistoryEntry).title === "string" &&
+        typeof (row as UserNotificationHistoryEntry).readAt === "string"
+    );
+  } catch {
+    return [];
+  }
 }
 
-export function saveSeenNotificationIds(ids: Set<string>) {
+export function loadSeenNotificationIds(userId: string): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  const uid = userId.trim();
+  if (!uid) return new Set();
+  return safeParseSeen(window.localStorage.getItem(seenStorageKey(uid)));
+}
+
+function saveSeenNotificationIds(userId: string, ids: Set<string>) {
   if (typeof window === "undefined") return;
+  const uid = userId.trim();
+  if (!uid) return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify([...ids]));
+    window.localStorage.setItem(seenStorageKey(uid), JSON.stringify([...ids]));
   } catch {
     /* ignore quota */
   }
 }
 
-/** 드롭다운을 열어 확인한 시점의 알림 id를 모두 읽음 처리 */
-export function mergeSeenNotificationIds(...newIds: string[]) {
-  const next = loadSeenNotificationIds();
-  for (const id of newIds) next.add(id);
-  saveSeenNotificationIds(next);
+export function loadNotificationHistory(
+  userId: string
+): UserNotificationHistoryEntry[] {
+  if (typeof window === "undefined") return [];
+  const uid = userId.trim();
+  if (!uid) return [];
+  const rows = safeParseHistory(
+    window.localStorage.getItem(historyStorageKey(uid))
+  );
+  return [...rows].sort(
+    (a, b) => new Date(b.readAt).getTime() - new Date(a.readAt).getTime()
+  );
+}
+
+function appendNotificationHistory(
+  userId: string,
+  items: UserNotificationItem[],
+  readAt: string
+) {
+  if (typeof window === "undefined" || items.length === 0) return;
+  const uid = userId.trim();
+  if (!uid) return;
+
+  const existing = safeParseHistory(
+    window.localStorage.getItem(historyStorageKey(uid))
+  );
+  const byId = new Map(existing.map((row) => [row.id, row]));
+  for (const item of items) {
+    byId.set(item.id, { ...item, readAt });
+  }
+  const merged = [...byId.values()].sort(
+    (a, b) => new Date(b.readAt).getTime() - new Date(a.readAt).getTime()
+  );
+  const trimmed = merged.slice(0, HISTORY_LIMIT);
+  try {
+    window.localStorage.setItem(
+      historyStorageKey(uid),
+      JSON.stringify(trimmed)
+    );
+  } catch {
+    /* ignore quota */
+  }
+}
+
+function emitSeenEvent() {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event(USER_NOTIFICATION_SEEN_EVENT));
   }
+}
+
+/** 읽음 처리 + 이력 저장 (사용자별) */
+export function markNotificationsAsRead(
+  userId: string,
+  items: readonly UserNotificationItem[]
+) {
+  const uid = userId.trim();
+  if (!uid || items.length === 0) return;
+
+  const next = loadSeenNotificationIds(uid);
+  for (const item of items) next.add(item.id);
+  saveSeenNotificationIds(uid, next);
+  appendNotificationHistory(uid, [...items], new Date().toISOString());
+  emitSeenEvent();
+}
+
+/** @deprecated markNotificationsAsRead 사용 */
+export function mergeSeenNotificationIds(userId: string, ...newIds: string[]) {
+  const uid = userId.trim();
+  if (!uid || newIds.length === 0) return;
+  const next = loadSeenNotificationIds(uid);
+  for (const id of newIds) next.add(id);
+  saveSeenNotificationIds(uid, next);
+  emitSeenEvent();
 }
 
 /** 접수 직후·관리 전 (`submitted` / 레거시 `received`) */
@@ -83,9 +184,10 @@ export function markAdminPendingVocNotificationsSeen(
   vocRequests: readonly KpiVocRequest[],
   adminUserId: string
 ): void {
-  const ids = adminPendingVocNotificationIds(vocRequests, adminUserId);
+  const uid = adminUserId.trim();
+  const ids = adminPendingVocNotificationIds(vocRequests, uid);
   if (ids.length === 0) return;
-  mergeSeenNotificationIds(...ids);
+  mergeSeenNotificationIds(uid, ...ids);
 }
 
 export function countAdminUnseenPendingVoc(
@@ -120,6 +222,12 @@ function performanceHref(row: MySubmittedPerformanceProgressRow): string {
   q.set("openKpi", row.kpiItemId);
   if (month) q.set("month", month);
   return `/dashboard/department/${encodeURIComponent(dept)}?${q.toString()}`;
+}
+
+function vocHref(request: KpiVocRequest): string {
+  const q = new URLSearchParams();
+  q.set("vocId", request.id);
+  return `/voc?${q.toString()}`;
 }
 
 function vocLabel(request: KpiVocRequest): { title: string; subtitle: string } {
@@ -211,7 +319,7 @@ export function buildUserNotifications(args: {
         kind: "voc",
         title: "새 VOC 접수",
         subtitle: `「${t}」 · ${dept} · ${name}`,
-        href: "/voc",
+        href: vocHref(v),
         sortKey: vocSortKey(v) - 1e12,
       });
     }
@@ -226,7 +334,7 @@ export function buildUserNotifications(args: {
       kind: "voc",
       title,
       subtitle,
-      href: "/voc",
+      href: vocHref(v),
       sortKey: vocSortKey(v),
     });
   }
@@ -249,22 +357,20 @@ export function countUnseenNotifications(
   return n;
 }
 
-/** 실적함 승인 대기 — 건수가 바뀌면 새 알림으로 다시 표시 */
-export function approvalPendingNotificationId(
-  pendingPrimaryCount: number,
-  pendingFinalCount: number
-): string {
-  return `approval-pending:${pendingPrimaryCount}:${pendingFinalCount}`;
+/** 사용자별 고정 ID — 읽으면 건수가 바뀌어도 다시 표시하지 않음 */
+export function approvalPendingNotificationId(userId: string): string {
+  return `approval-pending:${userId.trim()}`;
 }
 
 export function buildApprovalPendingNotification(
-  pendingCount: number,
-  pendingPrimaryCount: number,
-  pendingFinalCount: number
+  userId: string,
+  pendingCount: number
 ): UserNotificationItem | null {
   if (pendingCount <= 0) return null;
+  const uid = userId.trim();
+  if (!uid) return null;
   return {
-    id: approvalPendingNotificationId(pendingPrimaryCount, pendingFinalCount),
+    id: approvalPendingNotificationId(uid),
     kind: "performance",
     title: "실적 승인 대기",
     subtitle:
@@ -282,4 +388,15 @@ export function filterUnseenNotifications(
   seen: Set<string>
 ): UserNotificationItem[] {
   return items.filter((it) => !seen.has(it.id));
+}
+
+export function formatNotificationReadAt(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${y}-${m}-${day} ${hh}:${mm}`;
 }

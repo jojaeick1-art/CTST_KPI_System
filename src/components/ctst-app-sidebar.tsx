@@ -62,6 +62,7 @@ type NavSlot =
   | "investment"
   | "construction"
   | "setup"
+  | "logAudit"
   | "settings";
 
 type IndicatorBox = { top: number; height: number; opacity: number };
@@ -128,6 +129,10 @@ function resolveActiveNavSlot(
 
   if (access.kpi && pathname === "/dashboard/setup") {
     return "setup";
+  }
+
+  if (canAccessSystemSettings(role) && pathname.startsWith("/dashboard/logs")) {
+    return "logAudit";
   }
 
   if (canAccessSystemSettings(role) && pathname === "/dashboard/settings") {
@@ -284,7 +289,7 @@ function classForLink(active: boolean): string {
 
 function sectionForSlot(slot: NavSlot | null): SectionKey | null {
   if (!slot) return null;
-  if (slot === "settings") return "admin";
+  if (slot === "settings" || slot === "logAudit") return "admin";
   if (slot === "construction" || slot === "setup" || slot === "investment")
     return "etc";
   if (slot === "capaRecipeMaster" || slot === "capaSingle") return "capa";
@@ -374,7 +379,7 @@ export function CtstAppSidebar({
   const adminVocUnread = useMemo(() => {
     void notificationSeenTick;
     if (!adminVocEnabled || !uid) return 0;
-    const seen = loadSeenNotificationIds();
+    const seen = loadSeenNotificationIds(uid);
     return countAdminUnseenPendingVoc(vocQuery.data ?? [], uid, seen);
   }, [adminVocEnabled, uid, vocQuery.data, notificationSeenTick]);
 
@@ -415,6 +420,7 @@ export function CtstAppSidebar({
   const approvalsActive = activeSlot === "approvals";
   const kpiRejectedActive = activeSlot === "kpiRejected";
   const kpiWithdrawnActive = activeSlot === "kpiWithdrawn";
+  const logAuditActive = activeSlot === "logAudit";
   const settingsActive = activeSlot === "settings";
   const vocActive = activeSlot === "voc";
   const investmentActive = activeSlot === "investment";
@@ -669,6 +675,15 @@ export function CtstAppSidebar({
             expanded={expandedSections.admin}
             onToggle={toggleSection}
           >
+            <Link
+              ref={(el) => {
+                linkRefs.current.logAudit = el;
+              }}
+              href="/dashboard/logs"
+              className={classForLink(logAuditActive)}
+            >
+              로그 조회
+            </Link>
             <Link
               ref={(el) => {
                 linkRefs.current.settings = el;

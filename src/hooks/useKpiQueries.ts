@@ -19,6 +19,7 @@ import {
   fetchDepartmentKpiSummary,
   fetchDashboardSummaryStats,
   fetchPerformancesPendingStage,
+  fetchMyPendingPerformances,
   fetchMyPerformanceInbox,
   fetchMySubmittedPerformanceProgress,
   fetchKpiVocRequests,
@@ -26,17 +27,24 @@ import {
   extendKpiItemPeriodEndMonth,
   removeKpiItemCascade,
   updateKpiItemFinalCompletion,
+  updateKpiItemHoldDrop,
   removeDepartment,
   renameDepartment,
   reviewPerformanceWorkflow,
   withdrawPerformanceSubmission,
-  deleteMyDraftPerformanceCell,
+  deleteMonthPerformanceCell,
   saveMonthDeadline,
   upsertMonthPerformance,
   upsertQuarterPerformance,
+  buildDefaultApprovalLine,
+  fetchApprovalCandidateProfiles,
+  fetchMyApprovalLineTemplates,
+  saveApprovalLineTemplate,
+  deleteApprovalLineTemplate,
   importKpisFromExcelRows,
   createManualKpiItem,
   updateManualKpiItem,
+  type ApprovalLineStep,
   type KpiAchievementCap,
   fetchCapaSimulatorEnabled,
   saveAppFeatureAvailability,
@@ -46,6 +54,12 @@ import {
   deleteKpiVocRequest,
   updateKpiItemIndicatorSettings,
   saveCapaSimulatorEnabled,
+  fetchLoginSummaryStats,
+  fetchLoginStatsByDept,
+  fetchLoginStatsByUser,
+  fetchInactiveUsers,
+  fetchLoginAuditRows,
+  fetchProfilesForLogFilters,
   type ApprovalWorkflowStage,
   type AppFeatureKey,
   type CreateManualKpiInput,
@@ -56,6 +70,7 @@ import {
   type KpiVocCategory,
   type KpiVocPriority,
   type KpiVocStatus,
+  type LoginStatsFilterInput,
   type MonthKey,
   type QuarterLabel,
 } from "@/src/lib/kpi-queries";
@@ -67,6 +82,16 @@ function isParkJaejunProfile(row: {
   const username = String(row.username ?? "").trim().toLowerCase();
   const fullName = String(row.full_name ?? "").trim();
   return username === "pli" || fullName === "박재준";
+}
+
+/** 품질팀(QE) 김민규(kmg): DB role 과 무관하게 UI·실적 워크플로에서 그룹장 권한 */
+function isKimMingyuQualityQeProfile(row: {
+  username?: unknown;
+  full_name?: unknown;
+}): boolean {
+  const username = String(row.username ?? "").trim().toLowerCase();
+  const fullName = String(row.full_name ?? "").trim();
+  return username === "kmg" || fullName === "김민규";
 }
 
 /** 연구소 RAmosR&D: DB 는 `그룹장` 유지, UI·실적 워크플로는 그룹장+팀장+프로 병합(group_team_leader) */
@@ -146,9 +171,10 @@ export async function fetchDashboardProfile(): Promise<DashboardProfileData | nu
 
   const dbRoleRaw =
     row.role === null || row.role === undefined ? "" : String(row.role);
-  const normalizedRole =
-    isParkJaejunProfile(row) || isRamosResearchProfile(row)
-      ? "group_team_leader"
+  const normalizedRole = isParkJaejunProfile(row) || isRamosResearchProfile(row)
+    ? "group_team_leader"
+    : isKimMingyuQualityQeProfile(row)
+      ? "group_leader"
       : normalizeRole(dbRoleRaw);
   logProfileRoleSync({
     phase: "fetchDashboardProfile",
@@ -321,6 +347,7 @@ export function useUpsertMonthPerformance() {
       aggregationType?: KpiAggregationType | null;
       adminBypassApprovalLock?: boolean;
       actorRole?: string | null;
+      approvalLine?: ApprovalLineStep[] | null;
     }) =>
       upsertMonthPerformance(
         {
@@ -340,6 +367,9 @@ export function useUpsertMonthPerformance() {
             ? { adminBypassApprovalLock: true }
             : {}),
           ...(args.actorRole !== undefined ? { actorRole: args.actorRole } : {}),
+          ...(args.approvalLine !== undefined
+            ? { approvalLine: args.approvalLine }
+            : {}),
         }
       ),
     onSuccess: (_, vars) => {
@@ -413,6 +443,23 @@ export function usePendingPerformances(
   });
 }
 
+/** 본인 결재 차례 승인 대기 (중간·최종 통합) */
+export function useMyPendingPerformances(
+  enabled: boolean,
+  options?: { filterDeptId?: string | string[] | null }
+) {
+  const filterDeptId = options?.filterDeptId ?? undefined;
+  return useQuery({
+    queryKey: ["supabase", "my-pending-performances", filterDeptId ?? "all"],
+    queryFn: () =>
+      fetchMyPendingPerformances({
+        filterDeptId: filterDeptId ?? undefined,
+      }),
+    enabled,
+    refetchInterval: 15_000,
+  });
+}
+
 export function useWorkflowReviewMutation() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -447,6 +494,9 @@ export function useWorkflowReviewMutation() {
         queryKey: ["supabase", "pending-performances"],
       });
       void queryClient.invalidateQueries({
+        queryKey: ["supabase", "my-pending-performances"],
+      });
+      void queryClient.invalidateQueries({
         queryKey: ["supabase", "department-kpi-summary"],
       });
       void queryClient.invalidateQueries({
@@ -477,6 +527,9 @@ export function useWithdrawPendingPerformanceMutation() {
         queryKey: ["supabase", "pending-performances"],
       });
       void queryClient.invalidateQueries({
+        queryKey: ["supabase", "my-pending-performances"],
+      });
+      void queryClient.invalidateQueries({
         queryKey: ["supabase", "my-performance-inbox"],
       });
       void queryClient.invalidateQueries({
@@ -499,7 +552,7 @@ export function useDeleteDraftMonthlyPerformanceMutation() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (args: { performanceId: string; month?: MonthKey | null }) =>
-      deleteMyDraftPerformanceCell(args.performanceId, {
+      deleteMonthPerformanceCell(args.performanceId, {
         month: args.month ?? undefined,
       }),
     onSuccess: () => {
@@ -617,6 +670,73 @@ export function useUpdateKpiItemFinalCompletionMutation() {
       });
       void queryClient.invalidateQueries({
         queryKey: ["supabase", "dashboard-summary-stats"],
+      });
+    },
+  });
+}
+
+export function useUpdateKpiItemHoldDropMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: {
+      kpiItemId: string;
+      status: "hold" | "drop" | null;
+      reason?: string | null;
+    }) => updateKpiItemHoldDrop(args),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "department-kpi-detail"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "department-kpi-summary"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "dashboard-summary-stats"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "display-kpi-slides"],
+      });
+    },
+  });
+}
+
+export function useApprovalCandidateProfiles(enabled: boolean) {
+  return useQuery({
+    queryKey: ["supabase", "approval-candidate-profiles"],
+    queryFn: fetchApprovalCandidateProfiles,
+    enabled,
+    staleTime: 60_000,
+  });
+}
+
+export function useMyApprovalLineTemplates(enabled: boolean) {
+  return useQuery({
+    queryKey: ["supabase", "approval-line-templates"],
+    queryFn: fetchMyApprovalLineTemplates,
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
+export function useSaveApprovalLineTemplateMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: saveApprovalLineTemplate,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "approval-line-templates"],
+      });
+    },
+  });
+}
+
+export function useDeleteApprovalLineTemplateMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (templateId: string) => deleteApprovalLineTemplate(templateId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "approval-line-templates"],
       });
     },
   });
@@ -762,6 +882,69 @@ export function useAppFeatureAvailability(enabled: boolean) {
     queryFn: fetchAppFeatureAvailability,
     enabled,
     refetchInterval: 30_000,
+  });
+}
+
+export function useLoginSummaryStats(
+  filters: LoginStatsFilterInput,
+  enabled: boolean
+) {
+  return useQuery({
+    queryKey: ["supabase", "login-summary-stats", filters],
+    queryFn: () => fetchLoginSummaryStats(filters),
+    enabled,
+  });
+}
+
+export function useLoginStatsByDept(
+  filters: LoginStatsFilterInput,
+  enabled: boolean
+) {
+  return useQuery({
+    queryKey: ["supabase", "login-stats-by-dept", filters],
+    queryFn: () => fetchLoginStatsByDept(filters),
+    enabled,
+  });
+}
+
+export function useLoginStatsByUser(
+  filters: LoginStatsFilterInput,
+  enabled: boolean
+) {
+  return useQuery({
+    queryKey: ["supabase", "login-stats-by-user", filters],
+    queryFn: () => fetchLoginStatsByUser(filters),
+    enabled,
+  });
+}
+
+export function useInactiveUsers(
+  filters: { deptId?: string | null; userId?: string | null; minInactiveDays?: number },
+  enabled: boolean
+) {
+  return useQuery({
+    queryKey: ["supabase", "inactive-users", filters],
+    queryFn: () => fetchInactiveUsers(filters),
+    enabled,
+  });
+}
+
+export function useLoginAuditRows(
+  filters: LoginStatsFilterInput,
+  enabled: boolean
+) {
+  return useQuery({
+    queryKey: ["supabase", "login-audit-rows", filters],
+    queryFn: () => fetchLoginAuditRows(filters),
+    enabled,
+  });
+}
+
+export function useProfilesForLogFilters(enabled: boolean) {
+  return useQuery({
+    queryKey: ["supabase", "profiles-for-log-filters"],
+    queryFn: fetchProfilesForLogFilters,
+    enabled,
   });
 }
 

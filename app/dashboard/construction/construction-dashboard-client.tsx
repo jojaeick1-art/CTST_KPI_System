@@ -30,9 +30,6 @@ export function ConstructionDashboardClient() {
             <h1 className="text-xl font-bold tracking-tight text-slate-800 sm:text-2xl">
               공사
             </h1>
-            <p className="mt-0.5 text-sm text-slate-500">
-              CTST 2Campus 공사 일정 현황
-            </p>
           </div>
         </div>
       </header>

@@ -311,7 +311,6 @@ export function DashboardClient() {
                 전체 대시보드
               </h1>
               <div className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-slate-500">
-                <p>부서별 진행 현황을 한눈에 확인하세요</p>
                 <span className="rounded-full bg-sky-50 px-2.5 py-0.5 text-[11px] font-semibold text-sky-700 ring-1 ring-sky-200">
                   기준 연도: {CURRENT_KPI_YEAR}
                 </span>

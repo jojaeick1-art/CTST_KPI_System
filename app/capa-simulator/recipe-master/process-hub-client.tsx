@@ -160,7 +160,6 @@ export function ProcessHubClient() {
   return (
     <CapaPageShell
       title="공정"
-      description="공정을 선택한 뒤 해당 공정에 등록된 모델과 CAPA를 확인하세요."
       meta="기준: 월 26일 근무 · 평일 8h×3 · 주말 12h×2 (일 22.5h 가동)"
     >
       <RecipeSimulatorModal

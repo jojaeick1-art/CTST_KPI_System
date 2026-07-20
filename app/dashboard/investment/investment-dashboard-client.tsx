@@ -583,7 +583,6 @@ export function InvestmentDashboardClient() {
         <div className="flex h-full items-center gap-4">
           <div className="min-w-0">
             <h1 className="text-xl font-bold tracking-tight text-slate-800 sm:text-2xl">투자</h1>
-            <p className="mt-0.5 text-sm text-slate-500">투자 심의 건 현황</p>
           </div>
         </div>
       </header>

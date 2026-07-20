@@ -276,9 +276,6 @@ export function SettingsClient() {
               <h1 className="text-xl font-bold tracking-tight text-slate-800 sm:text-2xl">
                 시스템 설정
               </h1>
-              <p className="mt-0.5 text-sm text-slate-500">
-                부서 관리, 월별 입력 마감일, 권한 정보를 관리합니다
-              </p>
             </div>
             <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:gap-3">
               <CtstUserProfileMenu
@@ -511,9 +508,6 @@ export function SettingsClient() {
                     </button>
                   </div>
                 ))}
-                <p className="text-xs text-slate-500">
-                  한눈에 현재 상태를 보고 바로 공개/잠금 전환할 수 있습니다. (관리자는 잠금 상태여도 접근 가능)
-                </p>
               </div>
             )}
           </section>

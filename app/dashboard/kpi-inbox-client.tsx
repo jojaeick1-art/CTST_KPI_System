@@ -504,11 +504,6 @@ export function KpiInboxPage({
                   <h1 className="text-xl font-bold tracking-tight text-slate-800 sm:text-2xl">
                     {title}
                   </h1>
-                  <p className="mt-0.5 text-sm text-slate-500">
-                    {variant === "rejected"
-                      ? "내가 제출한 실적 중 승인자가 반려한 건과 사유를 확인할 수 있습니다."
-                      : "승인 대기 중에 직접 회수한 실적입니다. 상세 열기에서 수정 후 다시 제출할 수 있습니다."}
-                  </p>
                 </div>
                 <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:gap-3">
                   <CtstUserProfileMenu

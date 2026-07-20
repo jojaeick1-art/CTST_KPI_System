@@ -22,15 +22,13 @@ import {
   useDashboardSummaryStats,
   useDepartmentKpiDetail,
   useMySubmittedPerformanceProgress,
-  usePendingPerformances,
+  useMyPendingPerformances,
   useWorkflowReviewMutation,
 } from "@/src/hooks/useKpiQueries";
 import {
   approvalNotificationCount,
   approvalNotificationDeptFilter,
   canAccessApprovalsPage,
-  canGroupLeaderApprove,
-  canTeamLeaderFinalApprove,
   hrefDashboardDepartmentList,
   isAdminRole,
   roleLabelKo,
@@ -102,7 +100,7 @@ function MySubmittedProgressTable({
   if (!rows.length) {
     return (
       <p className="rounded-xl border border-sky-200 bg-white px-6 py-8 text-center text-sm text-slate-600 shadow-sm shadow-sky-100/40">
-        아직 제출한 실적이 없거나, 조회 가능한 건이 없습니다.
+        최근 7일 이내 제출·회수한 실적이 없습니다.
       </p>
     );
   }
@@ -232,23 +230,19 @@ function MySubmittedProgressTable({
 
 function PendingTable({
   title,
-  subtitle,
   rows,
   busyId,
   downloadingEvidenceId,
   workflowPending,
-  variant,
   onApprove,
   onRejectClick,
   onDownloadEvidence,
 }: {
   title: string;
-  subtitle: string;
   rows: PendingPerformanceListRow[];
   busyId: string | null;
   downloadingEvidenceId: string | null;
   workflowPending: boolean;
-  variant: "primary" | "final";
   onApprove: (row: PendingPerformanceListRow) => void;
   onRejectClick: (row: PendingPerformanceListRow) => void;
   onDownloadEvidence: (evidenceUrl: string, requestKey: string) => void;
@@ -257,7 +251,6 @@ function PendingTable({
     <section className="mb-10">
       <div className="mb-3">
         <h2 className="text-base font-semibold text-slate-800">{title}</h2>
-        <p className="text-sm text-slate-500">{subtitle}</p>
       </div>
       {!rows.length ? (
         <p className="rounded-xl border border-sky-200 bg-white px-6 py-8 text-center text-sm text-slate-600">
@@ -297,9 +290,7 @@ function PendingTable({
                   </th>
                   <th className="px-4 py-3 font-semibold">진행 내용</th>
                   <th className="px-4 py-3 font-semibold">증빙</th>
-                  <th className="px-4 py-3 font-semibold text-right">
-                    {variant === "primary" ? "1차 처리" : "최종 처리"}
-                  </th>
+                  <th className="px-4 py-3 font-semibold text-right">승인 처리</th>
                 </tr>
               </thead>
               <tbody>
@@ -367,10 +358,10 @@ function PendingTable({
                           >
                             {busy && busyId === row.id ? (
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : variant === "primary" ? (
-                              "1차 승인"
-                            ) : (
+                            ) : row.pendingAction === "approve_final" ? (
                               "최종 승인"
+                            ) : (
+                              "승인"
                             )}
                           </button>
                           <button
@@ -432,16 +423,6 @@ export function ApprovalsClient() {
     (isAdminRole(profileQuery.data.profile.role) ||
       (featureQuery.isSuccess && featureQuery.data?.kpi === true));
   const myProgressQuery = useMySubmittedPerformanceProgress(myProgressEnabled);
-  const pendingApprovalCount =
-    approvalNotificationCount(
-      resolvedRole,
-      summaryStatsQuery.data?.pendingPrimaryCount ?? 0,
-      summaryStatsQuery.data?.pendingFinalCount ?? 0
-    );
-  const isGroupLeader =
-    resolvedRole !== undefined && canGroupLeaderApprove(resolvedRole);
-  const isTeamLeader =
-    resolvedRole !== undefined && canTeamLeaderFinalApprove(resolvedRole);
   /** 관리자: 전 부서 승인 대기 조회 */
   const approvalDeptFilter =
     resolvedRole !== undefined && isAdminRole(resolvedRole)
@@ -454,14 +435,18 @@ export function ApprovalsClient() {
       ? hrefDashboardDepartmentList(resolvedRole, userDeptId)
       : "/dashboard";
 
-  const primaryQuery = usePendingPerformances(
-    profileQuery.isSuccess && profileQuery.data !== null && canSeeApprovals && isGroupLeader,
-    { stage: "primary", filterDeptId: approvalDeptFilter }
+  const pendingQuery = useMyPendingPerformances(
+    profileQuery.isSuccess && profileQuery.data !== null && canSeeApprovals,
+    { filterDeptId: approvalDeptFilter }
   );
-  const finalQuery = usePendingPerformances(
-    profileQuery.isSuccess && profileQuery.data !== null && canSeeApprovals && isTeamLeader,
-    { stage: "final", filterDeptId: approvalDeptFilter }
-  );
+
+  const pendingApprovalCount = canSeeApprovals
+    ? (pendingQuery.data?.length ?? 0)
+    : approvalNotificationCount(
+        resolvedRole,
+        summaryStatsQuery.data?.pendingPrimaryCount ?? 0,
+        summaryStatsQuery.data?.pendingFinalCount ?? 0
+      );
 
   const workflowMut = useWorkflowReviewMutation();
   const [actingId, setActingId] = useState<string | null>(null);
@@ -615,33 +600,30 @@ export function ApprovalsClient() {
     router.refresh();
   }
 
-  async function handleApprovePrimary(row: PendingPerformanceListRow) {
+  async function handleApprove(row: PendingPerformanceListRow) {
+    const action = row.pendingAction ?? "approve_primary";
     try {
       setActingId(row.id);
       await workflowMut.mutateAsync({
         performanceId: row.targetRowId,
         ...(row.month != null ? { month: row.month } : {}),
-        action: "approve_primary",
+        action,
       });
-      notify("success", "1차 승인 처리되었습니다.");
+      notify(
+        "success",
+        action === "approve_final"
+          ? "최종 승인 처리되었습니다."
+          : "승인 처리되었습니다."
+      );
     } catch (e) {
-      notify("error", e instanceof Error ? e.message : "1차 승인 처리에 실패했습니다.");
-    } finally {
-      setActingId(null);
-    }
-  }
-
-  async function handleApproveFinal(row: PendingPerformanceListRow) {
-    try {
-      setActingId(row.id);
-      await workflowMut.mutateAsync({
-        performanceId: row.targetRowId,
-        ...(row.month != null ? { month: row.month } : {}),
-        action: "approve_final",
-      });
-      notify("success", "최종 승인 처리되었습니다.");
-    } catch (e) {
-      notify("error", e instanceof Error ? e.message : "최종 승인 처리에 실패했습니다.");
+      notify(
+        "error",
+        e instanceof Error
+          ? e.message
+          : action === "approve_final"
+            ? "최종 승인 처리에 실패했습니다."
+            : "승인 처리에 실패했습니다."
+      );
     } finally {
       setActingId(null);
     }
@@ -657,9 +639,7 @@ export function ApprovalsClient() {
     try {
       setActingId(rejectForId);
       const rejectRow =
-        [...(primaryQuery.data ?? []), ...(finalQuery.data ?? [])].find(
-          (r) => r.id === rejectForId
-        ) ?? null;
+        (pendingQuery.data ?? []).find((r) => r.id === rejectForId) ?? null;
       await workflowMut.mutateAsync({
         performanceId: rejectRow?.targetRowId ?? rejectForId,
         ...(rejectRow?.month != null ? { month: rejectRow.month } : {}),
@@ -710,11 +690,8 @@ export function ApprovalsClient() {
     ctx.session.user.user_metadata as Record<string, unknown> | undefined
   );
 
-  const listError =
-    (isGroupLeader && primaryQuery.isError && primaryQuery.error) ||
-    (isTeamLeader && finalQuery.isError && finalQuery.error);
-  const listLoading =
-    (isGroupLeader && primaryQuery.isPending) || (isTeamLeader && finalQuery.isPending);
+  const listError = pendingQuery.isError && pendingQuery.error;
+  const listLoading = pendingQuery.isPending;
 
   return (
     <div className="flex min-h-screen flex-col bg-gradient-to-b from-sky-50/90 via-white to-white md:flex-row">
@@ -759,11 +736,6 @@ export function ApprovalsClient() {
               <h1 className="text-xl font-bold tracking-tight text-slate-800 sm:text-2xl">
                 실적함
               </h1>
-              <p className="mt-0.5 text-sm text-slate-500">
-                &quot;내 실적 진행현황&quot;에서 본인이 제출한 실적의 승인 단계를 확인할 수
-                있습니다. 그룹장·팀장·관리자에게는 아래에 실적 승인·반려 처리 목록이
-                추가로 표시되며, 승인된 실적은 전체 대시보드 달성률에 반영됩니다.
-              </p>
             </div>
             <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:gap-3">
               <CtstUserProfileMenu
@@ -784,10 +756,6 @@ export function ApprovalsClient() {
                 <h2 className="text-base font-semibold text-slate-800">
                   내 실적 진행현황
                 </h2>
-                <p className="text-sm text-slate-500">
-                  내가 제출·회수한 실적의 현재 상태를 표시합니다. 승인 처리 권한은 없으며,
-                  행을 선택하면 이 화면에서 바로 실적 창이 열립니다.
-                </p>
               </div>
               {myProgressQuery.isPending ? (
                 <div className="h-40 animate-pulse rounded-xl bg-sky-100/60" />
@@ -810,8 +778,9 @@ export function ApprovalsClient() {
             {!canSeeApprovals ? (
               <div className="rounded-xl border border-amber-200 bg-amber-50/90 px-4 py-4 text-sm text-amber-900">
                 <p className="font-medium">
-                  그룹장·팀장·관리자만 아래와 같이 타인의 실적을 승인·반려할 수 있습니다.
-                  본인 제출 건의 진행 현황은 위 목록에서 확인하세요.
+                  결재선에 지정된 사용자·그룹장·팀장·관리자만 아래와 같이 타인의 실적을
+                  승인·반려할 수 있습니다. 본인 제출 건의 진행 현황은 위 목록에서
+                  확인하세요.
                 </p>
                 <Link
                   href={dashboardListHref}
@@ -827,42 +796,19 @@ export function ApprovalsClient() {
             ) : listLoading ? (
               <div className="h-48 animate-pulse rounded-xl bg-sky-100/60" />
             ) : (
-              <>
-                {isGroupLeader ? (
-                  <PendingTable
-                    title="1차 승인 대기"
-                    subtitle="실적이 제출되면 여기에 표시됩니다. 승인 시 팀장에게 최종 승인 요청이 전달됩니다."
-                    rows={primaryQuery.data ?? []}
-                    busyId={actingId}
-                    downloadingEvidenceId={downloadingEvidenceId}
-                    workflowPending={workflowMut.isPending}
-                    variant="primary"
-                    onApprove={(row) => void handleApprovePrimary(row)}
-                    onRejectClick={(row) => {
-                      setRejectForId(row.id);
-                      setRejectReason("");
-                    }}
-                    onDownloadEvidence={handleDownloadEvidence}
-                  />
-                ) : null}
-                {isTeamLeader ? (
-                  <PendingTable
-                    title="최종 승인 대기"
-                    subtitle="팀장 최종 승인이 필요한 실적이 표시됩니다. 승인 시 대시보드 달성률에 반영됩니다."
-                    rows={finalQuery.data ?? []}
-                    busyId={actingId}
-                    downloadingEvidenceId={downloadingEvidenceId}
-                    workflowPending={workflowMut.isPending}
-                    variant="final"
-                    onApprove={(row) => void handleApproveFinal(row)}
-                    onRejectClick={(row) => {
-                      setRejectForId(row.id);
-                      setRejectReason("");
-                    }}
-                    onDownloadEvidence={handleDownloadEvidence}
-                  />
-                ) : null}
-              </>
+              <PendingTable
+                title="승인 대기"
+                rows={pendingQuery.data ?? []}
+                busyId={actingId}
+                downloadingEvidenceId={downloadingEvidenceId}
+                workflowPending={workflowMut.isPending}
+                onApprove={(row) => void handleApprove(row)}
+                onRejectClick={(row) => {
+                  setRejectForId(row.id);
+                  setRejectReason("");
+                }}
+                onDownloadEvidence={handleDownloadEvidence}
+              />
             )}
           </div>
         </div>

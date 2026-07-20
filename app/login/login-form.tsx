@@ -16,6 +16,7 @@ import {
   getSupabasePublicEnvStatus,
   usernameToAuthEmail,
 } from "@/src/lib/supabase";
+import { recordLoginSuccessAudit } from "@/src/lib/kpi-queries";
 
 const SAVED_LOGIN_ID_KEY = "ctst.savedLoginId";
 
@@ -116,7 +117,7 @@ export function LoginForm() {
 
         const { data: profile, error: profileError } = await supabase
           .from("profiles")
-          .select("id, username, role, dept_id")
+          .select("id, username, full_name, role, dept_id")
           .eq("id", session.user.id)
           .maybeSingle();
 
@@ -144,6 +145,19 @@ export function LoginForm() {
             setError
           );
           return;
+        }
+
+        try {
+          await recordLoginSuccessAudit({
+            userId: session.user.id,
+            username: String(profile.username ?? normalized),
+            fullName:
+              typeof profile.full_name === "string" ? profile.full_name : null,
+            role: typeof profile.role === "string" ? profile.role : null,
+            deptId: typeof profile.dept_id === "string" ? profile.dept_id : null,
+          });
+        } catch (auditError) {
+          console.error("[C-ONE 로그인] 접속 로그 저장 실패", auditError);
         }
 
         try {

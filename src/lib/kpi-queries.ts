@@ -1,6 +1,11 @@
 import { orderDepartmentsForDisplay } from "@/src/lib/display-config";
 import { createBrowserSupabase } from "@/src/lib/supabase";
-import { normalizeRole } from "@/src/lib/rbac";
+import {
+  normalizeRole,
+  roleLabelKo,
+  canGroupLeaderApprove,
+  canTeamLeaderFinalApprove,
+} from "@/src/lib/rbac";
 import { roundToMax2DecimalPlaces } from "@/src/lib/format-display-number";
 import type {
   DepartmentKpiSummary,
@@ -226,11 +231,30 @@ export type KpiIndicatorType =
   | "quantity"
   | "count"
   | "money"
+  | "money_manwon"
   | "time"
   | "minutes"
   | "uph"
   | "headcount"
   | "cpk";
+
+export function isMoneyIndicatorType(
+  t: KpiIndicatorType
+): t is "money" | "money_manwon" {
+  return t === "money" || t === "money_manwon";
+}
+
+export function moneyIndicatorUnitSuffix(t: KpiIndicatorType): string {
+  if (t === "money_manwon") return "만원";
+  if (t === "money") return "억";
+  return "";
+}
+
+export function moneyIndicatorKindLabel(t: KpiIndicatorType): string {
+  if (t === "money_manwon") return "금액(만원)";
+  if (t === "money") return "금액(억)";
+  return "";
+}
 
 export type KpiEvaluationType = "quantitative" | "qualitative";
 export type KpiQualitativeCalcType = "progress" | "completion";
@@ -246,6 +270,7 @@ export function indicatorUsesComputedAchievement(
   | "quantity"
   | "count"
   | "money"
+  | "money_manwon"
   | "time"
   | "minutes"
   | "uph"
@@ -307,6 +332,7 @@ export function computedAchievementPercent(
     indicator === "quantity" ||
     indicator === "count" ||
     indicator === "money" ||
+    indicator === "money_manwon" ||
     indicator === "time" ||
     indicator === "minutes" ||
     indicator === "uph" ||
@@ -459,6 +485,7 @@ function parseKpiIndicatorTypeFromDb(raw: unknown): KpiIndicatorType {
   if (s === "ppm" || s === "reverse" || s === "역지표") return "ppm";
   if (s === "quantity" || s === "수량" || s === "qty") return "quantity";
   if (s === "count" || s === "건수" || s === "cnt") return "count";
+  if (s === "money_manwon" || s === "만원") return "money_manwon";
   if (s === "money" || s === "금액" || s === "억") return "money";
   if (s === "headcount" || s === "명" || s === "인원") return "headcount";
   if (s === "time" || s === "시간" || s === "hr" || s === "hour" || s === "hours") {
@@ -489,8 +516,10 @@ export function resolveEffectiveIndicatorTypeForUi(
 ): KpiIndicatorType {
   if (indicatorType !== "normal") return indicatorType;
   if (String(bm ?? "").toLowerCase().includes("금액")) return "money";
-  if (String(bm ?? "").includes("명")) return "headcount";
   const u = String(unit ?? "").trim();
+  if (u === "만원") return "money_manwon";
+  if (u === "억") return "money";
+  if (String(bm ?? "").includes("명")) return "headcount";
   if (u === "분(min)" || u === "분") return "minutes";
   if (u === "시간(hr)" || u === "시간") return "time";
   if (u === "UPH") return "uph";
@@ -517,7 +546,7 @@ export function resolveComputedTargetMetric(
     return targetPpm;
   }
   if (
-    effectiveType === "money" &&
+    isMoneyIndicatorType(effectiveType) &&
     targetFinalValue !== null &&
     targetFinalValue !== undefined &&
     Number.isFinite(targetFinalValue) &&
@@ -581,11 +610,125 @@ type PerformanceMonthlyCell = {
   /** 제출 회수 시 기록 — 회수함 목록(본인 건만) */
   withdrawn_by?: string | null;
   withdrawn_at?: string | null;
+  /** 실적 제출 시각 — 내 실적 진행현황 1주 보관 기준 */
+  submitted_at?: string | null;
+  /** 반려 처리 시각 */
+  rejected_at?: string | null;
+  /** 최종 승인 완료 시각 */
+  approved_at?: string | null;
   /** 과거 승인 대기 제출 이력 — 재제출 시 구분(신규/수정/재등록)용 */
   has_ever_been_pending?: boolean;
   /** 승인 대기 목록용: 마지막 제출이 신규·수정·재등록 중 무엇이었는지 */
   performance_submit_kind?: "신규" | "수정" | "재등록";
+  /** 커스텀 결재선 (순서대로 승인) */
+  approval_line?: ApprovalLineStep[] | null;
+  /** 현재 대기 중인 결재선 인덱스(0-based). 없으면 레거시 역할 기반 */
+  approval_line_index?: number | null;
 };
+
+export type ApprovalLineStep = {
+  user_id: string;
+  full_name?: string | null;
+  role?: string | null;
+  dept_name?: string | null;
+};
+
+export type ApprovalLineTemplateRow = {
+  id: string;
+  name: string;
+  approverIds: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ApprovalCandidateProfile = {
+  id: string;
+  fullName: string;
+  username: string;
+  role: string;
+  roleLabel: string;
+  deptId: string | null;
+  deptName: string;
+};
+
+/** 결재라인 선택 목록에서 제외할 계정 (username·표시 이름 기준) */
+const APPROVAL_LINE_EXCLUDED_IDENTIFIERS = new Set([
+  "kpi 전시",
+  "ramos",
+  "test_group",
+  "test_leader",
+  "test_pro",
+]);
+
+function isExcludedApprovalLineCandidate(profile: {
+  username: string;
+  fullName: string;
+}): boolean {
+  const u = profile.username.trim().toLowerCase();
+  const f = profile.fullName.trim().toLowerCase();
+  return (
+    APPROVAL_LINE_EXCLUDED_IDENTIFIERS.has(u) ||
+    APPROVAL_LINE_EXCLUDED_IDENTIFIERS.has(f)
+  );
+}
+
+/** 결재선 길이·현재 인덱스로 approval_step 매핑 (실적함 primary/final 탭 호환) */
+export function approvalStepFromLineIndex(
+  lineLength: number,
+  index: number
+): string {
+  if (lineLength <= 0) return PERF_STATUS_APPROVED;
+  if (index < 0 || index >= lineLength) return PERF_STATUS_APPROVED;
+  if (index >= lineLength - 1) return PERF_STATUS_PENDING_FINAL;
+  return PERF_STATUS_PENDING_PRIMARY;
+}
+
+export function parseApprovalLineFromCell(
+  cell: PerformanceMonthlyCell | Record<string, unknown> | null | undefined
+): ApprovalLineStep[] {
+  if (!cell || typeof cell !== "object") return [];
+  const raw = (cell as PerformanceMonthlyCell).approval_line;
+  if (!Array.isArray(raw)) return [];
+  const out: ApprovalLineStep[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const rec = item as Record<string, unknown>;
+    const uid =
+      typeof rec.user_id === "string"
+        ? rec.user_id.trim()
+        : typeof rec.userId === "string"
+          ? rec.userId.trim()
+          : "";
+    if (!uid) continue;
+    out.push({
+      user_id: uid,
+      full_name:
+        typeof rec.full_name === "string"
+          ? rec.full_name
+          : typeof rec.fullName === "string"
+            ? rec.fullName
+            : null,
+      role: typeof rec.role === "string" ? rec.role : null,
+      dept_name:
+        typeof rec.dept_name === "string"
+          ? rec.dept_name
+          : typeof rec.deptName === "string"
+            ? rec.deptName
+            : null,
+    });
+  }
+  return out;
+}
+
+export function approvalLineIndexFromCell(
+  cell: PerformanceMonthlyCell | Record<string, unknown> | null | undefined
+): number {
+  if (!cell || typeof cell !== "object") return 0;
+  const raw = (cell as PerformanceMonthlyCell).approval_line_index;
+  const n = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.floor(n);
+}
 
 export type MonthlyAchievementRateContext = {
   indicatorType: KpiIndicatorType;
@@ -796,7 +939,7 @@ function standaloneOverallUsesFinalTarget(
     return true;
   }
   if (ctx.evaluationType === "qualitative") return true;
-  if (ctx.indicatorType === "money") return true;
+  if (isMoneyIndicatorType(ctx.indicatorType)) return true;
   const hasMonthlyPlan = Object.keys(ctx.monthlyTargets).length > 0;
   if (ctx.indicatorType === "count" && hasMonthlyPlan) return false;
   if (indicatorUsesComputedAchievement(ctx.indicatorType)) {
@@ -1311,6 +1454,13 @@ export async function fetchDepartmentKpiSummary(): Promise<
     const deptId = item.dept_id;
     if (!deptId || !ratesByDept.has(deptId)) continue;
 
+    const itemRecord = item as unknown as Record<string, unknown>;
+    const holdDropStatus = parseKpiHoldDropStatus(itemRecord.hold_drop_status);
+    // Hold/Drop KPI는 부서 평균·항목 수(분모)·가중 점수에서 제외
+    if (isKpiHoldDropActive(holdDropStatus)) {
+      continue;
+    }
+
     itemCountByDept.set(deptId, (itemCountByDept.get(deptId) ?? 0) + 1);
 
     const rawTargets = item.kpi_targets ?? [];
@@ -1321,7 +1471,6 @@ export async function fetchDepartmentKpiSummary(): Promise<
         CURRENT_KPI_YEAR
       );
     });
-    const itemRecord = item as unknown as Record<string, unknown>;
     const milestoneRows = Array.isArray(itemRecord.kpi_milestones)
       ? itemRecord.kpi_milestones.map(asRecord)
       : [];
@@ -1432,6 +1581,22 @@ export async function fetchDepartmentKpiSummary(): Promise<
   });
 }
 
+export type KpiHoldDropStatus = "hold" | "drop";
+
+export function parseKpiHoldDropStatus(
+  raw: unknown
+): KpiHoldDropStatus | null {
+  const s = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (s === "hold" || s === "drop") return s;
+  return null;
+}
+
+export function isKpiHoldDropActive(
+  status: KpiHoldDropStatus | null | undefined
+): boolean {
+  return status === "hold" || status === "drop";
+}
+
 export type DepartmentKpiDetailItem = {
   id: string;
   mainTopic: string;
@@ -1462,6 +1627,8 @@ export type DepartmentKpiDetailItem = {
   targetPpm: number | null;
   status: string;
   isFinalCompleted: boolean;
+  holdDropStatus: KpiHoldDropStatus | null;
+  holdDropReason: string | null;
   evaluationType: KpiEvaluationType | null;
   unit: string | null;
   qualitativeCalcType: KpiQualitativeCalcType | null;
@@ -2112,10 +2279,17 @@ export async function fetchDepartmentKpiDetail(
       typeof primaryKpiIdRaw === "string" && primaryKpiIdRaw.trim().length > 0
         ? primaryKpiIdRaw.trim()
         : null;
+    const holdDropStatus = parseKpiHoldDropStatus(item.hold_drop_status);
+    const holdDropReasonRaw = pickNullableText(item, "hold_drop_reason");
+    const holdDropReason =
+      holdDropReasonRaw && holdDropReasonRaw.trim()
+        ? holdDropReasonRaw.trim()
+        : null;
     // 부서 상단 "전체 평균 달성률"은 대시보드 부서 카드와 동일하게
     // 등록된 KPI 항목 수를 분모로 하고, 승인 실적 없음은 0%로 포함한다.
     // 묶인 두 번째 목표 행은 목록에서 숨기므로 평균에도 포함하지 않음.
-    if (!primaryKpiId) {
+    // Hold/Drop 적용 중 KPI는 분자·분모에서 제외.
+    if (!primaryKpiId && !isKpiHoldDropActive(holdDropStatus)) {
       departmentRates.push(averageAchievement ?? 0);
     }
     const monthlyAchievementRates = monthlyAchievementRatesByMonth(targets, rateContext);
@@ -2175,7 +2349,7 @@ export async function fetchDepartmentKpiDetail(
     const bm = pickText(item, ["bm", "base_measure", "benchmark"]);
     const weightText = pickText(item, ["weight", "weight_rate", "weighted_score"]);
     const track = resolveScoreTrack(indicatorType, bm);
-    if (!primaryKpiId) {
+    if (!primaryKpiId && !isKpiHoldDropActive(holdDropStatus)) {
       pushWeightedScore(track, averageAchievement, weightText);
     }
 
@@ -2213,6 +2387,8 @@ export async function fetchDepartmentKpiDetail(
       targetPpm,
       status,
       isFinalCompleted: status === "closed",
+      holdDropStatus,
+      holdDropReason,
       evaluationType,
       unit,
       qualitativeCalcType,
@@ -2221,7 +2397,9 @@ export async function fetchDepartmentKpiDetail(
       achievementCap,
       structureVersion,
       needsStructureReview,
-      averageAchievement,
+      averageAchievement: isKpiHoldDropActive(holdDropStatus)
+        ? null
+        : averageAchievement,
       targetCount: targets.length,
       hasRejectionNotice: targetsHaveRejectionReason(targets),
       currentApprovalStep: aggregateApprovalStepForItem(targets),
@@ -2504,6 +2682,8 @@ export type ItemPerformanceRow = {
   /** 월별 JSON — 회수함·삭제 판별용 */
   withdrawn_by: string | null;
   withdrawn_at: string | null;
+  approval_line: ApprovalLineStep[] | null;
+  approval_line_index: number | null;
 };
 
 function monthFromTargetText(v: unknown): number | null {
@@ -2725,6 +2905,8 @@ function mapTargetRecordToItemPerformanceRow(
         : null,
     withdrawn_by: null,
     withdrawn_at: null,
+    approval_line: null,
+    approval_line_index: null,
   };
 }
 
@@ -2831,6 +3013,14 @@ async function buildItemPerformanceRowsFromKpiTargets(
           typeof cell?.withdrawn_at === "string" && cell.withdrawn_at.trim()
             ? cell.withdrawn_at.trim()
             : null,
+        approval_line: (() => {
+          const line = parseApprovalLineFromCell(cell);
+          return line.length > 0 ? line : null;
+        })(),
+        approval_line_index: (() => {
+          const line = parseApprovalLineFromCell(cell);
+          return line.length > 0 ? approvalLineIndexFromCell(cell) : null;
+        })(),
       };
     });
   }
@@ -2885,6 +3075,8 @@ async function buildItemPerformanceRowsFromKpiTargets(
           : null,
       withdrawn_by: null,
       withdrawn_at: null,
+      approval_line: null,
+      approval_line_index: null,
     };
   });
 }
@@ -3262,6 +3454,8 @@ export async function upsertMonthPerformance(
   options?: {
     adminBypassApprovalLock?: boolean;
     actorRole?: string | null;
+    /** 커스텀 결재선. 빈 배열이면 즉시 승인. 미지정 시 역할 기본 규칙 */
+    approvalLine?: ApprovalLineStep[] | null;
   }
 ): Promise<{ targetId: string }> {
   const supabase = createBrowserSupabase();
@@ -3337,7 +3531,31 @@ export async function upsertMonthPerformance(
 
   const mode: KpiIndicatorType = input.indicatorMode ?? "normal";
   const r = applyAchievementCap(input.achievement_rate, input.achievementCap ?? 100);
-  const nextStep = approvalStepAfterPerformanceSubmit(options?.actorRole);
+  const customLine =
+    options?.approvalLine !== undefined && options?.approvalLine !== null
+      ? options.approvalLine.filter((s) => s.user_id?.trim())
+      : null;
+  let nextStep: string;
+  let nextLine: ApprovalLineStep[] | null = null;
+  let nextLineIndex: number | null = null;
+  if (customLine !== null) {
+    nextLine = customLine.map((s) => ({
+      user_id: s.user_id.trim(),
+      full_name: s.full_name ?? null,
+      role: s.role ?? null,
+      dept_name: s.dept_name ?? null,
+    }));
+    if (nextLine.length === 0) {
+      nextStep = PERF_STATUS_APPROVED;
+      nextLine = null;
+      nextLineIndex = null;
+    } else {
+      nextLineIndex = 0;
+      nextStep = approvalStepFromLineIndex(nextLine.length, 0);
+    }
+  } else {
+    nextStep = approvalStepAfterPerformanceSubmit(options?.actorRole);
+  }
   const nextCell: PerformanceMonthlyCell = {
     ...prevCell,
     achievement_rate: r,
@@ -3349,6 +3567,13 @@ export async function upsertMonthPerformance(
         ? input.bubbleNote?.trim() || null
         : prevCell.bubble_note ?? null,
   };
+  if (nextLine && nextLine.length > 0) {
+    nextCell.approval_line = nextLine;
+    nextCell.approval_line_index = nextLineIndex ?? 0;
+  } else {
+    delete (nextCell as Record<string, unknown>).approval_line;
+    delete (nextCell as Record<string, unknown>).approval_line_index;
+  }
   if (input.aggregationType) {
     nextCell.aggregation_type = input.aggregationType;
   }
@@ -3376,6 +3601,10 @@ export async function upsertMonthPerformance(
   if (submitterId) {
     nextCell.submitted_by = submitterId;
   }
+  const nowIso = new Date().toISOString();
+  nextCell.submitted_at = nowIso;
+  delete (nextCell as Record<string, unknown>).rejected_at;
+  delete (nextCell as Record<string, unknown>).approved_at;
   const pendingLike =
     nextStep === PERF_STATUS_PENDING_PRIMARY ||
     nextStep === PERF_LEGACY_PENDING ||
@@ -3611,6 +3840,36 @@ export async function updatePerformanceMonthlyCalculatedRates(input: {
 
 export type ApprovalWorkflowStage = "primary" | "final";
 
+/** 내 실적 진행현황 목록 보관 기간 (7일) */
+export const MY_SUBMITTED_PROGRESS_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+function parseIsoTimestampMs(
+  value: string | null | undefined
+): number | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const ms = Date.parse(value.trim());
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function resolveMyProgressActivityMs(
+  cell: PerformanceMonthlyCell,
+  targetUpdatedAt?: string | null
+): number | null {
+  return (
+    parseIsoTimestampMs(cell.withdrawn_at) ??
+    parseIsoTimestampMs(cell.rejected_at) ??
+    parseIsoTimestampMs(cell.approved_at) ??
+    parseIsoTimestampMs(cell.submitted_at) ??
+    parseIsoTimestampMs(targetUpdatedAt) ??
+    null
+  );
+}
+
+function isWithinMyProgressRetention(activityMs: number | null): boolean {
+  if (activityMs === null) return false;
+  return Date.now() - activityMs <= MY_SUBMITTED_PROGRESS_RETENTION_MS;
+}
+
 /** 승인 대기 실적 목록 (그룹장·팀장 화면) */
 export type PendingPerformanceListRow = {
   /** 목록·React key용 (월별: `${targetRowId}:M${월}`) */
@@ -3632,6 +3891,8 @@ export type PendingPerformanceListRow = {
   ownerName: string | null;
   /** 승인·반려 담당자용 제출 구분(미기록·레거시는 "—") */
   performanceActionKind: "신규" | "수정" | "재등록" | "—";
+  /** 통합 승인 대기 목록에서 호출할 워크플로 액션 */
+  pendingAction?: "approve_primary" | "approve_final";
 };
 
 function performanceSubmitKindFromMonthlyCell(
@@ -3648,6 +3909,24 @@ export async function fetchPerformancesPendingStage(options: {
   filterDeptId?: DepartmentFilterScope;
 }): Promise<PendingPerformanceListRow[]> {
   const supabase = createBrowserSupabase();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const viewerId = session?.user?.id?.trim() ?? "";
+  let viewerRole = "";
+  if (viewerId) {
+    const { data: viewerProfile } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", viewerId)
+      .maybeSingle();
+    viewerRole =
+      viewerProfile?.role === null || viewerProfile?.role === undefined
+        ? ""
+        : String(viewerProfile.role);
+  }
+  const viewerCanPrimary = canGroupLeaderApprove(viewerRole);
+  const viewerCanFinal = canTeamLeaderFinalApprove(viewerRole);
   const hasYear = await getKpiTargetsHasYearColumn();
   const hasTargetHalf = await getKpiTargetsHasHalfTypeColumn();
   const hasH1TargetPctColumn = await getKpiTargetsHasColumn("h1_target_pct");
@@ -3710,15 +3989,14 @@ export async function fetchPerformancesPendingStage(options: {
     ]).trim();
     const ownerName = ownerNameRaw.length > 0 ? ownerNameRaw : null;
 
-    if (filterDeptIds && !departmentFilterIncludes(filterDeptIds, deptId)) {
-      continue;
-    }
     if (deptId) deptIds.add(deptId);
 
     const perfHalf = hasTargetHalf
       ? normalizeHalfTypeKey(String(t.half_type ?? "")) || HALF_TYPE_H1
       : HALF_TYPE_H1;
     const quarterRangeLabel = legacyQuarterRangeLabelFromTargetRecord(t);
+    const inDeptFilter =
+      !filterDeptIds || departmentFilterIncludes(filterDeptIds, deptId);
 
     const pushLegacyRow = (approvalStep: string) => {
       staged.push({
@@ -3760,12 +4038,28 @@ export async function fetchPerformancesPendingStage(options: {
           typeof c.approval_step === "string"
             ? c.approval_step.trim().toLowerCase()
             : "";
-        const wantPrimary =
-          options.stage === "primary" &&
-          (st === PERF_STATUS_PENDING_PRIMARY || st === PERF_LEGACY_PENDING);
-        const wantFinal =
-          options.stage === "final" && st === PERF_STATUS_PENDING_FINAL;
-        if (!wantPrimary && !wantFinal) continue;
+        const line = parseApprovalLineFromCell(c);
+        if (line.length > 0) {
+          // 커스텀 결재선: 다음 결재자 본인만 (부서 필터 무시)
+          const idx = approvalLineIndexFromCell(c);
+          const nextId = line[idx]?.user_id?.trim() ?? "";
+          if (!viewerId || nextId !== viewerId) continue;
+          const isLast = idx >= line.length - 1;
+          const wantPrimary = options.stage === "primary" && !isLast;
+          const wantFinal = options.stage === "final" && isLast;
+          if (!wantPrimary && !wantFinal) continue;
+        } else {
+          if (!inDeptFilter) continue;
+          const wantPrimary =
+            options.stage === "primary" &&
+            viewerCanPrimary &&
+            (st === PERF_STATUS_PENDING_PRIMARY || st === PERF_LEGACY_PENDING);
+          const wantFinal =
+            options.stage === "final" &&
+            viewerCanFinal &&
+            st === PERF_STATUS_PENDING_FINAL;
+          if (!wantPrimary && !wantFinal) continue;
+        }
         const storedRate = toNum(c.achievement_rate as number | string | null | undefined);
         const rate =
           monthlyAchievementRateFromCurrentTarget(o, mi, rateContext) ?? storedRate;
@@ -3797,15 +4091,22 @@ export async function fetchPerformancesPendingStage(options: {
       if (stagedMonthPending) continue;
     }
 
+    if (!inDeptFilter) continue;
+
     const approvalStep =
       typeof t.approval_step === "string" ? t.approval_step : "";
     const st = approvalStep.trim().toLowerCase();
     if (
       options.stage === "primary" &&
+      viewerCanPrimary &&
       (st === PERF_STATUS_PENDING_PRIMARY || st === PERF_LEGACY_PENDING)
     ) {
       pushLegacyRow(approvalStep);
-    } else if (options.stage === "final" && st === PERF_STATUS_PENDING_FINAL) {
+    } else if (
+      options.stage === "final" &&
+      viewerCanFinal &&
+      st === PERF_STATUS_PENDING_FINAL
+    ) {
       pushLegacyRow(approvalStep);
     }
   }
@@ -3832,6 +4133,27 @@ export async function fetchPerformancesPendingStage(options: {
         deptId && deptMap.has(deptId) ? deptMap.get(deptId)! : "-",
     };
   });
+}
+
+/** 본인 결재 차례인 승인 대기 실적 (중간·최종 통합) */
+export async function fetchMyPendingPerformances(options?: {
+  filterDeptId?: DepartmentFilterScope;
+}): Promise<PendingPerformanceListRow[]> {
+  const filterDeptId = options?.filterDeptId;
+  const [primary, finalRows] = await Promise.all([
+    fetchPerformancesPendingStage({ stage: "primary", filterDeptId }),
+    fetchPerformancesPendingStage({ stage: "final", filterDeptId }),
+  ]);
+  return [
+    ...primary.map((r) => ({
+      ...r,
+      pendingAction: "approve_primary" as const,
+    })),
+    ...finalRows.map((r) => ({
+      ...r,
+      pendingAction: "approve_final" as const,
+    })),
+  ];
 }
 
 /** 본인이 제출·회수한 실적의 승인 진행 표시용 */
@@ -3926,6 +4248,8 @@ export async function fetchMySubmittedPerformanceProgress(
   for (const rawT of targetRows ?? []) {
     const t = asRecord(rawT);
     const tid = typeof t.id === "string" ? t.id : String(t.id ?? "");
+    const targetUpdatedAt =
+      typeof t.updated_at === "string" ? t.updated_at : null;
     const itemRaw = t.kpi_items;
     const item = Array.isArray(itemRaw) ? itemRaw[0] : itemRaw;
     const itemRec = item ? asRecord(item as Record<string, unknown>) : {};
@@ -4001,6 +4325,14 @@ export async function fetchMySubmittedPerformanceProgress(
           typeof c.withdrawn_by === "string" ? c.withdrawn_by.trim() : "";
         if (sub !== uid && wby !== uid) continue;
 
+        if (
+          !isWithinMyProgressRetention(
+            resolveMyProgressActivityMs(c, targetUpdatedAt)
+          )
+        ) {
+          continue;
+        }
+
         const stRaw =
           typeof c.approval_step === "string" ? c.approval_step : "";
         const { label, sortRank } = resolveMySubmissionProgressLabel(
@@ -4051,6 +4383,12 @@ export async function fetchMySubmittedPerformanceProgress(
           ? String(subRow).trim()
           : "";
     if (subStr !== uid) continue;
+
+    if (
+      !isWithinMyProgressRetention(parseIsoTimestampMs(targetUpdatedAt))
+    ) {
+      continue;
+    }
 
     const approvalStep =
       typeof t.approval_step === "string" ? t.approval_step : "";
@@ -4458,6 +4796,97 @@ export async function reviewPerformanceWorkflow(
       typeof cell.approval_step === "string"
         ? cell.approval_step.trim().toLowerCase()
         : "";
+    const line = parseApprovalLineFromCell(cell);
+    const lineIndex = approvalLineIndexFromCell(cell);
+
+    if (line.length > 0) {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const uid = session?.user?.id ?? "";
+      const nextApprover = line[lineIndex]?.user_id?.trim() ?? "";
+      const isAdmin =
+        normalizeRole(
+          (
+            await supabase
+              .from("profiles")
+              .select("role")
+              .eq("id", uid)
+              .maybeSingle()
+          ).data?.role as string | null | undefined
+        ) === "admin";
+
+      if (input.action === "reject") {
+        const reason = input.rejectionReason.trim();
+        if (!reason) throw new Error("반려 사유를 입력해 주세요.");
+        if (
+          curSt !== PERF_STATUS_PENDING_PRIMARY &&
+          curSt !== PERF_STATUS_PENDING_FINAL &&
+          curSt !== PERF_LEGACY_PENDING
+        ) {
+          throw new Error("반려할 수 있는 승인 단계가 아닙니다.");
+        }
+        if (!isAdmin && nextApprover && uid !== nextApprover) {
+          throw new Error("현재 결재 차례가 아닙니다.");
+        }
+        const rejectedCell: PerformanceMonthlyCell = {
+          ...cell,
+          approval_step: PERF_STATUS_DRAFT,
+          rejection_reason: reason,
+          rejected_at: new Date().toISOString(),
+        };
+        delete (rejectedCell as Record<string, unknown>).withdrawn_by;
+        delete (rejectedCell as Record<string, unknown>).withdrawn_at;
+        delete (rejectedCell as Record<string, unknown>).approval_line;
+        delete (rejectedCell as Record<string, unknown>).approval_line_index;
+        delete (rejectedCell as Record<string, unknown>).approved_at;
+        pm[key] = rejectedCell;
+      } else {
+        // approve_primary / approve_final → 결재선 한 단계 진행
+        if (
+          curSt !== PERF_STATUS_PENDING_PRIMARY &&
+          curSt !== PERF_STATUS_PENDING_FINAL &&
+          curSt !== PERF_LEGACY_PENDING
+        ) {
+          throw new Error("승인 대기 상태가 아닙니다.");
+        }
+        if (!isAdmin && (!nextApprover || uid !== nextApprover)) {
+          throw new Error("현재 결재 차례가 아닙니다.");
+        }
+        const nextIndex = lineIndex + 1;
+        if (nextIndex >= line.length) {
+          const approvedCell: PerformanceMonthlyCell = {
+            ...cell,
+            approval_step: PERF_STATUS_APPROVED,
+            rejection_reason: null,
+            approved_at: new Date().toISOString(),
+          };
+          delete (approvedCell as Record<string, unknown>).approval_line;
+          delete (approvedCell as Record<string, unknown>).approval_line_index;
+          pm[key] = approvedCell;
+        } else {
+          pm[key] = {
+            ...cell,
+            approval_step: approvalStepFromLineIndex(line.length, nextIndex),
+            approval_line: line,
+            approval_line_index: nextIndex,
+            rejection_reason: null,
+            submitted_at: cell.submitted_at ?? new Date().toISOString(),
+          };
+        }
+      }
+
+      const filtered = await filterPayloadToExistingKpiTargetColumns({
+        id: tid,
+        performance_monthly: pm,
+      });
+      const { error } = await supabase
+        .from("kpi_targets")
+        .update(filtered)
+        .eq("id", tid);
+      if (error) throw new Error(error.message);
+      return;
+    }
 
     if (input.action === "approve_primary") {
       if (
@@ -4479,6 +4908,7 @@ export async function reviewPerformanceWorkflow(
         ...cell,
         approval_step: PERF_STATUS_APPROVED,
         rejection_reason: null,
+        approved_at: new Date().toISOString(),
       };
     } else {
       const reason = input.rejectionReason.trim();
@@ -4494,9 +4924,11 @@ export async function reviewPerformanceWorkflow(
         ...cell,
         approval_step: PERF_STATUS_DRAFT,
         rejection_reason: reason,
+        rejected_at: new Date().toISOString(),
       };
       delete (rejectedCell as Record<string, unknown>).withdrawn_by;
       delete (rejectedCell as Record<string, unknown>).withdrawn_at;
+      delete (rejectedCell as Record<string, unknown>).approved_at;
       pm[key] = rejectedCell;
     }
 
@@ -4724,10 +5156,10 @@ export async function withdrawPerformanceSubmission(
 }
 
 /**
- * 반려함·회수함: 제출 전(draft) 실적 중 본인 반려 건 또는 본인 회수 건만 해당 월 셀 삭제.
- * 레거시 분기 행(월별 JSON 없음): 본인 반려 건만 행 단위 초기화.
+ * 선택한 월 실적 셀 삭제. 로그인한 모든 사용자가 사용 가능(승인 상태·제출자 무관).
+ * 레거시 분기 행(월별 JSON 없음): 해당 행의 실적 필드를 초기화.
  */
-export async function deleteMyDraftPerformanceCell(
+export async function deleteMonthPerformanceCell(
   performanceId: string,
   options?: { month?: MonthKey }
 ): Promise<void> {
@@ -4779,27 +5211,6 @@ export async function deleteMyDraftPerformanceCell(
   }
 
   if (!hasMonthlyCol || !performanceMonthlyIsNonEmpty(rec.performance_monthly)) {
-    const approvalStep =
-      typeof rec.approval_step === "string"
-        ? rec.approval_step.trim().toLowerCase()
-        : "";
-    const rr =
-      typeof rec.rejection_reason === "string" && rec.rejection_reason.trim()
-        ? rec.rejection_reason.trim()
-        : "";
-    const subRow = rec.performance_submitted_by;
-    const subStr =
-      typeof subRow === "string"
-        ? subRow.trim()
-        : subRow !== null && subRow !== undefined
-          ? String(subRow).trim()
-          : "";
-    if (approvalStep !== PERF_STATUS_DRAFT || !rr || subStr !== uid) {
-      throw new Error(
-        "본인이 반려받은 제출 전 실적만 삭제할 수 있습니다."
-      );
-    }
-
     const clearPayload: Record<string, unknown> = {
       id: tid,
       approval_step: PERF_STATUS_DRAFT,
@@ -4843,33 +5254,7 @@ export async function deleteMyDraftPerformanceCell(
   const key = String(month);
   const cell = pm[key];
   if (!cell || typeof cell !== "object") {
-    throw new Error("해당 월 실적 데이터를 찾을 수 없습니다.");
-  }
-
-  const curSt =
-    typeof cell.approval_step === "string"
-      ? cell.approval_step.trim().toLowerCase()
-      : "";
-  const isDraft = !curSt || curSt === PERF_STATUS_DRAFT;
-  if (!isDraft) {
-    throw new Error("제출 전(draft) 상태의 실적만 삭제할 수 있습니다.");
-  }
-
-  const rr =
-    typeof cell.rejection_reason === "string" && cell.rejection_reason.trim()
-      ? cell.rejection_reason.trim()
-      : "";
-  const sub =
-    typeof cell.submitted_by === "string" ? cell.submitted_by.trim() : "";
-  const wby =
-    typeof cell.withdrawn_by === "string" ? cell.withdrawn_by.trim() : "";
-
-  const rejectedMine = rr.length > 0 && sub === uid;
-  const withdrawnMine = wby === uid;
-  if (!rejectedMine && !withdrawnMine) {
-    throw new Error(
-      "본인이 반려받았거나 회수한 실적만 삭제할 수 있습니다."
-    );
+    throw new Error("해당 월에 등록된 실적이 없습니다.");
   }
 
   delete pm[key];
@@ -4885,10 +5270,663 @@ export async function deleteMyDraftPerformanceCell(
   if (error) throw new Error(error.message);
 }
 
+/** @deprecated `deleteMonthPerformanceCell` 사용 */
+export async function deleteMyDraftPerformanceCell(
+  performanceId: string,
+  options?: { month?: MonthKey }
+): Promise<void> {
+  return deleteMonthPerformanceCell(performanceId, options);
+}
+
+export async function fetchApprovalCandidateProfiles(): Promise<
+  ApprovalCandidateProfile[]
+> {
+  const supabase = createBrowserSupabase();
+  const { data: profiles, error } = await supabase
+    .from("profiles")
+    .select("id, username, full_name, role, dept_id")
+    .order("full_name", { ascending: true });
+  if (error) throw new Error(error.message);
+
+  const deptIds = Array.from(
+    new Set(
+      (profiles ?? [])
+        .map((p) =>
+          typeof (p as { dept_id?: unknown }).dept_id === "string"
+            ? String((p as { dept_id: string }).dept_id)
+            : ""
+        )
+        .filter(Boolean)
+    )
+  );
+  const deptMap = new Map<string, string>();
+  if (deptIds.length > 0) {
+    const { data: depts, error: de } = await supabase
+      .from("departments")
+      .select("id, name")
+      .in("id", deptIds);
+    if (de) throw new Error(de.message);
+    for (const d of depts ?? []) {
+      if (typeof d.id === "string" && typeof d.name === "string") {
+        deptMap.set(d.id, d.name);
+      }
+    }
+  }
+
+  return (profiles ?? [])
+    .map((raw) => {
+      const p = raw as Record<string, unknown>;
+      const id = typeof p.id === "string" ? p.id : String(p.id ?? "");
+      const roleRaw = p.role === null || p.role === undefined ? "" : String(p.role);
+      const deptId = typeof p.dept_id === "string" ? p.dept_id : null;
+      const fullName =
+        typeof p.full_name === "string" && p.full_name.trim()
+          ? p.full_name.trim()
+          : typeof p.username === "string"
+            ? p.username
+            : "—";
+      return {
+        id,
+        fullName,
+        username: typeof p.username === "string" ? p.username : "",
+        role: roleRaw,
+        roleLabel: roleLabelKo(roleRaw),
+        deptId,
+        deptName: deptId ? deptMap.get(deptId) ?? "—" : "—",
+      };
+    })
+    .filter((c) => !isExcludedApprovalLineCandidate(c));
+}
+
+/** 제출자 역할·KPI 부서 기준 기본 결재선 (그룹장→팀장) */
+export async function buildDefaultApprovalLine(input: {
+  actorRole: string | null | undefined;
+  departmentId?: string | null | undefined;
+  kpiItemId?: string | null | undefined;
+}): Promise<ApprovalLineStep[]> {
+  const actor = normalizeRole(input.actorRole);
+  if (actor === "team_leader" || actor === "group_team_leader") {
+    return [];
+  }
+
+  let deptId = input.departmentId?.trim() ?? "";
+  if (!deptId && input.kpiItemId?.trim()) {
+    const supabase = createBrowserSupabase();
+    const { data, error } = await supabase
+      .from("kpi_items")
+      .select("dept_id")
+      .eq("id", input.kpiItemId.trim())
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    const d = (data as { dept_id?: unknown } | null)?.dept_id;
+    if (typeof d === "string") deptId = d.trim();
+  }
+  if (!deptId) return [];
+
+  const candidates = await fetchApprovalCandidateProfiles();
+  const inDept = candidates.filter((c) => c.deptId === deptId);
+  const groupLeaders = inDept.filter(
+    (c) => normalizeRole(c.role) === "group_leader"
+  );
+  const teamLeaders = inDept.filter((c) => {
+    const r = normalizeRole(c.role);
+    return r === "team_leader" || r === "group_team_leader";
+  });
+
+  const toStep = (c: ApprovalCandidateProfile): ApprovalLineStep => ({
+    user_id: c.id,
+    full_name: c.fullName,
+    role: c.role,
+    dept_name: c.deptName,
+  });
+
+  if (actor === "group_leader") {
+    return teamLeaders.slice(0, 1).map(toStep);
+  }
+
+  const line: ApprovalLineStep[] = [];
+  if (groupLeaders[0]) line.push(toStep(groupLeaders[0]));
+  if (teamLeaders[0] && teamLeaders[0].id !== groupLeaders[0]?.id) {
+    line.push(toStep(teamLeaders[0]));
+  }
+  return line;
+}
+
+export async function fetchMyApprovalLineTemplates(): Promise<
+  ApprovalLineTemplateRow[]
+> {
+  const supabase = createBrowserSupabase();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const uid = session?.user?.id ?? "";
+  if (!uid) return [];
+
+  const { data, error } = await supabase
+    .from("approval_line_templates")
+    .select("id, name, approver_ids, created_at, updated_at")
+    .eq("owner_profile_id", uid)
+    .order("updated_at", { ascending: false });
+  if (error) throw new Error(error.message);
+
+  return (data ?? []).map((row) => {
+    const r = row as Record<string, unknown>;
+    const idsRaw = r.approver_ids;
+    const approverIds = Array.isArray(idsRaw)
+      ? idsRaw
+          .map((x) => (typeof x === "string" ? x.trim() : ""))
+          .filter(Boolean)
+      : [];
+    return {
+      id: typeof r.id === "string" ? r.id : String(r.id ?? ""),
+      name: typeof r.name === "string" ? r.name : "",
+      approverIds,
+      createdAt: typeof r.created_at === "string" ? r.created_at : "",
+      updatedAt: typeof r.updated_at === "string" ? r.updated_at : "",
+    };
+  });
+}
+
+export async function saveApprovalLineTemplate(input: {
+  id?: string | null;
+  name: string;
+  approverIds: string[];
+}): Promise<ApprovalLineTemplateRow> {
+  const supabase = createBrowserSupabase();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const uid = session?.user?.id ?? "";
+  if (!uid) throw new Error("로그인이 필요합니다.");
+
+  const name = input.name.trim();
+  if (!name) throw new Error("결재라인 이름을 입력해 주세요.");
+  const approverIds = input.approverIds
+    .map((id) => id.trim())
+    .filter(Boolean);
+  if (approverIds.length === 0) {
+    throw new Error("결재자를 1명 이상 선택해 주세요.");
+  }
+
+  const payload = {
+    owner_profile_id: uid,
+    name,
+    approver_ids: approverIds,
+    updated_at: new Date().toISOString(),
+  };
+
+  const existingId = input.id?.trim() ?? "";
+  if (existingId) {
+    const { data, error } = await supabase
+      .from("approval_line_templates")
+      .update(payload)
+      .eq("id", existingId)
+      .eq("owner_profile_id", uid)
+      .select("id, name, approver_ids, created_at, updated_at")
+      .single();
+    if (error) throw new Error(error.message);
+    const r = data as Record<string, unknown>;
+    return {
+      id: String(r.id ?? existingId),
+      name: String(r.name ?? name),
+      approverIds,
+      createdAt: String(r.created_at ?? ""),
+      updatedAt: String(r.updated_at ?? ""),
+    };
+  }
+
+  const { data, error } = await supabase
+    .from("approval_line_templates")
+    .insert(payload)
+    .select("id, name, approver_ids, created_at, updated_at")
+    .single();
+  if (error) throw new Error(error.message);
+  const r = data as Record<string, unknown>;
+  return {
+    id: String(r.id ?? ""),
+    name: String(r.name ?? name),
+    approverIds,
+    createdAt: String(r.created_at ?? ""),
+    updatedAt: String(r.updated_at ?? ""),
+  };
+}
+
+export async function deleteApprovalLineTemplate(
+  templateId: string
+): Promise<void> {
+  const supabase = createBrowserSupabase();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const uid = session?.user?.id ?? "";
+  if (!uid) throw new Error("로그인이 필요합니다.");
+  const id = templateId.trim();
+  if (!id) throw new Error("템플릿 ID가 없습니다.");
+
+  const { error } = await supabase
+    .from("approval_line_templates")
+    .delete()
+    .eq("id", id)
+    .eq("owner_profile_id", uid);
+  if (error) throw new Error(error.message);
+}
+
 export type DepartmentManageRow = {
   id: string;
   name: string;
 };
+
+export type LoginAuditEventType = "login_success" | "logout" | "login_failed";
+export type LoginStatsPeriod = "day" | "month";
+
+export type LoginStatsFilterInput = {
+  period: LoginStatsPeriod;
+  startDate: string;
+  endDate: string;
+  deptId?: string | null;
+  userId?: string | null;
+};
+
+export type LoginSummaryStats = {
+  totalLoginCount: number;
+  activeUserCount: number;
+  avgLoginsPerUser: number;
+  inactive30dCount: number;
+  latestLoginAt: string | null;
+};
+
+export type LoginStatsByDeptRow = {
+  periodLabel: string;
+  deptId: string | null;
+  deptName: string;
+  loginCount: number;
+  uniqueUserCount: number;
+};
+
+export type LoginStatsByUserRow = {
+  periodLabel: string;
+  userId: string;
+  username: string;
+  fullName: string | null;
+  deptId: string | null;
+  deptName: string;
+  loginCount: number;
+};
+
+export type LoginInactiveUserRow = {
+  userId: string;
+  username: string;
+  fullName: string | null;
+  role: string | null;
+  deptId: string | null;
+  deptName: string | null;
+  lastLoginAt: string | null;
+  inactiveDays: number | null;
+};
+
+export type LoginAuditLogRow = {
+  id: string;
+  userId: string;
+  username: string;
+  fullName: string | null;
+  role: string | null;
+  deptId: string | null;
+  deptName: string | null;
+  eventType: LoginAuditEventType;
+  source: string;
+  loggedAt: string;
+};
+
+export type LoginFilterProfileRow = {
+  id: string;
+  username: string;
+  fullName: string | null;
+  deptId: string | null;
+  deptName: string | null;
+};
+
+function toMonthStartIso(raw: string): string {
+  const s = raw.trim();
+  if (/^\d{4}-\d{2}$/.test(s)) return `${s}-01`;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  return s;
+}
+
+function nextMonthStartIso(raw: string): string {
+  const base = toMonthStartIso(raw);
+  const d = new Date(`${base}T00:00:00`);
+  d.setMonth(d.getMonth() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+function nextDayIso(raw: string): string {
+  const d = new Date(`${raw.trim()}T00:00:00`);
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+function normalizeLoginStatsRange(input: LoginStatsFilterInput): {
+  start: string;
+  endExclusive: string;
+} {
+  if (input.period === "month") {
+    return {
+      start: toMonthStartIso(input.startDate),
+      endExclusive: nextMonthStartIso(input.endDate),
+    };
+  }
+  return {
+    start: input.startDate.trim(),
+    endExclusive: nextDayIso(input.endDate),
+  };
+}
+
+function periodLabelFromDate(raw: string, period: LoginStatsPeriod): string {
+  const iso = String(raw ?? "").slice(0, 10);
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-");
+  if (period === "month") return `${y}-${m}`;
+  return `${y}-${m}-${d}`;
+}
+
+export async function recordLoginSuccessAudit(input: {
+  userId: string;
+  username: string;
+  fullName?: string | null;
+  role?: string | null;
+  deptId?: string | null;
+}): Promise<void> {
+  const supabase = createBrowserSupabase();
+  const uid = input.userId.trim();
+  if (!uid) return;
+
+  let deptName: string | null = null;
+  const deptId = typeof input.deptId === "string" ? input.deptId.trim() : "";
+  if (deptId) {
+    const { data: deptRow } = await supabase
+      .from("departments")
+      .select("name")
+      .eq("id", deptId)
+      .maybeSingle();
+    deptName =
+      deptRow && typeof deptRow.name === "string" ? deptRow.name : null;
+  }
+
+  const { error } = await supabase.from("user_login_audit_logs").insert({
+    user_id: uid,
+    username_snapshot: input.username.trim() || uid,
+    full_name_snapshot: input.fullName?.trim() || null,
+    role_snapshot:
+      input.role === null || input.role === undefined ? null : String(input.role),
+    dept_id_snapshot: deptId || null,
+    dept_name_snapshot: deptName,
+    event_type: "login_success",
+    source: "web",
+    user_agent:
+      typeof window !== "undefined" ? window.navigator.userAgent : null,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function fetchLoginSummaryStats(
+  filters: LoginStatsFilterInput
+): Promise<LoginSummaryStats> {
+  const supabase = createBrowserSupabase();
+  const { start, endExclusive } = normalizeLoginStatsRange(filters);
+
+  let logsQ = supabase
+    .from("user_login_audit_logs")
+    .select("user_id, logged_at")
+    .eq("event_type", "login_success")
+    .gte("logged_at", `${start}T00:00:00`)
+    .lt("logged_at", `${endExclusive}T00:00:00`);
+  if (filters.deptId?.trim()) logsQ = logsQ.eq("dept_id_snapshot", filters.deptId.trim());
+  if (filters.userId?.trim()) logsQ = logsQ.eq("user_id", filters.userId.trim());
+
+  const { data: logs, error: logsErr } = await logsQ;
+  if (logsErr) throw new Error(logsErr.message);
+
+  let inactiveQ = supabase
+    .from("v_user_last_login")
+    .select("user_id, inactive_days", { count: "exact" });
+  if (filters.deptId?.trim()) inactiveQ = inactiveQ.eq("dept_id", filters.deptId.trim());
+  if (filters.userId?.trim()) inactiveQ = inactiveQ.eq("user_id", filters.userId.trim());
+  inactiveQ = inactiveQ.gte("inactive_days", 30);
+  const { count: inactive30dCount, error: inactiveErr } = await inactiveQ;
+  if (inactiveErr) throw new Error(inactiveErr.message);
+
+  const rows = (logs ?? []) as Array<{ user_id: string; logged_at: string }>;
+  const activeUsers = new Set(rows.map((row) => row.user_id));
+  const totalLoginCount = rows.length;
+  const activeUserCount = activeUsers.size;
+  const avgLoginsPerUser =
+    activeUserCount > 0 ? roundToMax2DecimalPlaces(totalLoginCount / activeUserCount) : 0;
+  const latestLoginAt =
+    rows.length > 0
+      ? rows
+          .map((row) => row.logged_at)
+          .sort((a, b) => (a > b ? -1 : a < b ? 1 : 0))[0] ?? null
+      : null;
+
+  return {
+    totalLoginCount,
+    activeUserCount,
+    avgLoginsPerUser,
+    inactive30dCount: inactive30dCount ?? 0,
+    latestLoginAt,
+  };
+}
+
+export async function fetchLoginStatsByDept(
+  filters: LoginStatsFilterInput
+): Promise<LoginStatsByDeptRow[]> {
+  const supabase = createBrowserSupabase();
+  const { start, endExclusive } = normalizeLoginStatsRange(filters);
+  const table =
+    filters.period === "month"
+      ? "v_login_stats_monthly_by_dept"
+      : "v_login_stats_daily_by_dept";
+  const dateCol = filters.period === "month" ? "log_month" : "log_date";
+
+  let q = supabase
+    .from(table)
+    .select(`${dateCol}, dept_id, dept_name, login_count, unique_user_count`)
+    .gte(dateCol, start)
+    .lt(dateCol, endExclusive)
+    .order(dateCol, { ascending: true })
+    .order("dept_name", { ascending: true });
+  if (filters.deptId?.trim()) q = q.eq("dept_id", filters.deptId.trim());
+
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((row) => ({
+    periodLabel: periodLabelFromDate(
+      String((row as Record<string, unknown>)[dateCol] ?? ""),
+      filters.period
+    ),
+    deptId:
+      typeof (row as Record<string, unknown>).dept_id === "string"
+        ? ((row as Record<string, unknown>).dept_id as string)
+        : null,
+    deptName:
+      typeof (row as Record<string, unknown>).dept_name === "string"
+        ? ((row as Record<string, unknown>).dept_name as string)
+        : "미지정",
+    loginCount: Number((row as Record<string, unknown>).login_count ?? 0),
+    uniqueUserCount: Number(
+      (row as Record<string, unknown>).unique_user_count ?? 0
+    ),
+  }));
+}
+
+export async function fetchLoginStatsByUser(
+  filters: LoginStatsFilterInput
+): Promise<LoginStatsByUserRow[]> {
+  const supabase = createBrowserSupabase();
+  const { start, endExclusive } = normalizeLoginStatsRange(filters);
+  const table =
+    filters.period === "month"
+      ? "v_login_stats_monthly_by_user"
+      : "v_login_stats_daily_by_user";
+  const dateCol = filters.period === "month" ? "log_month" : "log_date";
+
+  let q = supabase
+    .from(table)
+    .select(`${dateCol}, user_id, username, full_name, dept_id, dept_name, login_count`)
+    .gte(dateCol, start)
+    .lt(dateCol, endExclusive)
+    .order(dateCol, { ascending: true })
+    .order("username", { ascending: true });
+  if (filters.deptId?.trim()) q = q.eq("dept_id", filters.deptId.trim());
+  if (filters.userId?.trim()) q = q.eq("user_id", filters.userId.trim());
+
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((row) => ({
+    periodLabel: periodLabelFromDate(
+      String((row as Record<string, unknown>)[dateCol] ?? ""),
+      filters.period
+    ),
+    userId: String((row as Record<string, unknown>).user_id ?? ""),
+    username: String((row as Record<string, unknown>).username ?? ""),
+    fullName:
+      typeof (row as Record<string, unknown>).full_name === "string"
+        ? ((row as Record<string, unknown>).full_name as string)
+        : null,
+    deptId:
+      typeof (row as Record<string, unknown>).dept_id === "string"
+        ? ((row as Record<string, unknown>).dept_id as string)
+        : null,
+    deptName:
+      typeof (row as Record<string, unknown>).dept_name === "string"
+        ? ((row as Record<string, unknown>).dept_name as string)
+        : "미지정",
+    loginCount: Number((row as Record<string, unknown>).login_count ?? 0),
+  }));
+}
+
+export async function fetchInactiveUsers(filters: {
+  deptId?: string | null;
+  userId?: string | null;
+  minInactiveDays?: number;
+}): Promise<LoginInactiveUserRow[]> {
+  const supabase = createBrowserSupabase();
+  let q = supabase
+    .from("v_user_last_login")
+    .select("user_id, username, full_name, role, dept_id, dept_name, last_login_at, inactive_days")
+    .order("inactive_days", { ascending: false, nullsFirst: false });
+  if (filters.deptId?.trim()) q = q.eq("dept_id", filters.deptId.trim());
+  if (filters.userId?.trim()) q = q.eq("user_id", filters.userId.trim());
+  if (typeof filters.minInactiveDays === "number") {
+    q = q.gte("inactive_days", filters.minInactiveDays);
+  }
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((row) => ({
+    userId: String((row as Record<string, unknown>).user_id ?? ""),
+    username: String((row as Record<string, unknown>).username ?? ""),
+    fullName:
+      typeof (row as Record<string, unknown>).full_name === "string"
+        ? ((row as Record<string, unknown>).full_name as string)
+        : null,
+    role:
+      typeof (row as Record<string, unknown>).role === "string"
+        ? ((row as Record<string, unknown>).role as string)
+        : null,
+    deptId:
+      typeof (row as Record<string, unknown>).dept_id === "string"
+        ? ((row as Record<string, unknown>).dept_id as string)
+        : null,
+    deptName:
+      typeof (row as Record<string, unknown>).dept_name === "string"
+        ? ((row as Record<string, unknown>).dept_name as string)
+        : null,
+    lastLoginAt:
+      typeof (row as Record<string, unknown>).last_login_at === "string"
+        ? ((row as Record<string, unknown>).last_login_at as string)
+        : null,
+    inactiveDays:
+      typeof (row as Record<string, unknown>).inactive_days === "number"
+        ? ((row as Record<string, unknown>).inactive_days as number)
+        : null,
+  }));
+}
+
+export async function fetchLoginAuditRows(filters: LoginStatsFilterInput): Promise<
+  LoginAuditLogRow[]
+> {
+  const supabase = createBrowserSupabase();
+  const { start, endExclusive } = normalizeLoginStatsRange(filters);
+  let q = supabase
+    .from("user_login_audit_logs")
+    .select(
+      "id, user_id, username_snapshot, full_name_snapshot, role_snapshot, dept_id_snapshot, dept_name_snapshot, event_type, source, logged_at"
+    )
+    .eq("event_type", "login_success")
+    .gte("logged_at", `${start}T00:00:00`)
+    .lt("logged_at", `${endExclusive}T00:00:00`)
+    .order("logged_at", { ascending: false })
+    .limit(200);
+  if (filters.deptId?.trim()) q = q.eq("dept_id_snapshot", filters.deptId.trim());
+  if (filters.userId?.trim()) q = q.eq("user_id", filters.userId.trim());
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((row) => ({
+    id: String((row as Record<string, unknown>).id ?? ""),
+    userId: String((row as Record<string, unknown>).user_id ?? ""),
+    username: String((row as Record<string, unknown>).username_snapshot ?? ""),
+    fullName:
+      typeof (row as Record<string, unknown>).full_name_snapshot === "string"
+        ? ((row as Record<string, unknown>).full_name_snapshot as string)
+        : null,
+    role:
+      typeof (row as Record<string, unknown>).role_snapshot === "string"
+        ? ((row as Record<string, unknown>).role_snapshot as string)
+        : null,
+    deptId:
+      typeof (row as Record<string, unknown>).dept_id_snapshot === "string"
+        ? ((row as Record<string, unknown>).dept_id_snapshot as string)
+        : null,
+    deptName:
+      typeof (row as Record<string, unknown>).dept_name_snapshot === "string"
+        ? ((row as Record<string, unknown>).dept_name_snapshot as string)
+        : null,
+    eventType: String(
+      (row as Record<string, unknown>).event_type ?? "login_success"
+    ) as LoginAuditEventType,
+    source: String((row as Record<string, unknown>).source ?? "web"),
+    loggedAt: String((row as Record<string, unknown>).logged_at ?? ""),
+  }));
+}
+
+export async function fetchProfilesForLogFilters(): Promise<LoginFilterProfileRow[]> {
+  const supabase = createBrowserSupabase();
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id, username, full_name, dept_id, departments(name)")
+    .order("username", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((row) => {
+    const record = row as Record<string, unknown>;
+    const joinedDepartment = record.departments as
+      | { name?: unknown }
+      | Array<{ name?: unknown }>
+      | null
+      | undefined;
+    const deptName = Array.isArray(joinedDepartment)
+      ? joinedDepartment.find((v) => typeof v?.name === "string")?.name
+      : joinedDepartment && typeof joinedDepartment.name === "string"
+        ? joinedDepartment.name
+        : null;
+    return {
+      id: String(record.id ?? ""),
+      username: String(record.username ?? ""),
+      fullName: typeof record.full_name === "string" ? (record.full_name as string) : null,
+      deptId: typeof record.dept_id === "string" ? (record.dept_id as string) : null,
+      deptName: typeof deptName === "string" ? deptName : null,
+    };
+  });
+}
 
 export async function fetchDepartmentsForManagement(): Promise<
   DepartmentManageRow[]
@@ -4969,13 +6007,92 @@ export async function updateKpiItemFinalCompletion(input: {
   const id = input.kpiItemId.trim();
   if (!id) throw new Error("KPI 항목 ID가 없습니다.");
 
-  const { error } = await supabase
-    .from("kpi_items")
-    .update({ status: input.completed ? "closed" : "active" })
-    .eq("id", id);
+  if (input.completed) {
+    const { data: cur, error: readErr } = await supabase
+      .from("kpi_items")
+      .select("hold_drop_status")
+      .eq("id", id)
+      .maybeSingle();
+    if (readErr) throw new Error(readErr.message);
+    if (isKpiHoldDropActive(parseKpiHoldDropStatus(cur?.hold_drop_status))) {
+      throw new Error(
+        "Hold/Drop 상태인 KPI는 최종 완료할 수 없습니다. 먼저 상태를 철회해 주세요."
+      );
+    }
+  }
+
+  const payload: Record<string, unknown> = {
+    status: input.completed ? "closed" : "active",
+  };
+  if (input.completed) {
+    payload.hold_drop_status = null;
+    payload.hold_drop_reason = null;
+  }
+
+  const { error } = await supabase.from("kpi_items").update(payload).eq("id", id);
   if (error) {
     throw new Error(
       `${error.message} (kpi_items.status 컬럼·RLS 정책을 확인해 주세요.)`
+    );
+  }
+}
+
+export async function updateKpiItemHoldDrop(input: {
+  kpiItemId: string;
+  status: KpiHoldDropStatus | null;
+  reason?: string | null;
+}): Promise<void> {
+  const supabase = createBrowserSupabase();
+  const id = input.kpiItemId.trim();
+  if (!id) throw new Error("KPI 항목 ID가 없습니다.");
+
+  const { data: cur, error: readErr } = await supabase
+    .from("kpi_items")
+    .select("status, hold_drop_status")
+    .eq("id", id)
+    .maybeSingle();
+  if (readErr) throw new Error(readErr.message);
+  if (!cur) throw new Error("KPI 항목을 찾지 못했습니다.");
+
+  const itemStatus = String(
+    (cur as Record<string, unknown>).status ?? ""
+  )
+    .trim()
+    .toLowerCase();
+  if (itemStatus === "closed" && input.status !== null) {
+    throw new Error(
+      "최종 완료된 KPI에는 Hold/Drop을 적용할 수 없습니다. 먼저 최종 완료를 철회해 주세요."
+    );
+  }
+
+  if (input.status === null) {
+    const { error } = await supabase
+      .from("kpi_items")
+      .update({ hold_drop_status: null, hold_drop_reason: null })
+      .eq("id", id);
+    if (error) {
+      throw new Error(
+        `${error.message} (kpi_items.hold_drop_* 컬럼·RLS 정책을 확인해 주세요.)`
+      );
+    }
+    return;
+  }
+
+  const reason = (input.reason ?? "").trim();
+  if (!reason) {
+    throw new Error("Hold/Drop 사유를 입력해 주세요.");
+  }
+
+  const { error } = await supabase
+    .from("kpi_items")
+    .update({
+      hold_drop_status: input.status,
+      hold_drop_reason: reason,
+    })
+    .eq("id", id);
+  if (error) {
+    throw new Error(
+      `${error.message} (kpi_items.hold_drop_* 컬럼·RLS 정책을 확인해 주세요.)`
     );
   }
 }
@@ -5060,7 +6177,7 @@ export async function updateKpiItemIndicatorSettings(input: {
   const t = input.targetPpm;
   if (t === null || !Number.isFinite(t) || t <= 0) {
     throw new Error(
-      "PPM·수량(k)·건수·금액(억)·시간(h)·분(min)·UPH·Cpk 방식은 목표값을 0보다 큰 숫자로 입력해 주세요."
+      "PPM·수량(k)·건수·금액(억·만원)·시간(h)·분(min)·UPH·Cpk 방식은 목표값을 0보다 큰 숫자로 입력해 주세요."
     );
   }
   const { error } = await supabase

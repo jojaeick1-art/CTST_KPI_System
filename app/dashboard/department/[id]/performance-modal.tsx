@@ -63,8 +63,14 @@ import {
   uploadEvidenceFile,
   resolveEffectiveIndicatorTypeForUi,
   resolveComputedTargetMetric,
+  isMoneyIndicatorType,
+  moneyIndicatorKindLabel,
+  moneyIndicatorUnitSuffix,
   resolveNormalMonthlyTargetMetric,
   type NormalMonthlyTargetContext,
+  type KpiHoldDropStatus,
+  isKpiHoldDropActive,
+  type ApprovalLineStep,
 } from "@/src/lib/kpi-queries";
 import { requestEvidenceSignedUrl } from "@/src/lib/evidence-download-requests";
 import {
@@ -80,6 +86,7 @@ import {
   formatKoMax2Decimals,
   formatKoPercentMax2,
 } from "@/src/lib/format-display-number";
+import { ApprovalLineSelectModal } from "./approval-line-modal";
 import { createBrowserSupabase } from "@/src/lib/supabase";
 import {
   canGroupLeaderApprove,
@@ -124,6 +131,8 @@ type KpiModalItem = {
   targetPpm: number | null;
   status: string;
   isFinalCompleted: boolean;
+  holdDropStatus?: KpiHoldDropStatus | null;
+  holdDropReason?: string | null;
   evaluationType: KpiEvaluationType | null;
   unit: string | null;
   qualitativeCalcType: KpiQualitativeCalcType | null;
@@ -314,7 +323,7 @@ function computedActualLabel(t: KpiIndicatorType): string {
   if (t === "quantity") return "실적 수량(k)";
   if (t === "count") return "실적 건수";
   if (t === "headcount") return "실적 인원(명)";
-  if (t === "money") return "실적(억)";
+  if (isMoneyIndicatorType(t)) return `실적(${moneyIndicatorUnitSuffix(t)})`;
   if (t === "time") return "실적 시간(h)";
   if (t === "minutes") return "실적 시간(분)";
   if (t === "uph") return "실적 UPH";
@@ -327,7 +336,7 @@ function computedTargetLabel(t: KpiIndicatorType): string {
   if (t === "quantity") return "목표 수량(k)";
   if (t === "count") return "목표 건수";
   if (t === "headcount") return "목표 인원(명)";
-  if (t === "money") return "목표(억)";
+  if (isMoneyIndicatorType(t)) return `목표(${moneyIndicatorUnitSuffix(t)})`;
   if (t === "time") return "목표 시간(h)";
   if (t === "minutes") return "목표 시간(분)";
   if (t === "uph") return "목표 UPH";
@@ -346,8 +355,9 @@ function computedFormulaHint(t: KpiIndicatorType): string {
   if (t === "headcount") {
     return "인원(명): 높을수록 좋음·낮을수록 좋음은 수량(k)과 동일 공식.";
   }
-  if (t === "money") {
-    return "금액(억): 높을수록 좋음·낮을수록 좋음은 수량(k)과 동일 공식, 숫자는 억 단위.";
+  if (isMoneyIndicatorType(t)) {
+    const unit = moneyIndicatorUnitSuffix(t);
+    return `금액(${unit}): 높을수록 좋음·낮을수록 좋음은 수량(k)과 동일 공식, 숫자는 ${unit} 단위.`;
   }
   if (t === "time") {
     return "시간(h): 높을수록 좋음이면 실적÷목표×100, 낮을수록 좋음이면 목표÷실적×100 (상한 100%).";
@@ -369,7 +379,7 @@ function computedKindSummaryKo(t: KpiIndicatorType): string {
   if (t === "quantity") return "수량(k)";
   if (t === "count") return "건수";
   if (t === "headcount") return "인원(명)";
-  if (t === "money") return "금액(억)";
+  if (isMoneyIndicatorType(t)) return moneyIndicatorKindLabel(t);
   if (t === "time") return "시간(h)";
   if (t === "minutes") return "분(min)";
   if (t === "uph") return "생산성(UPH)";
@@ -454,7 +464,9 @@ function chartBarTopLabel(
       if (indicatorType === "quantity") return `${formatKoMax2Decimals(n)}k`;
       if (indicatorType === "count") return `${formatKoMax2Decimals(n)}건`;
       if (indicatorType === "headcount") return `${formatKoMax2Decimals(n)}명`;
-      if (indicatorType === "money") return `${formatKoMax2Decimals(n)}억`;
+      if (isMoneyIndicatorType(indicatorType)) {
+        return `${formatKoMax2Decimals(n)}${moneyIndicatorUnitSuffix(indicatorType)}`;
+      }
       if (indicatorType === "time") return `${formatKoMax2Decimals(n)}h`;
       if (indicatorType === "minutes") return `${formatKoMax2Decimals(n)} min`;
       if (indicatorType === "uph") return `${formatKoMax2Decimals(n)} UPH`;
@@ -484,6 +496,12 @@ type Props = {
   onFinalizeKpiItem?: (
     kpiId: string,
     completed?: boolean
+  ) => Promise<boolean> | boolean;
+  canHoldDropKpiItem?: boolean;
+  onHoldDropKpiItem?: (
+    kpiId: string,
+    status: KpiHoldDropStatus | null,
+    reason?: string | null
   ) => Promise<boolean> | boolean;
   onExtendPeriodEndMonth?: (kpiId: string) => Promise<boolean> | boolean;
   /** 부서 상세 딥링크 등에서 모달 열 때 선택할 월 */
@@ -1494,7 +1512,9 @@ function chartValueLabel(indicatorType: KpiIndicatorType, value: number): string
   if (indicatorType === "quantity") return `${formatKoMax2Decimals(value)} k`;
   if (indicatorType === "count") return `${formatKoMax2Decimals(value)} 건`;
   if (indicatorType === "headcount") return `${formatKoMax2Decimals(value)} 명`;
-  if (indicatorType === "money") return `${formatKoMax2Decimals(value)}억`;
+  if (isMoneyIndicatorType(indicatorType)) {
+    return `${formatKoMax2Decimals(value)}${moneyIndicatorUnitSuffix(indicatorType)}`;
+  }
   if (indicatorType === "time") return `${formatKoMax2Decimals(value)} h`;
   if (indicatorType === "minutes") return `${formatKoMax2Decimals(value)} min`;
   if (indicatorType === "uph") return `${formatKoMax2Decimals(value)} UPH`;
@@ -1862,8 +1882,9 @@ function chartTickLabel(
   if (indicatorType === "headcount") {
     return integerOnly ? `${Math.round(v)} 명` : `${formatKoMax2Decimals(v)} 명`;
   }
-  if (indicatorType === "money") {
-    return integerOnly ? `${Math.round(v)}억` : `${formatKoMax2Decimals(v)}억`;
+  if (isMoneyIndicatorType(indicatorType)) {
+    const unit = moneyIndicatorUnitSuffix(indicatorType);
+    return integerOnly ? `${Math.round(v)}${unit}` : `${formatKoMax2Decimals(v)}${unit}`;
   }
   if (indicatorType === "time") {
     return integerOnly ? `${Math.round(v)} h` : `${formatKoMax2Decimals(v)} h`;
@@ -1914,7 +1935,9 @@ function chartVerticalAxisHint(
   if (t === "quantity") return "세로축: 수량 k(천 단위).";
   if (t === "count") return "세로축: 건수.";
   if (t === "headcount") return "세로축: 인원(명).";
-  if (t === "money") return "세로축: 금액(억).";
+  if (isMoneyIndicatorType(t)) {
+    return `세로축: ${moneyIndicatorKindLabel(t)}.`;
+  }
   if (t === "time") return "세로축: 시간(h).";
   if (t === "minutes") return "세로축: 분(min).";
   if (t === "uph") return "세로축: 생산성(UPH).";
@@ -1936,6 +1959,8 @@ export function PerformanceModal({
   profileUserId = null,
   canFinalizeKpiItem = false,
   onFinalizeKpiItem,
+  canHoldDropKpiItem = false,
+  onHoldDropKpiItem,
   onExtendPeriodEndMonth,
   initialEditorMonth = null,
   kioskMode = false,
@@ -1994,6 +2019,19 @@ export function PerformanceModal({
   liveRowsRef.current = liveRows;
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [rejectReasonDraft, setRejectReasonDraft] = useState("");
+  const [holdDropModal, setHoldDropModal] = useState<{
+    open: boolean;
+    mode: KpiHoldDropStatus | "withdraw";
+  }>({ open: false, mode: "hold" });
+  const [holdDropReasonDraft, setHoldDropReasonDraft] = useState("");
+  const [holdDropSubmitting, setHoldDropSubmitting] = useState(false);
+  const [approvalLineModalOpen, setApprovalLineModalOpen] = useState(false);
+  const [pendingSavePayload, setPendingSavePayload] = useState<{
+    rateNum: number;
+    actualMetricSave?: number;
+    finalizeAfterSave?: boolean;
+    skipMonthConfirm?: boolean;
+  } | null>(null);
   const [downloadingEvidence, setDownloadingEvidence] = useState(false);
   const [toast, setToast] = useState<ToastState>({
     open: false,
@@ -2083,6 +2121,11 @@ export function PerformanceModal({
     normalizedRole === "team_leader" ||
     normalizedRole === "group_team_leader";
   const canFinalComplete = canFinalizeKpiItem && isPrivilegedEditor;
+  const canHoldDrop = canHoldDropKpiItem && isPrivilegedEditor;
+  const headerHoldDropStatus = isKpiHoldDropActive(kpiItem?.holdDropStatus)
+    ? (kpiItem?.holdDropStatus ?? null)
+    : null;
+  const headerHoldDropReason = kpiItem?.holdDropReason?.trim() || null;
 
   const activeMonthListPrimary = useMemo(() => {
     if (!kpiItem) return [] as MonthKey[];
@@ -3175,21 +3218,61 @@ export function PerformanceModal({
   }
 
   const workflowPrimaryVisible = useMemo(() => {
-    if (!profileRole || !selectedRow?.id) return false;
+    if (!selectedRow?.id) return false;
     const st = (selectedStatus ?? "").trim().toLowerCase();
+    const line = selectedRow.approval_line;
+    if (line && line.length > 0) {
+      const idx = selectedRow.approval_line_index ?? 0;
+      const nextId = line[idx]?.user_id?.trim() ?? "";
+      const isNext =
+        Boolean(profileUserId?.trim()) &&
+        nextId === (profileUserId?.trim() ?? "");
+      const isLast = idx >= line.length - 1;
+      return (
+        isNext &&
+        !isLast &&
+        (st === PERF_STATUS_PENDING_PRIMARY || st === PERF_LEGACY_PENDING)
+      );
+    }
+    if (!profileRole) return false;
     return (
       canGroupLeaderApprove(profileRole) &&
       (st === PERF_STATUS_PENDING_PRIMARY || st === PERF_LEGACY_PENDING)
     );
-  }, [profileRole, selectedRow?.id, selectedStatus]);
+  }, [
+    profileRole,
+    profileUserId,
+    selectedRow?.id,
+    selectedRow?.approval_line,
+    selectedRow?.approval_line_index,
+    selectedStatus,
+  ]);
 
   const workflowFinalVisible = useMemo(() => {
-    if (!profileRole || !selectedRow?.id) return false;
+    if (!selectedRow?.id) return false;
     const st = (selectedStatus ?? "").trim().toLowerCase();
+    const line = selectedRow.approval_line;
+    if (line && line.length > 0) {
+      const idx = selectedRow.approval_line_index ?? 0;
+      const nextId = line[idx]?.user_id?.trim() ?? "";
+      const isNext =
+        Boolean(profileUserId?.trim()) &&
+        nextId === (profileUserId?.trim() ?? "");
+      const isLast = idx >= line.length - 1;
+      return isNext && isLast && st === PERF_STATUS_PENDING_FINAL;
+    }
+    if (!profileRole) return false;
     return (
       canTeamLeaderFinalApprove(profileRole) && st === PERF_STATUS_PENDING_FINAL
     );
-  }, [profileRole, selectedRow?.id, selectedStatus]);
+  }, [
+    profileRole,
+    profileUserId,
+    selectedRow?.id,
+    selectedRow?.approval_line,
+    selectedRow?.approval_line_index,
+    selectedStatus,
+  ]);
 
   const canWithdrawPendingSubmission = useMemo(() => {
     if (!profileUserId?.trim() || !selectedRow?.id || !canEditPerformance) {
@@ -3209,18 +3292,6 @@ export function PerformanceModal({
     selectedRow?.submitted_by,
     selectedStatus,
     canEditPerformance,
-  ]);
-
-  /** 반려함·회수함에서 넘어온 제출 전 건만 삭제 허용 — 편집 월(`editorMonth`) 기준 */
-  const canDeleteInboxDraft = useMemo(() => {
-    if (!profileUserId?.trim() || !canEditPerformance) return false;
-    const er = rowByMonth.get(editorMonth) ?? null;
-    return isDraftRowReregisterContext(er, profileUserId);
-  }, [
-    profileUserId,
-    canEditPerformance,
-    editorMonth,
-    rowByMonth,
   ]);
 
   /** 저장 확인·주 버튼 — 반려·회수 재제출이면 '재등록' 카피 */
@@ -3371,14 +3442,29 @@ export function PerformanceModal({
         lineMain: "—",
         lineSub: "",
         completedTone: false,
+        holdDropTone: null as KpiHoldDropStatus | null,
+        title: "전체 기간 달성률",
+      };
+    }
+    if (isKpiHoldDropActive(kpiItem.holdDropStatus)) {
+      const st = kpiItem.holdDropStatus!;
+      return {
+        barWidth: 100,
+        lineMain: "",
+        lineSub: "",
+        completedTone: false,
+        holdDropTone: st,
+        title: st === "drop" ? "DROP" : "HOLD",
       };
     }
     if (kpiItem.isFinalCompleted) {
       return {
         barWidth: 100,
-        lineMain: "최종 완료",
+        lineMain: "",
         lineSub: "",
         completedTone: true,
+        holdDropTone: null,
+        title: "최종 완료",
       };
     }
     const v = livePeriodOverallAchievement ?? kpiItem.averageAchievement;
@@ -3388,6 +3474,8 @@ export function PerformanceModal({
         lineMain: formatKoPercentMax2(v),
         lineSub: "",
         completedTone: false,
+        holdDropTone: null,
+        title: "전체 기간 달성률",
       };
     }
     return {
@@ -3395,6 +3483,8 @@ export function PerformanceModal({
       lineMain: "0%",
       lineSub: "",
       completedTone: false,
+      holdDropTone: null,
+      title: "전체 기간 달성률",
     };
   }, [kpiItem, livePeriodOverallAchievement]);
 
@@ -3626,6 +3716,26 @@ export function PerformanceModal({
       notify("error", "증빙 파일을 첨부해야 실적을 등록할 수 있습니다.");
       return;
     }
+    setPendingSavePayload({
+      rateNum,
+      ...(actualMetricSave !== undefined ? { actualMetricSave } : {}),
+      finalizeAfterSave: options?.finalizeAfterSave,
+      skipMonthConfirm: options?.skipMonthConfirm,
+    });
+    setApprovalLineModalOpen(true);
+  }
+
+  async function executeSaveWithApprovalLine(approvalLine: ApprovalLineStep[]) {
+    if (!pendingSavePayload || !kpiItem) return;
+    const { rateNum, actualMetricSave, finalizeAfterSave } = pendingSavePayload;
+    const item =
+      perfEditTarget === "secondary" && linkedSecondaryItem
+        ? linkedSecondaryItem
+        : kpiItem;
+    const isComputed = indicatorUsesComputedAchievement(
+      resolveEffectiveIndicatorTypeForUi(item.indicatorType, item.evaluationType)
+    );
+    setApprovalLineModalOpen(false);
     try {
       const saveResult = await saveMutation.mutateAsync({
         kpiId: item.id,
@@ -3633,7 +3743,12 @@ export function PerformanceModal({
         achievement_rate: rateNum,
         description: editorDescription,
         bubbleNote: editorBubbleNote,
-        indicatorMode: isComputed ? effectiveIndicatorType : "normal",
+        indicatorMode: isComputed
+          ? resolveEffectiveIndicatorTypeForUi(
+              item.indicatorType,
+              item.evaluationType
+            )
+          : "normal",
         achievementCap: item.achievementCap,
         ...(actualMetricSave !== undefined
           ? { actualValue: actualMetricSave }
@@ -3641,6 +3756,7 @@ export function PerformanceModal({
         aggregationType: editorAggregationType,
         ...(isAdmin ? { adminBypassApprovalLock: true } : {}),
         actorRole: profileRole ?? null,
+        approvalLine,
       });
       const targetId =
         saveResult && typeof saveResult.targetId === "string"
@@ -3686,7 +3802,7 @@ export function PerformanceModal({
       }
 
       let finalized = false;
-      if (options?.finalizeAfterSave) {
+      if (finalizeAfterSave) {
         if (!canFinalComplete || !onFinalizeKpiItem || headerItem.isFinalCompleted) {
           notify("error", "최종 완료 처리 권한이 없거나 이미 완료된 항목입니다.");
           return;
@@ -3701,30 +3817,38 @@ export function PerformanceModal({
         if (r2.data) setLiveRowsSecondary(r2.data);
       }
       setEditorFiles([]);
-      const normalizedActor = normalizeRole(profileRole);
+      setPendingSavePayload(null);
+      const lineLen = approvalLine.length;
       notify(
         "success",
         finalized
           ? `${editorMonth}월 실적 저장 및 최종 완료 처리가 완료되었습니다.`
-          : normalizedActor === "team_leader" || normalizedActor === "group_team_leader"
-          ? `${editorMonth}월 실적이 저장되었습니다. (상태: 승인 완료 — 즉시 반영)`
-          : normalizedActor === "group_leader"
-            ? `${editorMonth}월 실적이 저장되었습니다. (상태: 최종 승인 대기 — 팀장 검토)`
-            : `${editorMonth}월 실적이 저장되었습니다. (상태: 1차 승인 대기 — 그룹장 검토)`
+          : lineLen === 0
+            ? `${editorMonth}월 실적이 저장되었습니다. (상태: 승인 완료 — 즉시 반영)`
+            : `${editorMonth}월 실적이 저장되었습니다. (결재 ${lineLen}단계 대기)`
       );
     } catch (err) {
-      const message = err instanceof Error ? err.message : "저장 실패";
-      notify("error", message);
+      notify(
+        "error",
+        err instanceof Error ? err.message : "실적 저장에 실패했습니다."
+      );
     } finally {
       setUploading(false);
     }
   }
 
   async function handleKpiFinalizeClick() {
-    if (!canFinalComplete || !onFinalizeKpiItem || headerItem.isFinalCompleted) {
+    if (
+      !canFinalComplete ||
+      !onFinalizeKpiItem ||
+      headerItem.isFinalCompleted ||
+      headerHoldDropStatus
+    ) {
       notify(
         "error",
-        "최종 완료(KPI 완료) 처리는 관리자·그룹장·팀장만 가능하거나, 이미 완료된 항목입니다."
+        headerHoldDropStatus
+          ? "Hold/Drop 상태인 KPI는 최종 완료할 수 없습니다. 먼저 상태를 철회해 주세요."
+          : "최종 완료(KPI 완료) 처리는 관리자·그룹장·팀장만 가능하거나, 이미 완료된 항목입니다."
       );
       return;
     }
@@ -3807,10 +3931,21 @@ export function PerformanceModal({
     }
   }
 
-  async function handleModalDeleteDraft() {
+  async function handleModalDeletePerformance() {
+    if (!canEditPerformance) {
+      notify("error", "실적을 삭제할 권한이 없습니다.");
+      return;
+    }
+    if (!editorMonthHasExistingSavedInput) {
+      notify("error", "해당 월에 등록된 실적이 없습니다.");
+      return;
+    }
     const er = rowByMonth.get(editorMonth) ?? null;
     const rid = er?.id;
-    if (!rid) return;
+    if (!rid) {
+      notify("error", "삭제할 실적 대상을 찾을 수 없습니다.");
+      return;
+    }
     const ok = await requestActionConfirm(
       "실적 삭제",
       `${editorMonth}월에 저장된 실적을 삭제합니다.\n삭제 후에는 복구할 수 없습니다. 계속하시겠습니까?`
@@ -3828,7 +3963,12 @@ export function PerformanceModal({
         const r2 = await perfQuerySecondary.refetch();
         if (r2.data) setLiveRowsSecondary(r2.data);
       }
-      notify("success", "실적이 삭제되었습니다.");
+      setEditorRate("");
+      setEditorActualPpm("");
+      setEditorDescription("");
+      setEditorBubbleNote("");
+      setEditorFiles([]);
+      notify("success", `${editorMonth}월 실적이 삭제되었습니다.`);
     } catch (e) {
       notify(
         "error",
@@ -3886,6 +4026,63 @@ export function PerformanceModal({
     if (!ok) return;
   }
 
+  function openHoldDropModal(mode: KpiHoldDropStatus | "withdraw") {
+    if (mode === "withdraw") {
+      void submitHoldDropWithdraw();
+      return;
+    }
+    setHoldDropReasonDraft(headerHoldDropReason ?? "");
+    setHoldDropModal({ open: true, mode });
+  }
+
+  async function submitHoldDropWithdraw() {
+    if (!kpiItem || !canHoldDrop || !onHoldDropKpiItem) return;
+    const ok = await requestActionConfirm(
+      headerHoldDropStatus === "drop" ? "Drop 철회" : "Hold 철회",
+      "Hold/Drop 상태를 철회하면 달성률 집계에 다시 포함됩니다. 계속하시겠습니까?"
+    );
+    if (!ok) return;
+    setHoldDropSubmitting(true);
+    try {
+      const done = await onHoldDropKpiItem(kpiItem.id, null);
+      if (done) {
+        notify("success", "Hold/Drop 상태가 철회되었습니다.");
+      }
+    } finally {
+      setHoldDropSubmitting(false);
+    }
+  }
+
+  async function submitHoldDropModal() {
+    if (!kpiItem || !canHoldDrop || !onHoldDropKpiItem) return;
+    const mode = holdDropModal.mode;
+    if (mode === "withdraw") {
+      await submitHoldDropWithdraw();
+      return;
+    }
+    const reason = holdDropReasonDraft.trim();
+    if (!reason) {
+      notify("error", "사유를 입력해 주세요.");
+      return;
+    }
+    setHoldDropSubmitting(true);
+    try {
+      const done = await onHoldDropKpiItem(kpiItem.id, mode, reason);
+      if (done) {
+        setHoldDropModal({ open: false, mode: "hold" });
+        setHoldDropReasonDraft("");
+        notify(
+          "success",
+          mode === "drop"
+            ? "KPI가 DROP 처리되었습니다."
+            : "KPI가 HOLD 처리되었습니다."
+        );
+      }
+    } finally {
+      setHoldDropSubmitting(false);
+    }
+  }
+
   if (!isOpen || !kpiItem) return null;
 
   const shell = (
@@ -3899,7 +4096,7 @@ export function PerformanceModal({
         className={
           kioskMode
             ? "relative flex h-full w-full flex-col overflow-hidden bg-white"
-            : "relative flex max-h-[95vh] w-full max-w-[min(100%,88rem)] flex-col overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-2xl shadow-sky-200/50"
+            : "relative flex max-h-[95vh] w-full max-w-[min(100%,96rem)] flex-col overflow-hidden rounded-2xl border border-sky-200 bg-white shadow-2xl shadow-sky-200/50"
         }
       >
         <div
@@ -3943,6 +4140,17 @@ export function PerformanceModal({
                   <span className="mx-1.5 font-normal text-sky-200/95">/</span>
                   <span>{headerItem.subTopic}</span>
                 </span>
+                {headerHoldDropStatus ? (
+                  <span
+                    className={`inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-0.5 text-xs font-semibold ${
+                      headerHoldDropStatus === "drop"
+                        ? "bg-rose-400/25 text-rose-50"
+                        : "bg-amber-400/25 text-amber-50"
+                    }`}
+                  >
+                    {headerHoldDropStatus === "drop" ? "DROP" : "HOLD"}
+                  </span>
+                ) : null}
                 {headerItem.isFinalCompleted ? (
                   <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-emerald-400/25 px-2 py-0.5 text-xs font-semibold text-emerald-50">
                     최종 완료
@@ -3975,23 +4183,45 @@ export function PerformanceModal({
               <div className="min-w-0 flex-1" />
             )}
             <div className="flex w-[11.5rem] shrink-0 flex-col gap-2 sm:w-[13rem]">
-              {kioskMode && headerItem.isFinalCompleted ? (
+              {kioskMode && headerHoldDropStatus ? (
+                <div
+                  className={`flex min-h-[4.25rem] w-full flex-col items-center justify-center rounded-xl px-3.5 py-2.5 shadow-sm sm:px-4 ${
+                    headerHoldDropStatus === "drop"
+                      ? "border border-rose-300/45 bg-rose-400/20"
+                      : "border border-amber-300/45 bg-amber-400/20"
+                  }`}
+                  role="status"
+                  aria-label={headerHoldDropStatus === "drop" ? "DROP" : "HOLD"}
+                >
+                  <p className="text-center text-base font-bold tracking-tight text-white sm:text-lg">
+                    {headerHoldDropStatus === "drop" ? "DROP" : "HOLD"}
+                  </p>
+                  {headerHoldDropReason ? (
+                    <p
+                      className={`mt-1 line-clamp-2 text-center text-[11px] font-semibold [text-shadow:0_1px_4px_rgba(0,0,0,0.45)] ${
+                        headerHoldDropStatus === "drop"
+                          ? "text-rose-200"
+                          : "text-yellow-200"
+                      }`}
+                    >
+                      {headerHoldDropReason}
+                    </p>
+                  ) : null}
+                </div>
+              ) : kioskMode && headerItem.isFinalCompleted ? (
                 <div
                   className="flex min-h-[4.25rem] w-full flex-col items-center justify-center rounded-xl border border-emerald-300/45 bg-emerald-400/20 px-3.5 py-2.5 shadow-sm sm:px-4"
                   role="status"
-                  aria-label="전체 기간 달성률 최종 완료"
+                  aria-label="최종 완료"
                 >
-                  <p className="text-center text-[11px] font-medium text-emerald-100/90">
-                    전체 기간 달성률
-                  </p>
-                  <p className="mt-1 text-center text-base font-bold tracking-tight text-emerald-50 sm:text-lg">
+                  <p className="text-center text-base font-bold tracking-tight text-emerald-50 sm:text-lg">
                     최종 완료
                   </p>
                 </div>
               ) : (
               <div className="rounded-xl border border-white/20 bg-white/10 px-3.5 py-2.5 shadow-sm sm:px-4">
                 <p className="text-center text-sm font-semibold leading-snug text-white sm:text-base">
-                  전체 기간 달성률
+                  {headerOverallAchievementUi.title}
                 </p>
                 <div className="mt-2 flex items-center gap-2">
                   <div
@@ -4002,22 +4232,28 @@ export function PerformanceModal({
                     aria-valuenow={headerOverallAchievementUi.barWidth}
                     aria-valuemin={0}
                     aria-valuemax={100}
-                    aria-label={`전체 기간 달성률 ${headerOverallAchievementUi.lineMain}`}
+                    aria-label={headerOverallAchievementUi.title}
                   >
                     <div
                       className={`h-full rounded-full transition-all duration-500 ${
-                        headerOverallAchievementUi.completedTone
-                          ? "bg-gradient-to-r from-emerald-400 to-emerald-600"
-                          : headerOverallAchievementUi.barWidth > 0
-                            ? "bg-gradient-to-r from-sky-400 to-sky-600"
-                            : "bg-gradient-to-r from-sky-400 to-sky-600 opacity-40"
+                        headerOverallAchievementUi.holdDropTone === "drop"
+                          ? "bg-gradient-to-r from-rose-400 to-rose-600"
+                          : headerOverallAchievementUi.holdDropTone === "hold"
+                            ? "bg-gradient-to-r from-amber-400 to-amber-600"
+                            : headerOverallAchievementUi.completedTone
+                              ? "bg-gradient-to-r from-emerald-400 to-emerald-600"
+                              : headerOverallAchievementUi.barWidth > 0
+                                ? "bg-gradient-to-r from-sky-400 to-sky-600"
+                                : "bg-gradient-to-r from-sky-400 to-sky-600 opacity-40"
                       }`}
                       style={{ width: `${headerOverallAchievementUi.barWidth}%` }}
                     />
                   </div>
-                  <span className="w-10 shrink-0 text-right text-xs font-bold tabular-nums text-white sm:text-sm">
-                    {headerOverallAchievementUi.lineMain}
-                  </span>
+                  {headerOverallAchievementUi.lineMain ? (
+                    <span className="w-10 shrink-0 text-right text-xs font-bold tabular-nums text-white sm:text-sm">
+                      {headerOverallAchievementUi.lineMain}
+                    </span>
+                  ) : null}
                 </div>
                 {headerOverallAchievementUi.lineSub ? (
                   <p className="mt-1 text-center text-[10px] font-medium text-sky-100/90">
@@ -4026,15 +4262,6 @@ export function PerformanceModal({
                 ) : null}
               </div>
               )}
-              {canFinalComplete && headerItem.isFinalCompleted && !kioskMode ? (
-                <button
-                  type="button"
-                  onClick={() => void handleWithdrawFinalCompletionInModal()}
-                  className="inline-flex w-full items-center justify-center gap-1 rounded-lg border border-amber-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-amber-700 shadow-sm hover:bg-amber-50"
-                >
-                  최종 철회
-                </button>
-              ) : null}
             </div>
           </div>
         </div>
@@ -4161,7 +4388,7 @@ export function PerformanceModal({
           </div>
 
           <div
-            className={`kpi-modal-composed-chart flex flex-col rounded-xl border border-sky-200 bg-white [&_.recharts-wrapper]:outline-none [&_.recharts-surface]:outline-none [&_svg]:outline-none ${
+            className={`kpi-modal-composed-chart relative flex flex-col rounded-xl border border-sky-200 bg-white [&_.recharts-wrapper]:outline-none [&_.recharts-surface]:outline-none [&_svg]:outline-none ${
               kioskMode
                 ? `mb-4 shrink-0 p-2${
                     kioskMonthDetailOpen ? " min-h-[280px] flex-1" : ""
@@ -4691,6 +4918,50 @@ export function PerformanceModal({
               dualComposite={chartShowsDualGroupedBars}
               kioskMode={kioskMode}
             />
+            {headerHoldDropStatus ? (
+              <div
+                className={`pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center rounded-xl px-6 text-center backdrop-blur-[1px] ${
+                  headerHoldDropStatus === "drop"
+                    ? "bg-rose-950/45"
+                    : "bg-amber-950/40"
+                }`}
+                role="status"
+                aria-label={
+                  headerHoldDropStatus === "drop"
+                    ? `DROP: ${headerHoldDropReason ?? ""}`
+                    : `HOLD: ${headerHoldDropReason ?? ""}`
+                }
+              >
+                <p
+                  className={`font-black tracking-[0.12em] ${
+                    kioskMode
+                      ? "text-7xl sm:text-8xl lg:text-9xl"
+                      : "text-4xl sm:text-5xl"
+                  } ${
+                    headerHoldDropStatus === "drop"
+                      ? "text-rose-50"
+                      : "text-amber-50"
+                  }`}
+                >
+                  {headerHoldDropStatus === "drop" ? "DROP" : "HOLD"}
+                </p>
+                {headerHoldDropReason ? (
+                  <p
+                    className={`mt-4 max-w-3xl font-bold leading-snug [text-shadow:0_2px_8px_rgba(0,0,0,0.55)] ${
+                      kioskMode
+                        ? "text-2xl sm:text-3xl lg:text-4xl"
+                        : "text-base sm:text-lg"
+                    } ${
+                      headerHoldDropStatus === "drop"
+                        ? "text-rose-200"
+                        : "text-yellow-200"
+                    }`}
+                  >
+                    {headerHoldDropReason}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           <div
@@ -4722,44 +4993,11 @@ export function PerformanceModal({
             ) : null}
             {!kioskMode || kioskMonthDetailOpen ? (
               <div className={kioskMode ? "border-t border-sky-100 px-4 pb-4 pt-3" : undefined}>
-          <div className={kioskMode ? undefined : "mt-4"}>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              월 선택
-            </p>
-            <div className="-mx-1 flex flex-nowrap gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:thin]">
-              {displayMonthList.map((mo) => {
-                const on = mo === selectedMonth;
-                return (
-                  <button
-                    key={mo}
-                    type="button"
-                    onClick={() => {
-                      if (linkedSecondaryItem && chartViewMode === "primary") {
-                        applyMonthSelection(mo, "primary");
-                      } else if (linkedSecondaryItem && chartViewMode === "secondary") {
-                        applyMonthSelection(mo, "secondary");
-                      } else {
-                        applyMonthSelection(mo);
-                      }
-                    }}
-                    className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
-                      on
-                        ? "bg-sky-600 text-white shadow-md shadow-sky-300/40"
-                        : "border border-sky-200 bg-white text-slate-700 hover:bg-sky-50"
-                    }`}
-                  >
-                    {formatAxisLabel(mo)}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
           <div
             className={
               kioskMode
                 ? "mt-4 rounded-xl border border-sky-100 bg-slate-50/40 p-4"
-                : "mt-5 rounded-xl border border-sky-200 bg-white p-4"
+                : "mt-4 rounded-xl border border-sky-200 bg-white p-4"
             }
           >
             <h4 className="mb-2 text-sm font-semibold text-slate-800">
@@ -4966,7 +5204,7 @@ export function PerformanceModal({
 
           {!kioskMode ? (
           <aside
-            className="flex min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-sky-200 bg-white lg:w-[22rem] lg:max-w-[22rem] lg:flex-shrink-0 lg:border-l lg:border-t-0"
+            className="flex min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-sky-200 bg-white lg:w-[26rem] lg:max-w-[26rem] lg:flex-shrink-0 lg:border-l lg:border-t-0"
             aria-label="실적 입력"
           >
             {canEditPerformance ? (
@@ -5176,8 +5414,8 @@ export function PerformanceModal({
                               ? "UPH 숫자"
                               : effectiveIndicatorType === "cpk"
                                 ? "Cpk 값(무차원)"
-                                : effectiveIndicatorType === "money"
-                                  ? "억 단위 숫자"
+                                : isMoneyIndicatorType(effectiveIndicatorType)
+                                  ? `${moneyIndicatorUnitSuffix(effectiveIndicatorType)} 단위 숫자`
                                   : "0 이상"
                     }
                   />
@@ -5271,42 +5509,133 @@ export function PerformanceModal({
               </div>
             </div>
 
-            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-sky-200 bg-white px-4 py-3">
-              {canDeleteInboxDraft ? (
+            <div className="flex shrink-0 flex-col gap-2 border-t border-sky-200 bg-white px-4 py-3">
+              {(canHoldDrop &&
+                !headerItem.isFinalCompleted &&
+                !headerHoldDropStatus) ||
+              (canHoldDrop && headerHoldDropStatus) ||
+              (canFinalComplete && headerItem.isFinalCompleted) ||
+              (canFinalComplete &&
+                !headerItem.isFinalCompleted &&
+                !headerHoldDropStatus) ? (
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {canHoldDrop &&
+                  !headerItem.isFinalCompleted &&
+                  !headerHoldDropStatus ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => openHoldDropModal("drop")}
+                        disabled={holdDropSubmitting}
+                        className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
+                      >
+                        Drop
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openHoldDropModal("hold")}
+                        disabled={holdDropSubmitting}
+                        className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                      >
+                        Hold
+                      </button>
+                    </>
+                  ) : null}
+                  {canHoldDrop && headerHoldDropStatus ? (
+                    <button
+                      type="button"
+                      onClick={() => openHoldDropModal("withdraw")}
+                      disabled={holdDropSubmitting}
+                      className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                    >
+                      {headerHoldDropStatus === "drop" ? "Drop 철회" : "Hold 철회"}
+                    </button>
+                  ) : null}
+                  {canFinalComplete && headerItem.isFinalCompleted ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleWithdrawFinalCompletionInModal()}
+                      className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      최종 철회
+                    </button>
+                  ) : null}
+                  {canFinalComplete &&
+                  !headerItem.isFinalCompleted &&
+                  !headerHoldDropStatus ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleKpiFinalizeClick()}
+                      disabled={
+                        saveMutation.isPending ||
+                        uploading ||
+                        !activeSetEditor.has(editorMonth) ||
+                        editorMonthLocked ||
+                        !editorHasEvidenceForSave ||
+                        (isComputedItem &&
+                          parseNonNegativeDecimal(editorActualPpm) === null) ||
+                        (normalMetricEntryActive &&
+                          parseNonNegativeDecimal(
+                            normalMonthlyActualInputForSave(
+                              isComputedItem,
+                              editorRate,
+                              editorActualPpm
+                            )
+                          ) === null) ||
+                        (!isComputedItem &&
+                          !normalMetricEntryActive &&
+                          !editorRate.trim())
+                      }
+                      className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+                    >
+                      {saveMutation.isPending || uploading ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : null}
+                      KPI 완료
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {canWithdrawPendingSubmission ? (
+                  <button
+                    type="button"
+                    onClick={() => void handleModalWithdrawSubmission()}
+                    disabled={
+                      withdrawMut.isPending ||
+                      workflowMut.isPending ||
+                      saveMutation.isPending ||
+                      uploading
+                    }
+                    className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  >
+                    {withdrawMut.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : null}
+                    제출 회수
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  onClick={() => void handleModalDeleteDraft()}
+                  onClick={() => void handleModalDeletePerformance()}
                   disabled={
+                    !editorMonthHasExistingSavedInput ||
                     deleteDraftMut.isPending ||
                     saveMutation.isPending ||
                     uploading
                   }
-                  className="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60"
+                  title={
+                    editorMonthHasExistingSavedInput
+                      ? `${editorMonth}월 실적 삭제`
+                      : "선택한 월에 등록된 실적이 없습니다"
+                  }
+                  className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {deleteDraftMut.isPending ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : null}
                   실적 삭제
                 </button>
-              ) : null}
-              {canWithdrawPendingSubmission ? (
-                <button
-                  type="button"
-                  onClick={() => void handleModalWithdrawSubmission()}
-                  disabled={
-                    withdrawMut.isPending ||
-                    workflowMut.isPending ||
-                    saveMutation.isPending ||
-                    uploading
-                  }
-                  className="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-60"
-                >
-                  {withdrawMut.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : null}
-                  제출 회수
-                </button>
-              ) : null}
               <button
                 type="button"
                 onClick={() => void handleSaveMonth()}
@@ -5330,7 +5659,7 @@ export function PerformanceModal({
                     !normalMetricEntryActive &&
                     !editorRate.trim())
                 }
-                className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
+                className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-60"
               >
                 {saveMutation.isPending || uploading ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -5341,39 +5670,8 @@ export function PerformanceModal({
                     : "수정"
                   : "저장"}
               </button>
-              {canFinalComplete && !headerItem.isFinalCompleted ? (
-                <button
-                  type="button"
-                  onClick={() => void handleKpiFinalizeClick()}
-                  disabled={
-                    saveMutation.isPending ||
-                    uploading ||
-                    !activeSetEditor.has(editorMonth) ||
-                    editorMonthLocked ||
-                    !editorHasEvidenceForSave ||
-                    (isComputedItem &&
-                      parseNonNegativeDecimal(editorActualPpm) === null) ||
-                    (normalMetricEntryActive &&
-                      parseNonNegativeDecimal(
-                        normalMonthlyActualInputForSave(
-                          isComputedItem,
-                          editorRate,
-                          editorActualPpm
-                        )
-                      ) === null) ||
-                    (!isComputedItem &&
-                      !normalMetricEntryActive &&
-                      !editorRate.trim())
-                  }
-                  className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
-                >
-                  {saveMutation.isPending || uploading ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : null}
-                  KPI 완료
-                </button>
-              ) : null}
             </div>
+          </div>
           </div>
             ) : (
               <div className="flex min-h-[100px] flex-1 flex-col justify-center px-3 py-6 lg:min-h-0">
@@ -5484,6 +5782,99 @@ export function PerformanceModal({
             </div>
           </div>
         ) : null}
+
+        {holdDropModal.open && holdDropModal.mode !== "withdraw" ? (
+          <div
+            className="absolute inset-0 z-[60] flex items-center justify-center bg-slate-900/45 p-4"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                setHoldDropModal({ open: false, mode: "hold" });
+                setHoldDropReasonDraft("");
+              }
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="hold-drop-modal-title"
+              className="w-full max-w-md rounded-2xl border border-sky-200 bg-white p-5 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h4
+                id="hold-drop-modal-title"
+                className="text-base font-semibold text-slate-900"
+              >
+                {holdDropModal.mode === "drop" ? "DROP 처리" : "HOLD 처리"}
+              </h4>
+              <p className="mt-1 text-xs text-slate-500">
+                사유는 그래프에 크게 표시되며, 상태가 유지되는 동안 이 KPI는
+                달성률 집계에서 제외됩니다.
+              </p>
+              <textarea
+                value={holdDropReasonDraft}
+                onChange={(e) => setHoldDropReasonDraft(e.target.value)}
+                rows={4}
+                className={`mt-3 w-full resize-none rounded-lg border bg-white px-3 py-2 text-sm font-semibold text-slate-800 caret-slate-800 placeholder:text-slate-400 outline-none focus:ring-2 ${
+                  holdDropModal.mode === "drop"
+                    ? "border-rose-300 focus:border-rose-500 focus:ring-rose-100"
+                    : "border-amber-300 focus:border-amber-500 focus:ring-amber-100"
+                }`}
+                placeholder={
+                  holdDropModal.mode === "drop"
+                    ? "DROP 사유를 입력해 주세요."
+                    : "HOLD 사유를 입력해 주세요."
+                }
+              />
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHoldDropModal({ open: false, mode: "hold" });
+                    setHoldDropReasonDraft("");
+                  }}
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                >
+                  취소
+                </button>
+                <button
+                  type="button"
+                  disabled={holdDropSubmitting}
+                  onClick={() => void submitHoldDropModal()}
+                  className={`rounded-lg px-3 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
+                    holdDropModal.mode === "drop"
+                      ? "bg-rose-600 hover:bg-rose-700"
+                      : "bg-amber-600 hover:bg-amber-700"
+                  }`}
+                >
+                  {holdDropSubmitting ? (
+                    <Loader2 className="inline h-4 w-4 animate-spin" />
+                  ) : holdDropModal.mode === "drop" ? (
+                    "DROP 적용"
+                  ) : (
+                    "HOLD 적용"
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        <ApprovalLineSelectModal
+          open={approvalLineModalOpen}
+          actorRole={profileRole}
+          kpiItemId={
+            (perfEditTarget === "secondary" && linkedSecondaryItem
+              ? linkedSecondaryItem.id
+              : headerItem.id) || ""
+          }
+          onCancel={() => {
+            setApprovalLineModalOpen(false);
+            setPendingSavePayload(null);
+          }}
+          onConfirm={(line) => {
+            void executeSaveWithApprovalLine(line);
+          }}
+        />
       </div>
     </>
   );

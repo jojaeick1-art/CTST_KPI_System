@@ -229,10 +229,31 @@ export function canTeamLeaderFinalApprove(role: string | null | undefined): bool
   );
 }
 
-/** 실적함 메뉴·페이지 — 그룹장·팀장·관리자 */
+/** 실적함 메뉴·페이지 — 승인 역할 또는 결재선에 포함된 사용자도 접근 */
 export function canAccessApprovalsPage(role: string | null | undefined): boolean {
   const n = normalizeRole(role);
-  return n === "admin" || n === "ceo" || n === "group_leader" || n === "team_leader" || n === "group_team_leader";
+  return (
+    n === "admin" ||
+    n === "ceo" ||
+    n === "group_leader" ||
+    n === "team_leader" ||
+    n === "group_team_leader" ||
+    n === "principal" ||
+    n === "manager" ||
+    n === "senior" ||
+    n === "pro"
+  );
+}
+
+/** KPI Hold/Drop 설정·철회 — 관리자·그룹장·팀장 */
+export function canManageKpiHoldDrop(role: string | null | undefined): boolean {
+  const n = normalizeRole(role);
+  return (
+    n === "admin" ||
+    n === "group_leader" ||
+    n === "team_leader" ||
+    n === "group_team_leader"
+  );
 }
 
 const NO_ASSIGNED_DEPARTMENT_APPROVAL_FILTER = "__no_assigned_department__";
@@ -285,6 +306,15 @@ export function approvalNotificationCount(
     return pendingPrimaryCount + pendingFinalCount;
   }
   if (n === "team_leader") return pendingFinalCount;
+  // 커스텀 결재선에 포함될 수 있는 역할 — 사이드바 배지는 실적함 목록에서 보정
+  if (
+    n === "principal" ||
+    n === "manager" ||
+    n === "senior" ||
+    n === "pro"
+  ) {
+    return pendingPrimaryCount + pendingFinalCount;
+  }
   return 0;
 }
 

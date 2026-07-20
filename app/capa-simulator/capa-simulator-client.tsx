@@ -272,10 +272,6 @@ export function CapaSimulatorClient() {
             <h1 className="text-2xl font-bold tracking-tight text-slate-900">
               CAPA Simulator
             </h1>
-            <p className="mt-1 max-w-xl text-sm text-slate-600">
-              모델·공정을 선택한 뒤 교대·근무일수를 넣으면 공정별 병목 CAPA와 라인 전체 병목을
-              확인할 수 있습니다.
-            </p>
           </div>
           <button
             type="button"
