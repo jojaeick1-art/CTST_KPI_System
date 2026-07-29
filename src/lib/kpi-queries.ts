@@ -6017,8 +6017,10 @@ export async function moveKpiItemsToDepartment(input: {
     .update({ dept_id: targetDeptId })
     .in("id", ids);
   if (error) {
+    const detail = [error.details, error.hint].filter(Boolean).join(" / ");
     throw new Error(
-      `KPI 항목 이동 실패: ${error.message} (kpi_items.dept_id 컬럼·RLS 정책을 확인해 주세요.)`
+      `KPI 항목 이동 실패: ${error.message}${detail ? ` (${detail})` : ""} ` +
+        `(로그인 세션이 만료됐을 수 있습니다. 새로고침 후 다시 로그인해서 재시도해 주세요. 반복되면 kpi_items.dept_id 컬럼·RLS 정책을 확인해 주세요.)`
     );
   }
 }
