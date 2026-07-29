@@ -26,6 +26,7 @@ import {
   clearAllKpiData,
   extendKpiItemPeriodEndMonth,
   removeKpiItemCascade,
+  moveKpiItemsToDepartment,
   updateKpiItemFinalCompletion,
   updateKpiItemHoldDrop,
   removeDepartment,
@@ -830,6 +831,25 @@ export function useDeleteKpiItemMutation() {
       });
       void queryClient.invalidateQueries({
         queryKey: ["supabase", "pending-performances"],
+      });
+    },
+  });
+}
+
+export function useMoveKpiItemsMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { kpiItemIds: string[]; targetDeptId: string }) =>
+      moveKpiItemsToDepartment(args),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "department-kpi-detail"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "department-kpi-summary"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["supabase", "dashboard-summary-stats"],
       });
     },
   });

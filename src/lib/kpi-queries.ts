@@ -5999,6 +5999,30 @@ export async function removeKpiItemCascade(kpiItemId: string): Promise<void> {
   }
 }
 
+/** KPI 항목 다중 이동(다른 부서 카드로) — 관리자·그룹장·팀장 UI에서 호출 */
+export async function moveKpiItemsToDepartment(input: {
+  kpiItemIds: string[];
+  targetDeptId: string;
+}): Promise<void> {
+  const supabase = createBrowserSupabase();
+  const ids = Array.from(
+    new Set(input.kpiItemIds.map((id) => id.trim()).filter(Boolean))
+  );
+  const targetDeptId = input.targetDeptId.trim();
+  if (ids.length === 0) throw new Error("이동할 KPI 항목을 선택해 주세요.");
+  if (!targetDeptId) throw new Error("이동할 부서를 선택해 주세요.");
+
+  const { error } = await supabase
+    .from("kpi_items")
+    .update({ dept_id: targetDeptId })
+    .in("id", ids);
+  if (error) {
+    throw new Error(
+      `KPI 항목 이동 실패: ${error.message} (kpi_items.dept_id 컬럼·RLS 정책을 확인해 주세요.)`
+    );
+  }
+}
+
 export async function updateKpiItemFinalCompletion(input: {
   kpiItemId: string;
   completed: boolean;

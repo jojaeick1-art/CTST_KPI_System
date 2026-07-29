@@ -5433,7 +5433,7 @@ export function PerformanceModal({
                 </div>
                 <textarea
                   value={editorDescription}
-                  onChange={(e) => setEditorDescription(e.target.value)}
+                  onChange={(e) => setEditorDescription(e.target.value.replace(/\\/g, "₩"))}
                   disabled={!activeSetEditor.has(editorMonth) || editorMonthLocked}
                   rows={3}
                   className="w-full resize-none rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-[#1a1a1a] outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-200 disabled:bg-slate-100"

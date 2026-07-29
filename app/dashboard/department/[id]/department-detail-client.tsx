@@ -53,8 +53,10 @@ import {
   useCreateManualKpiMutation,
   useDeleteKpiItemMutation,
   useDepartmentKpiDetail,
+  useDepartmentsForManagement,
   useExtendKpiItemPeriodEndMonthMutation,
   useImportKpisByExcelMutation,
+  useMoveKpiItemsMutation,
   useUpdateManualKpiMutation,
   useUpdateKpiItemIndicatorMutation,
   useUpdateKpiItemFinalCompletionMutation,
@@ -62,6 +64,7 @@ import {
 } from "@/src/hooks/useKpiQueries";
 import { PerformanceModal } from "./performance-modal";
 import { KpiCreateModal } from "./kpi-create-modal";
+import { KpiMoveModal } from "./kpi-move-modal";
 import { CtstUserProfileMenu } from "@/src/components/ctst-user-profile-menu";
 
 type Props = { departmentId: string };
@@ -304,6 +307,10 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   const createManualKpiMutation = useCreateManualKpiMutation();
   const updateManualKpiMutation = useUpdateManualKpiMutation();
   const deleteKpiItemMutation = useDeleteKpiItemMutation();
+  const moveKpiItemsMutation = useMoveKpiItemsMutation();
+  const departmentsForMoveQuery = useDepartmentsForManagement(
+    profileQuery.isSuccess && profileQuery.data !== null
+  );
   const updateIndicatorMutation = useUpdateKpiItemIndicatorMutation();
   const updateFinalCompletionMutation = useUpdateKpiItemFinalCompletionMutation();
   const updateHoldDropMutation = useUpdateKpiItemHoldDropMutation();
@@ -317,6 +324,8 @@ export function DepartmentDetailClient({ departmentId }: Props) {
   const [exportingExcel, setExportingExcel] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingKpiItem, setEditingKpiItem] = useState<DepartmentKpiDetailItem | null>(null);
+  const [selectedKpiIds, setSelectedKpiIds] = useState<Set<string>>(new Set());
+  const [showMoveModal, setShowMoveModal] = useState(false);
   const [selectedAchievementMonth, setSelectedAchievementMonth] =
     useState<AchievementMonthSelection>("all");
   const [tableSort, setTableSort] = useState<{
@@ -346,6 +355,10 @@ export function DepartmentDetailClient({ departmentId }: Props) {
       /* ignore */
     }
   }, [departmentId]);
+
+  useEffect(() => {
+    setSelectedKpiIds(new Set());
+  }, [departmentId, selectedYear]);
 
   useEffect(() => {
     if (!periodPickerOpen) return;
@@ -775,6 +788,48 @@ export function DepartmentDetailClient({ departmentId }: Props) {
     }
   }
 
+  function toggleKpiItemSelected(kpiItemId: string) {
+    setSelectedKpiIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(kpiItemId)) {
+        next.delete(kpiItemId);
+      } else {
+        next.add(kpiItemId);
+      }
+      return next;
+    });
+  }
+
+  function toggleSelectAllKpiItems() {
+    setSelectedKpiIds((prev) => {
+      const allSelected = sortedItems.length > 0 && sortedItems.every((item) => prev.has(item.id));
+      if (allSelected) return new Set();
+      return new Set(sortedItems.map((item) => item.id));
+    });
+  }
+
+  async function handleMoveSelectedKpiItems(targetDeptId: string): Promise<void> {
+    if (!canManageKpiItems) {
+      window.alert("KPI 항목 이동은 관리자·팀장·그룹장만 가능합니다.");
+      return;
+    }
+    if (selectedKpiIds.size === 0) return;
+    try {
+      await moveKpiItemsMutation.mutateAsync({
+        kpiItemIds: Array.from(selectedKpiIds),
+        targetDeptId,
+      });
+      await detailQuery.refetch();
+      setSelectedKpiIds(new Set());
+      setShowMoveModal(false);
+      window.alert("선택한 KPI 항목이 이동되었습니다.");
+    } catch (e) {
+      window.alert(
+        e instanceof Error ? e.message : "KPI 항목 이동 중 오류가 발생했습니다."
+      );
+    }
+  }
+
   async function handleFinalizeKpiItem(
     kpiItemId: string,
     completed = true
@@ -1150,7 +1205,19 @@ export function DepartmentDetailClient({ departmentId }: Props) {
             </section>
 
             {canCreateKpi ? (
-              <div className="mb-3 flex justify-end">
+              <div className="mb-3 flex justify-end gap-2">
+                {canManageKpiItems ? (
+                  <button
+                    type="button"
+                    disabled={selectedKpiIds.size === 0}
+                    onClick={() => setShowMoveModal(true)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {selectedKpiIds.size > 0
+                      ? `KPI 항목 이동 (${selectedKpiIds.size})`
+                      : "KPI 항목 이동"}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => {
@@ -1174,6 +1241,23 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                   <table className="min-w-[1100px] w-full border-collapse text-sm">
                     <thead className="bg-sky-50/80 text-slate-700">
                       <tr>
+                        {canManageKpiItems ? (
+                          <th
+                            scope="col"
+                            className="w-10 whitespace-nowrap px-3 py-3 text-left font-semibold"
+                          >
+                            <input
+                              type="checkbox"
+                              aria-label="전체 선택"
+                              checked={
+                                sortedItems.length > 0 &&
+                                sortedItems.every((item) => selectedKpiIds.has(item.id))
+                              }
+                              onChange={() => toggleSelectAllKpiItems()}
+                              className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                            />
+                          </th>
+                        ) : null}
                         <th
                           scope="col"
                           className="min-w-[14.5rem] whitespace-nowrap px-4 py-3 text-left font-semibold"
@@ -1368,6 +1452,18 @@ export function DepartmentDetailClient({ departmentId }: Props) {
                                 : ""
                             }`}
                           >
+                            {canManageKpiItems ? (
+                              <td className="align-middle px-3 py-2">
+                                <input
+                                  type="checkbox"
+                                  aria-label="KPI 항목 선택"
+                                  checked={selectedKpiIds.has(item.id)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onChange={() => toggleKpiItemSelected(item.id)}
+                                  className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                                />
+                              </td>
+                            ) : null}
                             <td className="align-middle px-4 py-2 font-medium text-slate-800">
                               {showMainGroup ? (
                                 <div className="flex items-center gap-2">
@@ -1629,6 +1725,17 @@ export function DepartmentDetailClient({ departmentId }: Props) {
             throw e;
           }
         }}
+      />
+      <KpiMoveModal
+        isOpen={showMoveModal}
+        onClose={() => setShowMoveModal(false)}
+        currentDeptId={departmentId}
+        currentDeptName={detailQuery.data?.department?.name ?? "해당 부서"}
+        departments={departmentsForMoveQuery.data ?? []}
+        departmentsLoading={departmentsForMoveQuery.isPending}
+        selectedCount={selectedKpiIds.size}
+        submitting={moveKpiItemsMutation.isPending}
+        onConfirm={handleMoveSelectedKpiItems}
       />
 
     </div>
