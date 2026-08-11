@@ -6012,15 +6012,27 @@ export async function moveKpiItemsToDepartment(input: {
   if (ids.length === 0) throw new Error("이동할 KPI 항목을 선택해 주세요.");
   if (!targetDeptId) throw new Error("이동할 부서를 선택해 주세요.");
 
-  const { error } = await supabase
-    .from("kpi_items")
-    .update({ dept_id: targetDeptId })
-    .in("id", ids);
+  /**
+   * kpi_items 를 직접 UPDATE 하면 RLS 의 WITH CHECK 가 "변경 후 행이 본인 소속 부서인지"를
+   * 검사해서, 그룹장·팀장이 타 부서로 옮기는 경우 항상 차단된다.
+   * 출발 부서 권한을 서버에서 검증하는 전용 함수로 이동을 수행한다.
+   */
+  const { data, error } = await supabase.rpc("ctst_move_kpi_items_to_department", {
+    p_item_ids: ids,
+    p_target_dept_id: targetDeptId,
+  });
+
   if (error) {
     const detail = [error.details, error.hint].filter(Boolean).join(" / ");
     throw new Error(
-      `KPI 항목 이동 실패: ${error.message}${detail ? ` (${detail})` : ""} ` +
-        `(로그인 세션이 만료됐을 수 있습니다. 새로고침 후 다시 로그인해서 재시도해 주세요. 반복되면 kpi_items.dept_id 컬럼·RLS 정책을 확인해 주세요.)`
+      `KPI 항목 이동 실패: ${error.message}${detail ? ` (${detail})` : ""}`
+    );
+  }
+
+  const moved = typeof data === "number" ? data : Number(data ?? 0);
+  if (!Number.isFinite(moved) || moved <= 0) {
+    throw new Error(
+      "이동된 KPI 항목이 없습니다. 선택한 항목이 이미 삭제되었거나 권한이 없는지 확인해 주세요."
     );
   }
 }

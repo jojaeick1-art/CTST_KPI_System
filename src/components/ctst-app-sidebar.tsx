@@ -63,6 +63,7 @@ type NavSlot =
   | "construction"
   | "setup"
   | "logAudit"
+  | "accounts"
   | "settings";
 
 type IndicatorBox = { top: number; height: number; opacity: number };
@@ -133,6 +134,10 @@ function resolveActiveNavSlot(
 
   if (canAccessSystemSettings(role) && pathname.startsWith("/dashboard/logs")) {
     return "logAudit";
+  }
+
+  if (canAccessSystemSettings(role) && pathname.startsWith("/dashboard/accounts")) {
+    return "accounts";
   }
 
   if (canAccessSystemSettings(role) && pathname === "/dashboard/settings") {
@@ -421,6 +426,7 @@ export function CtstAppSidebar({
   const kpiRejectedActive = activeSlot === "kpiRejected";
   const kpiWithdrawnActive = activeSlot === "kpiWithdrawn";
   const logAuditActive = activeSlot === "logAudit";
+  const accountsActive = activeSlot === "accounts";
   const settingsActive = activeSlot === "settings";
   const vocActive = activeSlot === "voc";
   const investmentActive = activeSlot === "investment";
@@ -504,6 +510,14 @@ export function CtstAppSidebar({
             className={itemBase}
           >
             <span className="min-w-0">RAMP (AI Services)</span>
+          </a>
+          <a
+            href="http://59.12.17.121:8747/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className={itemBase}
+          >
+            <span className="min-w-0">Run Tagging</span>
           </a>
           <button
             type="button"
@@ -683,6 +697,15 @@ export function CtstAppSidebar({
               className={classForLink(logAuditActive)}
             >
               로그 조회
+            </Link>
+            <Link
+              ref={(el) => {
+                linkRefs.current.accounts = el;
+              }}
+              href="/dashboard/accounts"
+              className={classForLink(accountsActive)}
+            >
+              계정 관리
             </Link>
             <Link
               ref={(el) => {
