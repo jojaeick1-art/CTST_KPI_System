@@ -1,3 +1,4 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { orderDepartmentsForDisplay } from "@/src/lib/display-config";
 import { createBrowserSupabase } from "@/src/lib/supabase";
 import {
@@ -76,13 +77,19 @@ let kpiTargetsYearColumnCache: boolean | null = null;
 let kpiTargetsHalfTypeColumnCache: boolean | null = null;
 const kpiTargetsColumnExistsCache = new Map<string, boolean>();
 
-/** kpi_targets 에 실제 존재하는 컬럼만 쓰기 위해 프로브 (캐시) */
+/**
+ * kpi_targets 에 실제 존재하는 컬럼만 쓰기 위해 프로브 (캐시).
+ * `client` 를 넘기지 않으면 기존과 동일하게 브라우저 클라이언트를 사용한다.
+ * 서버(Route Handler)에서 호출할 때는 서비스 롤 클라이언트를 명시적으로 넘겨야 한다 —
+ * 넘기지 않으면 `createBrowserSupabase()` 가 브라우저 밖에서 호출됐다며 예외를 던진다.
+ */
 export async function getKpiTargetsHasColumn(
-  columnName: string
+  columnName: string,
+  client?: SupabaseClient
 ): Promise<boolean> {
   const hit = kpiTargetsColumnExistsCache.get(columnName);
   if (hit === true) return true;
-  const supabase = createBrowserSupabase();
+  const supabase = client ?? createBrowserSupabase();
   const { error } = await supabase
     .from("kpi_targets")
     .select(columnName)
@@ -104,18 +111,22 @@ async function filterPayloadToExistingKpiTargetColumns(
   return out;
 }
 
-export async function getKpiTargetsHasYearColumn(): Promise<boolean> {
+export async function getKpiTargetsHasYearColumn(
+  client?: SupabaseClient
+): Promise<boolean> {
   if (kpiTargetsYearColumnCache !== null) return kpiTargetsYearColumnCache;
-  const supabase = createBrowserSupabase();
+  const supabase = client ?? createBrowserSupabase();
   const { error } = await supabase.from("kpi_targets").select("year").limit(1);
   kpiTargetsYearColumnCache = !error;
   return kpiTargetsYearColumnCache;
 }
 
-export async function getKpiTargetsHasHalfTypeColumn(): Promise<boolean> {
+export async function getKpiTargetsHasHalfTypeColumn(
+  client?: SupabaseClient
+): Promise<boolean> {
   if (kpiTargetsHalfTypeColumnCache !== null)
     return kpiTargetsHalfTypeColumnCache;
-  const supabase = createBrowserSupabase();
+  const supabase = client ?? createBrowserSupabase();
   const { error } = await supabase
     .from("kpi_targets")
     .select("half_type")
@@ -2073,9 +2084,15 @@ function buildMonthlyAchievementRateContext(input: {
   };
 }
 
+/**
+ * 부서 KPI 상세 + 화면과 동일한 달성률·가중점수 계산.
+ * `client` 를 넘기지 않으면 기존과 동일하게 브라우저 클라이언트를 쓴다(화면 호출부는 무변경).
+ * Hub 읽기 전용 API 등 서버에서 호출할 때는 서비스 롤 클라이언트를 명시적으로 넘겨야 한다.
+ */
 export async function fetchDepartmentKpiDetail(
   departmentId: string,
-  dataYear: number = CURRENT_KPI_YEAR
+  dataYear: number = CURRENT_KPI_YEAR,
+  client?: SupabaseClient
 ): Promise<{
   department: { id: string; name: string } | null;
   departmentAverageAchievement: number | null;
@@ -2085,11 +2102,11 @@ export async function fetchDepartmentKpiDetail(
   compositeScore: number | null;
   items: DepartmentKpiDetailItem[];
 }> {
-  const supabase = createBrowserSupabase();
-  const hasYear = await getKpiTargetsHasYearColumn();
-  const hasTargetHalf = await getKpiTargetsHasHalfTypeColumn();
-  const hasH1TargetPctColumn = await getKpiTargetsHasColumn("h1_target_pct");
-  const hasH2TargetPctColumn = await getKpiTargetsHasColumn("h2_target_pct");
+  const supabase = client ?? createBrowserSupabase();
+  const hasYear = await getKpiTargetsHasYearColumn(supabase);
+  const hasTargetHalf = await getKpiTargetsHasHalfTypeColumn(supabase);
+  const hasH1TargetPctColumn = await getKpiTargetsHasColumn("h1_target_pct", supabase);
+  const hasH2TargetPctColumn = await getKpiTargetsHasColumn("h2_target_pct", supabase);
 
   const { data: dept, error: deptErr } = await supabase
     .from("departments")
